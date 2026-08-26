@@ -92,103 +92,40 @@ obstacle_polygon(no_obstacles_placeholder, []) :- fail.
 % side of the same node set).
 :- use_module('./actions/moveto_planners.py').
 
+% collision_geometry.py provides first_threshold_crossing_time/6 as a
+% BLACK-BOX (Python-implemented) predicate -- the obstacle-clearance
+% geometry and bracket-scan/bisection crossing-time search that used to
+% be plain Prolog in sections 1 and the TRIGGERS section below (see
+% their own notes for why this moved). Lives NEXT TO this file (not in
+% ./actions/ -- it isn't a BT.cpp-facing node, just an internal
+% performance black box for the action theory itself), resolved
+% relative to THIS file's own directory, same as moveto_planners.py.
+:- use_module('./collision_geometry.py').
+
 % ---------------------------------------------------------------
-% 1. GEOMETRY HELPERS -- point/segment/polygon distance,
-%    point-in-polygon (ray casting), all closed-form arithmetic.
+% 1. GEOMETRY HELPERS -- general-purpose arithmetic used throughout
+%    the theory (distance, arc-length summation). The OBSTACLE-SPECIFIC
+%    geometry that used to live here (point/segment/polygon distance,
+%    ray-casting point-in-polygon, signed clearance, min-clearance-to-
+%    any-obstacle) has been MOVED to collision_geometry.py, a Python
+%    black box exactly like moveto_planners.py's planners -- see the
+%    TRIGGERS section further down (first_threshold_crossing_time/6)
+%    for why: that geometry is pure deterministic arithmetic once Z is
+%    resolved, with no probabilistic content of its own, so ProbLog was
+%    paying full SLD-grounding cost (a materialized proof node per
+%    bracket sample, per bisection step, per obstacle vertex) for a
+%    computation that has no bearing on the weighted model count beyond
+%    its single Tcross answer. Moving it to native Python collapses
+%    that whole grounding subtree into one black-box call per resolved
+%    world -- see collision_geometry.py's own header for the full
+%    rationale and for why its results are IDENTICAL to this file's
+%    former Prolog implementation (same bracket-sample count, same
+%    bisection epsilon, ported line-for-line, not re-derived).
 % ---------------------------------------------------------------
 dist(X1,Y1,X2,Y2,D) :- D is sqrt((X2-X1)**2 + (Y2-Y1)**2).
 
 sum_list([], 0.0).
 sum_list([H|T], Sum) :- sum_list(T, SumT), Sum is H + SumT.
-
-member(X, [X|_]).
-member(X, [_|T]) :- member(X, T).
-
-min_list([X], X).
-min_list([H|T], Min) :- T \= [], min_list(T, MinT), min_of(H, MinT, Min).
-min_of(A, B, A) :- A =< B.
-min_of(A, B, B) :- A > B.
-
-% distance from point (PX,PY) to segment (AX,AY)-(BX,BY)
-point_segment_dist(PX,PY, AX,AY, BX,BY, D) :-
-    SDX is BX-AX, SDY is BY-AY,
-    Len2 is SDX*SDX + SDY*SDY,
-    Len2 =< 1.0e-9,
-    dist(PX,PY,AX,AY,D).
-point_segment_dist(PX,PY, AX,AY, BX,BY, D) :-
-    SDX is BX-AX, SDY is BY-AY,
-    Len2 is SDX*SDX + SDY*SDY,
-    Len2 > 1.0e-9,
-    T0 is ((PX-AX)*SDX + (PY-AY)*SDY) / Len2,
-    T is max(0.0, min(1.0, T0)),
-    CX is AX + T*SDX, CY is AY + T*SDY,
-    dist(PX,PY,CX,CY,D).
-
-% append the first point to the end, to close the polygon loop
-close_loop([First|Rest], Closed) :-
-    append_one([First|Rest], First, Closed).
-append_one([], X, [X]).
-append_one([H|T], X, [H|T2]) :- append_one(T, X, T2).
-
-% edges of a (closed) polygon given as [point(X,Y),...]
-polygon_edges(Points, Edges) :-
-    close_loop(Points, Closed),
-    consecutive_edges(Closed, Edges).
-
-consecutive_edges([_], []).
-consecutive_edges([point(X1,Y1),point(X2,Y2)|Rest], [edge(X1,Y1,X2,Y2)|Edges]) :-
-    consecutive_edges([point(X2,Y2)|Rest], Edges).
-
-% minimum distance from (PX,PY) to the polygon BOUNDARY
-dist_to_polygon(PX,PY, Points, MinD) :-
-    polygon_edges(Points, Edges),
-    findall(D, ( member(edge(AX,AY,BX,BY), Edges),
-                 point_segment_dist(PX,PY,AX,AY,BX,BY,D) ), Ds),
-    min_list(Ds, MinD).
-
-% ray-casting point-in-polygon test
-inside_polygon(PX,PY, Points) :-
-    polygon_edges(Points, Edges),
-    crossing_count(PX,PY, Edges, 0, Count),
-    1 is Count mod 2.
-
-crossing_count(_,_, [], C, C).
-crossing_count(PX,PY, [edge(AX,AY,BX,BY)|Rest], C0, C) :-
-    edge_crosses(PX,PY,AX,AY,BX,BY),
-    C1 is C0+1,
-    crossing_count(PX,PY, Rest, C1, C).
-crossing_count(PX,PY, [edge(AX,AY,BX,BY)|Rest], C0, C) :-
-    \+ edge_crosses(PX,PY,AX,AY,BX,BY),
-    crossing_count(PX,PY, Rest, C0, C).
-
-edge_crosses(PX,PY,AX,AY,BX,BY) :-
-    AY > PY, BY =< PY,
-    XCross is AX + (PY-AY)/(BY-AY)*(BX-AX),
-    PX < XCross.
-edge_crosses(PX,PY,AX,AY,BX,BY) :-
-    BY > PY, AY =< PY,
-    XCross is AX + (PY-AY)/(BY-AY)*(BX-AX),
-    PX < XCross.
-
-% signed clearance: positive outside, negative if actually inside
-signed_clearance(PX,PY, Points, D) :-
-    dist_to_polygon(PX,PY,Points,Dedge),
-    inside_polygon(PX,PY,Points),
-    D is -Dedge.
-signed_clearance(PX,PY, Points, D) :-
-    dist_to_polygon(PX,PY,Points,Dedge),
-    \+ inside_polygon(PX,PY,Points),
-    D = Dedge.
-
-% minimum clearance to ANY obstacle polygon
-min_clearance_all(PX,PY, MinD) :-
-    findall(D, ( obstacle_polygon(_,Pts), signed_clearance(PX,PY,Pts,D) ), Ds),
-    Ds = [],
-    MinD = 1000000.0.
-min_clearance_all(PX,PY, MinD) :-
-    findall(D, ( obstacle_polygon(_,Pts), signed_clearance(PX,PY,Pts,D) ), Ds),
-    Ds \= [],
-    min_list(Ds, MinD).
 
 % ---------------------------------------------------------------
 % 2. ROBOT / SAFETY PARAMETERS
@@ -221,18 +158,12 @@ sight_threshold(0.6).
 
 sight_threshold_valid :- sight_threshold(ST), safety_margin(M), ST > M.
 
-% within_obstacle_threshold(+PX,+PY,+Threshold): the GENERALIZED
-% geometric test -- "is (PX,PY) within Threshold of the nearest
-% obstacle" -- parametrized by threshold rather than hardcoded to a
-% specific one, so the SAME primitive serves both collision
-% (threshold = safety_margin) and obstacle_sighted (threshold =
-% sight_threshold), called directly wherever each is needed (see
-% first_threshold_crossing_time below, and its first_collision_time/
-% first_obstacle_sighted_time wrappers), and any future
-% distance-based trigger besides.
-within_obstacle_threshold(PX,PY,Threshold) :-
-    min_clearance_all(PX,PY, D),
-    D =< Threshold.
+% within_obstacle_threshold/3 (the generalized "is (PX,PY) within
+% Threshold of the nearest obstacle" test, parametrized by threshold so
+% the SAME primitive serves both collision and obstacle_sighted) now
+% lives inside collision_geometry.py's within_obstacle_threshold
+% helper, alongside the rest of the obstacle-clearance geometry it was
+% moved with -- see the note above dist/5 in section 1.
 
 % ---------------------------------------------------------------
 % 3. SPLINE -- chained cubic Bezier segments, evaluated in
@@ -656,72 +587,28 @@ walk_noisy_point(ControlPoints, T0, Duration, Z, T, X, Y) :-
 % collision's safety_margin) so the SAME machinery serves both
 % collision (threshold=safety_margin) and obstacle_sighted
 % (threshold=sight_threshold), and any future distance-based trigger.
-% Computed deterministically (bracket scan to find the first
-% sub-interval where the threshold is crossed, then bisection within
-% it) -- still plain ground arithmetic at every step, no CLP
-% required, same as every other numeric computation in this file.
-% ---------------------------------------------------------------
+%
+% first_threshold_crossing_time(+ControlPoints,+T0,+Duration,+Z,
+% +Threshold,-Tcross) is now a BLACK-BOX Python predicate, registered
+% by collision_geometry.py's own :- use_module(...) directive (see
+% below) -- exactly the same "deliberately NOT part of the situation-
+% calculus machinery" reasoning already used for planWith/plan_call:
+% this is a deterministic, stateless computation over an ALREADY-
+% RESOLVED noise value Z, not a probabilistic choice in itself, so
+% there is no frame problem here to justify keeping it in Prolog.
+% bracket_samples(60) and crossing_eps(0.01) -- the bracket-scan count
+% and bisection tolerance -- are now READ DIRECTLY out of this .pl
+% file's own text by collision_geometry.py at import time (regex, the
+% same lightweight technique run_plan_continuous_safety.py already uses
+% to read back ground facts) rather than duplicated as separate Python
+% constants, so tuning either value here take effect automatically with
+% no risk of the two implementations drifting apart. FAILS (0 ProbLog
+% solutions) if the trajectory never comes within Threshold of an
+% obstacle in this resolved world -- correctly representing "never
+% happens" via absence, not a sentinel value, same convention as
+% everywhere else in this theory.
 bracket_samples(60).
 crossing_eps(0.01).
-
-% first_unsafe_sample(+CP,+T0,+Duration,+Z,+Threshold,+N,-I): smallest
-% sample index I in 0..N (out of N+1 evenly spaced samples across the
-% whole walk) at which the trajectory is within Threshold of an
-% obstacle. Same "stop at first match, else recurse forward" pattern
-% as current_walk -- guarantees the FIRST such I is returned, without
-% needing a cut.
-first_unsafe_sample(CP,T0,Duration,Z,Threshold,N,I) :-
-    first_unsafe_sample_from(CP,T0,Duration,Z,Threshold,N,0,I).
-
-first_unsafe_sample_from(CP,T0,Duration,Z,Threshold,N,I,I) :-
-    I =< N,
-    Frac is I/N, T is T0 + Duration*Frac,
-    walk_noisy_point(CP,T0,Duration,Z,T,X,Y),
-    within_obstacle_threshold(X,Y,Threshold).
-first_unsafe_sample_from(CP,T0,Duration,Z,Threshold,N,I,J) :-
-    I =< N,
-    Frac is I/N, T is T0 + Duration*Frac,
-    walk_noisy_point(CP,T0,Duration,Z,T,X,Y),
-    \+ within_obstacle_threshold(X,Y,Threshold),
-    I1 is I+1,
-    I1 =< N,
-    first_unsafe_sample_from(CP,T0,Duration,Z,Threshold,N,I1,J).
-
-% bisect_crossing(+CP,+T0,+Duration,+Z,+Threshold,+Tlo,+Thi,+Eps,-Tcross):
-% Tlo is known-safe, Thi is known-unsafe (w.r.t. Threshold); narrows
-% to within Eps of the exact crossing instant.
-bisect_crossing(CP,T0,Duration,Z,Threshold,Tlo,Thi,Eps,Tcross) :-
-    Thi - Tlo =< Eps,
-    Tcross is (Tlo+Thi)/2.
-bisect_crossing(CP,T0,Duration,Z,Threshold,Tlo,Thi,Eps,Tcross) :-
-    Thi - Tlo > Eps,
-    Tmid is (Tlo+Thi)/2,
-    walk_noisy_point(CP,T0,Duration,Z,Tmid,X,Y),
-    within_obstacle_threshold(X,Y,Threshold),
-    bisect_crossing(CP,T0,Duration,Z,Threshold,Tlo,Tmid,Eps,Tcross).
-bisect_crossing(CP,T0,Duration,Z,Threshold,Tlo,Thi,Eps,Tcross) :-
-    Thi - Tlo > Eps,
-    Tmid is (Tlo+Thi)/2,
-    walk_noisy_point(CP,T0,Duration,Z,Tmid,X,Y),
-    \+ within_obstacle_threshold(X,Y,Threshold),
-    bisect_crossing(CP,T0,Duration,Z,Threshold,Tmid,Thi,Eps,Tcross).
-
-% first_threshold_crossing_time(+CP,+T0,+Duration,+Z,+Threshold,-Tcross):
-% FAILS if the trajectory never comes within Threshold of an obstacle
-% in this resolved world (correctly representing "never happens" --
-% absence of a derivable Tcross, not a special sentinel value).
-first_threshold_crossing_time(CP,T0,Duration,Z,Threshold,Tcross) :-
-    bracket_samples(N),
-    first_unsafe_sample(CP,T0,Duration,Z,Threshold,N,I),
-    I > 0,
-    Ilo is I-1,
-    FracLo is Ilo/N, Tlo is T0 + Duration*FracLo,
-    FracHi is I/N,   Thi is T0 + Duration*FracHi,
-    crossing_eps(Eps),
-    bisect_crossing(CP,T0,Duration,Z,Threshold,Tlo,Thi,Eps,Tcross).
-first_threshold_crossing_time(CP,T0,Duration,Z,Threshold,T0) :-
-    bracket_samples(N),
-    first_unsafe_sample(CP,T0,Duration,Z,Threshold,N,0).
 
 % first_collision_time/5 kept as a thin, name-preserving wrapper over
 % the generalized machinery, at threshold=safety_margin -- every

@@ -2,16 +2,18 @@
 """
 bt_actions.py
 
+Lives in ./actions/ alongside moveto_planners.py and schema.yaml.
+
 Canonical action/condition implementations matching schema.yaml,
 written to be usable from TWO different callers:
 
   1. Our own ProbLog-based verification pipeline. moveto_planners.py's
-     plan_astar/plan_straight ARE the ProbLog-facing implementations
-     already (registered via problog_export_nondet, returning ProbLog
-     Term objects) -- imported and REUSED here unchanged, never
-     duplicated. This file wraps them for the second caller below;
-     moveto_planners.py itself needs no changes and keeps working
-     exactly as it already does when consulted from moveto_continuous.pl.
+     plan_astar_points/plan_straight_points ARE the shared plain-Python
+     planning core, imported and REUSED here unchanged, never
+     duplicated -- moveto_continuous.pl itself keeps calling the
+     SEPARATE ProbLog-facing plan_astar/plan_straight predicates
+     (also defined in moveto_planners.py, on top of the same core)
+     directly, unaffected by anything in this file.
 
   2. A future BehaviorTree.cpp integration. A pybind11 (or ctypes, or
      ROS2 behaviortree_ros2) bridge could register the bt_-prefixed
@@ -19,9 +21,12 @@ written to be usable from TWO different callers:
      signatures and return shapes match schema.yaml's port
      declarations exactly, using PLAIN Python types throughout
      (float / list of (x,y) tuples / str / bool / dict) -- never a
-     ProbLog Term object -- since a BT.cpp bridge has no reason to
-     know ProbLog's internal representation. No adaptation should be
-     needed beyond the bridge itself.
+     ProbLog Term object. This file (and the plain-Python half of
+     moveto_planners.py it calls into) has NO ProbLog import anywhere,
+     so a BT.cpp bridge that never installs ProbLog can still import
+     and call bt_plan_astar/bt_plan_straight -- see moveto_planners.py's
+     own header for why its ProbLog-specific half is wrapped in a
+     try/except instead of a hard import.
 
 MoveTo (and both conditions) are DELIBERATELY NOT given a directly
 -executable Python implementation here. MoveTo's real behaviour is
@@ -53,17 +58,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
-from moveto_planners import plan_astar, plan_straight
-
-
-# =====================================================================
-# Shared helper
-# =====================================================================
-def _terms_to_points(terms):
-    """[point(x,y), ...] ProbLog Term objects -> [(x,y), ...] plain
-    Python floats. The one place ProbLog's Term representation is
-    unwrapped into plain types for the BT.cpp-facing side."""
-    return [(float(t.args[0]), float(t.args[1])) for t in terms]
+from moveto_planners import plan_astar_points, plan_straight_points
 
 
 # =====================================================================
@@ -72,33 +67,31 @@ def _terms_to_points(terms):
 def bt_plan_astar(sx, sy, gx, gy):
     """
     BT.cpp-compatible wrapper around moveto_planners.py's
-    plan_astar/5 -- matches PlanAstar's three output ports in
+    plan_astar_points -- matches PlanAstar's three output ports in
     schema.yaml exactly, returned together as one dict:
         {control_points, reason, status}
     control_points is [] and reason is "no_path" if A* found no path
     (unreachable goal, or the map failed to load) -- see
-    moveto_planners.py's own plan_astar for exactly which cases that
-    covers.
+    moveto_planners.py's own _astar_control_points for exactly which
+    cases that covers.
     """
-    result = plan_astar(float(sx), float(sy), float(gx), float(gy))
-    if not result:
+    control_points = plan_astar_points(sx, sy, gx, gy)
+    if control_points is None:
         return {"control_points": [], "reason": "no_path", "status": False}
     return {
-        "control_points": _terms_to_points(result[0]),
+        "control_points": [(float(x), float(y)) for x, y in control_points],
         "reason": "completed",
         "status": True,
     }
 
 
 def bt_plan_straight(sx, sy, gx, gy):
-    """BT.cpp-compatible wrapper around plan_straight/5 -- same shape
-    and rationale as bt_plan_astar above; a straight line between two
-    finite points essentially always succeeds."""
-    result = plan_straight(float(sx), float(sy), float(gx), float(gy))
-    if not result:
-        return {"control_points": [], "reason": "no_path", "status": False}
+    """BT.cpp-compatible wrapper around plan_straight_points -- same
+    shape and rationale as bt_plan_astar above; a straight line between
+    two finite points essentially always succeeds."""
+    control_points = plan_straight_points(sx, sy, gx, gy)
     return {
-        "control_points": _terms_to_points(result[0]),
+        "control_points": [(float(x), float(y)) for x, y in control_points],
         "reason": "completed",
         "status": True,
     }

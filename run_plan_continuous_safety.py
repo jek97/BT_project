@@ -392,26 +392,29 @@ def control_points_via_planner(theory_dir, algorithm, start, goal):
     moveto_continuous.pl's plan/1 documentation) instead of a static
     fact, so there's nothing for parse_control_points' regex to find.
     Calls the SAME black-box predicate directly (importing
-    moveto_planners.py from the theory file's own directory, exactly
-    where moveto_continuous.pl's own :- use_module(...) directive
-    expects it to live) to get a plottable nominal path. Returns None
-    if the import or the planner call itself fails (e.g. no map, or
-    A* finds no path) -- the caller decides what to do next."""
-    if theory_dir not in sys.path:
-        sys.path.insert(0, theory_dir)
+    moveto_planners.py from the theory file's own ./actions/
+    subdirectory, exactly where moveto_continuous.pl's own
+    :- use_module(...) directive expects it to live) to get a plottable
+    nominal path. Uses the plain-Python plan_*_points functions (no
+    ProbLog Term objects involved) -- see moveto_planners.py's own
+    header. Returns None if the import or the planner call itself fails
+    (e.g. no map, or A* finds no path) -- the caller decides what to do
+    next."""
+    actions_dir = os.path.join(theory_dir, "actions")
+    if actions_dir not in sys.path:
+        sys.path.insert(0, actions_dir)
     try:
         import moveto_planners as mp
     except ImportError:
         return None
-    func = mp.plan_astar if algorithm == "astar" else mp.plan_straight
+    func = mp.plan_astar_points if algorithm == "astar" else mp.plan_straight_points
     try:
-        result = func(float(start[0]), float(start[1]), float(goal[0]), float(goal[1]))
+        control_points = func(float(start[0]), float(start[1]), float(goal[0]), float(goal[1]))
     except Exception:
         return None
-    if not result:
+    if not control_points:
         return None
-    terms = result[0]
-    return [(float(t.args[0]), float(t.args[1])) for t in terms]
+    return [(float(x), float(y)) for x, y in control_points]
 
 
 # -----------------------------------------------------------------------

@@ -81,14 +81,16 @@ obstacle_polygon(no_obstacles_placeholder, []) :- fail.
 % If you don't have a map yet, create a stub file containing at least
 % one such fact (or an empty file) so this program still loads.
 
-% moveto_planners.py provides plan_astar/5 and plan_straight/5 as
-% BLACK-BOX (Python-implemented) predicates -- see that file's own
+% actions/moveto_planners.py provides plan_astar/5 and plan_straight/5
+% as BLACK-BOX (Python-implemented) predicates -- see that file's own
 % header for the full explanation. ProbLog imports and executes it
 % directly the moment this directive loads (problog.clausedb's
 % load_external_module), registering both predicates before anything
-% below that calls them is ever evaluated. Must sit next to THIS file
-% (resolved relative to moveto_continuous.pl's own directory, not CWD).
-:- use_module('moveto_planners.py').
+% below that calls them is ever evaluated. Path is resolved relative to
+% THIS file's own directory (not CWD) -- moveto_planners.py lives in
+% ./actions/ alongside bt_actions.py and schema.yaml (the BT.cpp-facing
+% side of the same node set).
+:- use_module('./actions/moveto_planners.py').
 
 % ---------------------------------------------------------------
 % 1. GEOMETRY HELPERS -- point/segment/polygon distance,

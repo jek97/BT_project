@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+
+# run_plan_continuous_safety.py output (timestamped, regenerated per run)
+run_plan_continuous_safety_*.log
+run_plan_continuous_safety_*.png

@@ -1,0 +1,89 @@
+====================================================================
+  ProbLog Continuous-Space Safety Verification - 2026-08-26 15:35:47
+====================================================================
+  Log file    : /home/glugano/Desktop/research/BT/problog_test/01_test/08_test/run_plan_continuous_safety_20260826_153547.log
+  Image       : /home/glugano/Desktop/research/BT/problog_test/01_test/08_test/run_plan_continuous_safety_20260826_153547.png
+  Plan file   : /home/glugano/Desktop/research/BT/problog_test/01_test/08_test/moveto_continuous.pl
+
+  Parsed: 619 control points, 12 obstacle polygon(s), 20 verification samples
+
+  Started : 15:35:47
+  Finished: 15:38:35  (168.363s)
+
+--------------------------------------------------------------------
+  Feature 1 - Deterministic nominal-path safety [verify_safe]
+--------------------------------------------------------------------
+  Checks: under NO noise (zero-noise/modal case), does the plan ever
+          fail for ANY known cause -- currently: coming within the
+          safety margin of an obstacle, OR the battery running out
+          before the walk would otherwise complete?
+  verify_safe : 1  ->  PASS - nominal plan is clear of every known failure cause
+
+--------------------------------------------------------------------
+  Feature 2a - P(ever hits obstacle along trajectory) [hit_by]
+--------------------------------------------------------------------
+  hit_by(20)        : ###########-------------------  36.290%
+  Safe probability      : ###################-----------  63.710%
+
+--------------------------------------------------------------------
+  Feature 2b - Per-sample first-passage hazard [first_hit]
+--------------------------------------------------------------------
+  P(first collision is exactly at sample I) - proper PMF
+
+  I      first_hit(I)  Hazard bar            
+  ---- --------------  ----------------------
+  11         0.302300  ####################  <- most dangerous
+  15         0.060600  ####----------------
+
+  Sum of first_hit PMF : 0.362900  (should equal hit_by = 0.362900)
+
+--------------------------------------------------------------------
+  Implied - Most likely failure sample (argmax of first_hit)
+--------------------------------------------------------------------
+  Riskiest sample I = 11 (of 20)  with P(first_hit) = 0.302300
+
+--------------------------------------------------------------------
+  Overall outcome
+--------------------------------------------------------------------
+  goal_reached           ############------------------   39.54%
+  any_collision          ###########-------------------   36.29%
+  any_battery_depletion  ------------------------------    0.00%
+
+--------------------------------------------------------------------
+  On-track probability per sample
+--------------------------------------------------------------------
+  P(actual position stays within tolerance of nominal spline)
+
+  I      on_track  Bar                   
+  ---- ----------  ----------------------
+  0        1.0000  ####################
+  1        1.0000  ####################
+  2        1.0000  ####################
+  3        1.0000  ####################
+  4        1.0000  ####################
+  5        1.0000  ####################
+  6        1.0000  ####################
+  7        1.0000  ####################
+  8        1.0000  ####################
+  9        1.0000  ####################
+  10       1.0000  ####################
+  11       1.0000  ####################
+  12       1.0000  ####################
+  13       0.9394  ###################-
+  14       0.9394  ###################-
+  15       0.9394  ###################-
+  16       0.8788  ##################--
+  17       0.8788  ##################--
+  18       0.8788  ##################--
+  19       0.6371  #############-------  <- riskiest
+  20       0.6371  #############-------  <- riskiest
+
+  Generating safety plot...
+  Image saved : /home/glugano/Desktop/research/BT/problog_test/01_test/08_test/run_plan_continuous_safety_20260826_153547.png
+
+====================================================================
+  Log : /home/glugano/Desktop/research/BT/problog_test/01_test/08_test/run_plan_continuous_safety_20260826_153547.log
+====================================================================
+====================================================================
+  PNG : /home/glugano/Desktop/research/BT/problog_test/01_test/08_test/run_plan_continuous_safety_20260826_153547.png
+====================================================================

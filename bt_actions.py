@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""
+bt_actions.py
+
+Canonical action/condition implementations matching schema.yaml,
+written to be usable from TWO different callers:
+
+  1. Our own ProbLog-based verification pipeline. moveto_planners.py's
+     plan_astar/plan_straight ARE the ProbLog-facing implementations
+     already (registered via problog_export_nondet, returning ProbLog
+     Term objects) -- imported and REUSED here unchanged, never
+     duplicated. This file wraps them for the second caller below;
+     moveto_planners.py itself needs no changes and keeps working
+     exactly as it already does when consulted from moveto_continuous.pl.
+
+  2. A future BehaviorTree.cpp integration. A pybind11 (or ctypes, or
+     ROS2 behaviortree_ros2) bridge could register the bt_-prefixed
+     functions below directly as C++ node tick() callbacks: their
+     signatures and return shapes match schema.yaml's port
+     declarations exactly, using PLAIN Python types throughout
+     (float / list of (x,y) tuples / str / bool / dict) -- never a
+     ProbLog Term object -- since a BT.cpp bridge has no reason to
+     know ProbLog's internal representation. No adaptation should be
+     needed beyond the bridge itself.
+
+MoveTo (and both conditions) are DELIBERATELY NOT given a directly
+-executable Python implementation here. MoveTo's real behaviour is
+the STOCHASTIC action theory in moveto_continuous.pl -- noisy
+position, noisy battery, exact trigger-crossing detection via
+closed-form algebra or bracket-scan+bisection. There is no correct
+way to "run" that in a plain Python function without reimplementing
+the entire probabilistic model outside ProbLog, and a naive
+deterministic stand-in would silently misrepresent what the theory
+actually says happens -- worse than no implementation at all.
+AtGoal/HaltedWith are native Prolog conditions over a situation;
+Python has no situation to evaluate them against on its own.
+
+What IS provided for all three is their INTERFACE (matching
+schema.yaml's ports exactly) plus a TERM BUILDER -- a function
+translating bound port values into the corresponding
+moveto_continuous.pl term text. This is the piece a future
+BT-tree-to-Prolog translator needs: given a BT.cpp node's bound
+inputs, produce the Prolog subterm to splice into a
+seq_node(...)/fallback_node(...) list. Building that translator
+itself (parsing a whole BT.cpp XML tree) is a separate, larger step
+-- not done here; this file only provides the per-node building
+blocks it will need.
+"""
+import os
+import sys
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
+
+from moveto_planners import plan_astar, plan_straight
+
+
+# =====================================================================
+# Shared helper
+# =====================================================================
+def _terms_to_points(terms):
+    """[point(x,y), ...] ProbLog Term objects -> [(x,y), ...] plain
+    Python floats. The one place ProbLog's Term representation is
+    unwrapped into plain types for the BT.cpp-facing side."""
+    return [(float(t.args[0]), float(t.args[1])) for t in terms]
+
+
+# =====================================================================
+# ACTIONS -- callable implementations (PlanAstar, PlanStraight)
+# =====================================================================
+def bt_plan_astar(sx, sy, gx, gy):
+    """
+    BT.cpp-compatible wrapper around moveto_planners.py's
+    plan_astar/5 -- matches PlanAstar's three output ports in
+    schema.yaml exactly, returned together as one dict:
+        {control_points, reason, status}
+    control_points is [] and reason is "no_path" if A* found no path
+    (unreachable goal, or the map failed to load) -- see
+    moveto_planners.py's own plan_astar for exactly which cases that
+    covers.
+    """
+    result = plan_astar(float(sx), float(sy), float(gx), float(gy))
+    if not result:
+        return {"control_points": [], "reason": "no_path", "status": False}
+    return {
+        "control_points": _terms_to_points(result[0]),
+        "reason": "completed",
+        "status": True,
+    }
+
+
+def bt_plan_straight(sx, sy, gx, gy):
+    """BT.cpp-compatible wrapper around plan_straight/5 -- same shape
+    and rationale as bt_plan_astar above; a straight line between two
+    finite points essentially always succeeds."""
+    result = plan_straight(float(sx), float(sy), float(gx), float(gy))
+    if not result:
+        return {"control_points": [], "reason": "no_path", "status": False}
+    return {
+        "control_points": _terms_to_points(result[0]),
+        "reason": "completed",
+        "status": True,
+    }
+
+
+# =====================================================================
+# ACTIONS -- interface-only (MoveTo): term builder, not an executor
+# =====================================================================
+def moveto_leg_term(control_points, triggers=None):
+    """
+    Build the moveto_continuous.pl TERM TEXT for one MoveTo node's
+    bound inputs -- moveto_leg(ControlPoints,Triggers) if triggers is
+    given, or moveto_leg(ControlPoints) (falling back to
+    default_triggers/1, matching MoveTo's "triggers optional" port in
+    schema.yaml) if not.
+
+    control_points: list of (x,y) pairs.
+    triggers: list of strings (e.g. ["collision","battery"]), or None.
+
+    Returns Prolog source text, e.g.:
+        "moveto_leg([point(1.0,2.0),point(3.0,4.0)],[collision,battery])"
+    """
+    cp_text = "[" + ",".join(
+        f"point({float(x)},{float(y)})" for x, y in control_points) + "]"
+    if triggers is None:
+        return f"moveto_leg({cp_text})"
+    trig_text = "[" + ",".join(str(t) for t in triggers) + "]"
+    return f"moveto_leg({cp_text},{trig_text})"
+
+
+# =====================================================================
+# ACTIONS -- term builder for the planners (PlanAstar/PlanStraight)
+# =====================================================================
+def plan_with_term(algorithm, goal, cp_var="CP"):
+    """
+    Build the moveto_continuous.pl TERM TEXT for one PlanAstar/
+    PlanStraight node's bound inputs -- planWith(Algorithm,
+    point(GoalX,GoalY), CPVar) -- matching planWith's own 3-arg
+    signature (Algorithm, Goal, CP) in moveto_continuous.pl. CPVar is
+    left as a FREE PROLOG VARIABLE NAME (default "CP"), not a value,
+    since ControlPoints is this node's own OUTPUT, meant to be shared
+    forward with a subsequent MoveTo node using the SAME variable name
+    -- see moveto_continuous.pl's own note on the "leave a variable
+    free, let a prior step bind it" pattern. Pass a distinct cp_var
+    (e.g. "CP1", "CP2") when building more than one planning call in
+    the same plan, per the fallback_node variable-sharing gotcha
+    documented in moveto_continuous.pl.
+
+    algorithm: "astar" or "straight" (a bare Prolog atom, unquoted).
+    goal: an (x,y) pair.
+
+    Returns Prolog source text, e.g.:
+        "planWith(astar,point(17.0,17.0),CP)"
+    """
+    gx, gy = goal
+    return f"planWith({algorithm},point({float(gx)},{float(gy)}),{cp_var})"
+
+
+# =====================================================================
+# CONDITIONS -- interface-only: term builders
+# =====================================================================
+def at_goal_cond_term(tolerance):
+    """cond(at_goal(Tolerance)) term text -- matches AtGoal's
+    tolerance port in schema.yaml."""
+    return f"cond(at_goal({float(tolerance)}))"
+
+
+def halted_with_cond_term(reason):
+    """cond(halted_with_cond(Reason)) term text -- matches
+    HaltedWith's reason port in schema.yaml. `reason` is a bare
+    Prolog atom (completed/crashed/battery_depleted/a trigger name),
+    written unquoted since all of those are already valid lowercase
+    Prolog atoms."""
+    return f"cond(halted_with_cond({reason}))"
+
+
+# =====================================================================
+# Registry -- maps schema.yaml's IDs to their implementation here.
+# Not required for either caller to function (both can call the
+# functions above directly), but gives one place that stays
+# consistent with schema.yaml, and a natural hook for future
+# consistency-checking or XML/tree-translation tooling.
+# =====================================================================
+ACTIONS = {
+    "MoveTo": {
+        "kind": "interface_only",
+        "prolog_action": "moveto_leg",
+        "term_builder": moveto_leg_term,
+    },
+    "PlanAstar": {
+        "kind": "callable",
+        "prolog_action": "planWith",
+        "prolog_algorithm": "astar",
+        "func": bt_plan_astar,
+        "term_builder": plan_with_term,
+    },
+    "PlanStraight": {
+        "kind": "callable",
+        "prolog_action": "planWith",
+        "prolog_algorithm": "straight",
+        "func": bt_plan_straight,
+        "term_builder": plan_with_term,
+    },
+}
+
+CONDITIONS = {
+    "AtGoal": {
+        "kind": "interface_only",
+        "prolog_condition": "at_goal",
+        "term_builder": at_goal_cond_term,
+    },
+    "HaltedWith": {
+        "kind": "interface_only",
+        "prolog_condition": "halted_with_cond",
+        "term_builder": halted_with_cond_term,
+    },
+}

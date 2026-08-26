@@ -1,0 +1,223 @@
+# ============================================================
+# schema.yaml
+#
+# Node model for the BehaviorTree.cpp library, describing every
+# ACTION and CONDITION currently encoded in moveto_continuous.pl's
+# do_node/4 / holds/2 clauses. This is the YAML analogue of what
+# BT.cpp's own <TreeNodesModel> XML section captures (ID, port
+# direction, port type) -- one entry per node here corresponds to
+# one <Action ID="..."> / <Condition ID="..."> entry there, and this
+# file is written so a mechanical XML generator could produce a
+# valid TreeNodesModel from it later without redesigning anything.
+#
+# NOT included here, and why:
+#   - Sequence / Fallback: these map DIRECTLY to BT.cpp's own
+#     BUILT-IN control nodes (<Sequence>, <Fallback>) -- exactly
+#     seq_node/1 and fallback_node/1 in moveto_continuous.pl. BT.cpp
+#     doesn't require (or allow) declaring built-in node types in a
+#     TreeNodesModel, so there is nothing to add here for them.
+#   - and(P,Q) / or(P,Q): NOT modeled as condition nodes. BT.cpp's
+#     own idiom achieves conjunction via a Sequence of conditions and
+#     disjunction via a Fallback of conditions -- i.e. the SAME
+#     structural composition already used for actions, rather than a
+#     dedicated logical-AND/OR leaf. Modeling and/or as their own
+#     condition nodes would fight that idiom rather than use it.
+#   - neg(P): NOT modeled as a condition node either -- BT.cpp has a
+#     built-in <Inverter> DECORATOR for exactly this (wrap any single
+#     child, invert its result), which is the idiomatic way to negate
+#     a condition in a BT.cpp tree, rather than a separate negated
+#     leaf per condition.
+#
+# Implementations matching this schema live in bt_actions.py -- see
+# that file's own header for how each entry below corresponds to a
+# concrete Python callable (or, for MoveTo, an interface/spec rather
+# than an executable stand-in -- explained there).
+# ============================================================
+
+schema_version: 1
+bt_cpp_target_format: 4    # BTCPP_format="4" -- the XML attribute a
+                            # generated TreeNodesModel should carry
+
+actions:
+
+  # ----------------------------------------------------------------
+  # MoveTo -- corresponds to moveto_leg(ControlPoints,Triggers) in
+  # moveto_continuous.pl, i.e. one startMoveto/haltMoveto pair run to
+  # its halt.
+  # ----------------------------------------------------------------
+  - id: MoveTo
+    prolog_action: moveto_leg
+    description: >
+      Runs one durative moveto leg along ControlPoints, halting on
+      whichever of Triggers occurs earliest (or on natural
+      completion if none do). Reason/Status are haltMoveto's own two
+      outputs -- see moveto_continuous.pl's own header comment on why
+      they are kept distinct (Reason=completed only means the walk
+      wasn't cut short; Status additionally requires landing within
+      goal_tolerance of THIS LEG'S OWN endpoint).
+    ports:
+      - name: control_points
+        direction: input
+        type: std::vector<Point>
+        required: true
+        description: >
+          Chained cubic Bezier control points, length 3k+1. Typically
+          bound by a preceding PlanAstar/PlanStraight node sharing
+          the same port/blackboard entry -- see
+          moveto_continuous.pl's own note on the "leave a variable
+          free, let a prior step bind it" pattern.
+      - name: triggers
+        direction: input
+        type: std::vector<std::string>
+        required: false
+        default: "{collision;battery}"
+        description: >
+          Which halting conditions this leg reacts to. Valid entries:
+          collision, battery, obstacle_sighted (see
+          trigger_crossing_time/9 in moveto_continuous.pl for the
+          complete, current list -- a future trigger added there
+          needs no schema change beyond documenting its name here).
+          Triggers=[] means the leg completes even through an
+          obstacle's margin or an empty battery -- see
+          moveto_continuous.pl's TRIGGERS section for why nothing is
+          hardcoded as always-on.
+      - name: reason
+        direction: output
+        type: std::string
+        description: >
+          One of: completed, crashed, battery_depleted, or any entry
+          from triggers that actually fired (e.g. obstacle_sighted).
+      - name: status
+        direction: output
+        type: bool
+        description: >
+          true iff reason=completed AND the final position landed
+          within goal_tolerance of this leg's own endpoint (the last
+          point of control_points, NOT necessarily the global goal --
+          see leg_target/3's own comment in moveto_continuous.pl).
+
+  # ----------------------------------------------------------------
+  # The two planners. Both are dispatched, underneath, through the
+  # SAME parametrized Prolog predicate -- planWith(Algorithm,CP) /
+  # plan_call/8 with Algorithm fixed per entry -- and the SAME
+  # underlying Python implementation in bt_actions.py, parametrized
+  # by algorithm. Modeled as two DISTINCT BT.cpp nodes here (rather
+  # than one generic node with an algorithm string port) because
+  # that's the more idiomatic, directly-draggable BT.cpp shape for a
+  # small, fixed set of concrete planners -- see bt_actions.py for
+  # the shared implementation underneath.
+  # ----------------------------------------------------------------
+  - id: PlanAstar
+    prolog_action: planWith
+    prolog_algorithm: astar
+    description: >
+      Black-box A* planner (moveto_planners.py's plan_astar/5) from
+      the CURRENT position (now/2 + at/4) to an EXPLICIT goal port
+      (NOT the global goal/2 fact -- this is what lets two planning
+      calls in the same tree target genuinely different destinations,
+      e.g. a "GoTo(target)" subtree instantiated twice with two
+      different port bindings for target).
+      Instantaneous -- does not advance simulated time or move the
+      robot; only computes ControlPoints for a SUBSEQUENT MoveTo to
+      use. Records a planned(astar,Reason) marker in the situation
+      history for traceability (see planned_with/3) -- it does NOT
+      gate on a precondition; a planner call is always attempted, its
+      Reason/Status simply report whether a path was found.
+    ports:
+      - name: goal
+        direction: input
+        type: Point
+        required: true
+        description: >
+          Target position for this planning call. Maps directly to
+          planWith's own point(GX,GY) argument in moveto_continuous.pl
+          -- per-call, not shared across other planning calls in the
+          same tree.
+      - name: control_points
+        direction: output
+        type: std::vector<Point>
+        description: >
+          The planned path, as chained cubic Bezier control points.
+          Empty if reason=no_path.
+      - name: reason
+        direction: output
+        type: std::string
+        description: "One of: completed, no_path."
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason=completed."
+
+  - id: PlanStraight
+    prolog_action: planWith
+    prolog_algorithm: straight
+    description: >
+      Direct straight-line planner (moveto_planners.py's
+      plan_straight/5) -- no map lookup at all, a single degenerate
+      (collinear-control-point) Bezier segment from the current
+      position to an EXPLICIT goal port (NOT the global goal/2 fact --
+      see PlanAstar's own description for why). Same interface as
+      PlanAstar in every other respect (instantaneous, records a
+      planned(straight,Reason) marker, etc.).
+    ports:
+      - name: goal
+        direction: input
+        type: Point
+        required: true
+        description: >
+          Target position for this planning call -- see PlanAstar's
+          own goal port.
+      - name: control_points
+        direction: output
+        type: std::vector<Point>
+        description: >
+          The planned path (always 4 points, a single Bezier
+          segment). Empty if reason=no_path (only possible for
+          degenerate/non-finite input -- an ordinary straight line
+          between two finite points always exists).
+      - name: reason
+        direction: output
+        type: std::string
+        description: "One of: completed, no_path."
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason=completed."
+
+conditions:
+
+  # ----------------------------------------------------------------
+  # holds(at_goal(Tol), S) in moveto_continuous.pl.
+  # ----------------------------------------------------------------
+  - id: AtGoal
+    prolog_condition: at_goal
+    description: >
+      True iff the CURRENT position (now/2 + at/4) is within
+      tolerance of the global goal/2. Typical use: the first child of
+      a Fallback, to skip planning/moving entirely if already there.
+    ports:
+      - name: tolerance
+        direction: input
+        type: double
+        required: true
+        description: Distance threshold, metres.
+
+  # ----------------------------------------------------------------
+  # holds(halted_with_cond(Reason), S) in moveto_continuous.pl.
+  # ----------------------------------------------------------------
+  - id: HaltedWith
+    prolog_condition: halted_with_cond
+    description: >
+      True iff SOMEWHERE in the situation history a haltMoveto
+      occurred with exactly this Reason (searches the WHOLE history,
+      not just the most recent halt -- see halted_with/2's own
+      comment). Lets a condition branch on how a PREVIOUS leg ended.
+    ports:
+      - name: reason
+        direction: input
+        type: std::string
+        required: true
+        description: >
+          One of: completed, crashed, battery_depleted, or any
+          trigger name (e.g. obstacle_sighted) that can appear as a
+          Reason -- see MoveTo's own reason port above.

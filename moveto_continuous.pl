@@ -963,7 +963,7 @@ nominal_at(X,Y,Frac,ControlPoints) :- spline_point(ControlPoints, Frac, X, Y).
 %                                  Algorithm) -- not a separate do_node
 %                                  clause per planner. A stateless
 %                                  black-box call into
-%                                  moveto_planners.py, binding CP for a
+%                                  actions/moveto_planners.py, binding CP for a
 %                                  subsequent moveto_leg(CP,...) to
 %                                  use. Goal is EXPLICIT (point(GX,GY)),
 %                                  an argument of planWith itself, not
@@ -1018,7 +1018,7 @@ do_node(moveto_leg(CP,Triggers), S, S1, Status) :-
 % -- PLANNING actions: deliberately NOT part of the full action theory
 %    -- no primitive_action/1 entry, no Poss axiom, no do_action call
 %    with its precondition check (these are stateless, purely-
-%    computational black-box calls into moveto_planners.py, not
+%    computational black-box calls into actions/moveto_planners.py, not
 %    physical processes -- Reiter's machinery exists to solve the
 %    frame problem for things that CHANGE THE WORLD over time; a
 %    lookup that returns instantly has no frame problem to solve, so
@@ -1044,7 +1044,7 @@ do_node(moveto_leg(CP,Triggers), S, S1, Status) :-
 %    SAME predicate, dispatched by ordinary clause selection. Adding a
 %    future THIRD planner (e.g. an RRT, or a different black-box
 %    module entirely) means adding one more plan_astar-style function
-%    to moveto_planners.py plus one more pair of plan_call/8 clauses
+%    to actions/moveto_planners.py plus one more pair of plan_call/8 clauses
 %    here; nothing about do_node, planned_with/3, or anything
 %    downstream needs to change. Because Reason/Status are bound
 %    DIRECTLY per clause rather than through a shared central lookup
@@ -1470,7 +1470,7 @@ goal_reached :-
 % work; the theory itself already supports it.
 %
 % "Plan a path with A*, then go there" -- using the planWith leaf
-% (see moveto_planners.py) instead of a hand/offline-computed
+% (see actions/moveto_planners.py) instead of a hand/offline-computed
 % control_points/1 fact -- is expressed exactly the same way, with no
 % new machinery beyond what's already in this file:
 %   plan(seq_node([planWith(astar,point(17.0,17.0),CP), moveto_leg(CP,[collision,battery])])).

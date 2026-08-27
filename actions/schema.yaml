@@ -32,6 +32,16 @@
 # that file's own header for how each entry below corresponds to a
 # concrete Python callable (or, for MoveTo, an interface/spec rather
 # than an executable stand-in -- explained there).
+#
+# An actual BT.cpp XML tree validated/translated against this schema
+# lives at plan_generation/plan/behavior_tree.xml -- see
+# plan_generation/bt_to_prolog.py for the concrete XML attribute
+# encoding this project uses for each port TYPE below (Point as
+# "X;Y", std::vector<std::string> as ";"-separated, and the
+# {blackboard_key} convention every BT.cpp port already uses for
+# ports that are wired to another node rather than given a literal
+# value -- this schema only describes port TYPES/directions, not a
+# serialization, so it stays agnostic of that choice).
 # ============================================================
 
 schema_version: 1

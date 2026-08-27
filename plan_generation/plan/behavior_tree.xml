@@ -1,0 +1,65 @@
+<?xml version="1.0"?>
+<!--
+  behavior_tree.xml
+
+  The BT.cpp v4-format tree for this project's shipped plan: plan a
+  path with A* to the mission goal, then walk it, halting on collision
+  or battery depletion (no obstacle_sighted for now). This is the
+  single source of truth for the POLICY'S SHAPE: change the tree by
+  editing this file, not moveto_continuous.pl (which now just
+  consults the translated result; see plan_generation/bt_to_prolog.py).
+
+  goal="11.675;11.525" is a LITERAL, matching this project's current
+  goal/2 fact in current_plan.pl at the time this file was written.
+  planWith always takes an explicit Goal argument, never the global
+  goal/2 fact (see moveto_continuous.pl's own note on why). If the map
+  or mission goal changes, update this value to match, or the plan will
+  keep aiming at the OLD goal even though goal_reached/at_goal (which DO
+  read the global goal/2 fact) would be checking against the NEW one.
+
+  control_points="{cp}" on BOTH nodes is BT.cpp's standard blackboard
+  wiring, not a value: PlanAstar computes ControlPoints at tick time
+  and writes it to key "cp"; MoveTo reads the same key. The translator
+  turns this into one shared Prolog variable (see bt_to_prolog.py's own
+  header for the full explanation); no coordinates are ever written
+  here.
+
+  triggers="collision;battery": no obstacle_sighted for now, per this
+  project's current instruction; add it here (semicolon separated, same
+  attribute) whenever it's wanted.
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="GoToGoal">
+      <PlanAstar goal="11.675;11.525" control_points="{cp}"/>
+      <MoveTo control_points="{cp}" triggers="collision;battery"/>
+    </Sequence>
+  </BehaviorTree>
+
+  <TreeNodesModel>
+    <Action ID="MoveTo">
+      <input_port name="control_points" type="std::vector&lt;Point&gt;"/>
+      <input_port name="triggers" type="std::vector&lt;std::string&gt;"/>
+      <output_port name="reason" type="std::string"/>
+      <output_port name="status" type="bool"/>
+    </Action>
+    <Action ID="PlanAstar">
+      <input_port name="goal" type="Point"/>
+      <output_port name="control_points" type="std::vector&lt;Point&gt;"/>
+      <output_port name="reason" type="std::string"/>
+      <output_port name="status" type="bool"/>
+    </Action>
+    <Action ID="PlanStraight">
+      <input_port name="goal" type="Point"/>
+      <output_port name="control_points" type="std::vector&lt;Point&gt;"/>
+      <output_port name="reason" type="std::string"/>
+      <output_port name="status" type="bool"/>
+    </Action>
+    <Condition ID="AtGoal">
+      <input_port name="tolerance" type="double"/>
+    </Condition>
+    <Condition ID="HaltedWith">
+      <input_port name="reason" type="std::string"/>
+    </Condition>
+  </TreeNodesModel>
+</root>

@@ -30,13 +30,20 @@ individually diagnosable):
 Usage:
     python3 run_plan_continuous_safety.py moveto_continuous.pl
 
-Before running inference, this script regenerates
-config/config_generated.pl from config/config.yaml (see that module's
-own header) -- config.yaml is the single source of truth for every
-tunable constant in the theory (noise sigmas, the Z discretization
-table, battery drain rates, robot/safety thresholds, tolerances,
-verification resolution), so a normal run always reflects whatever is
-currently in config.yaml with no separate regeneration step needed.
+Before running inference, this script:
+  1. regenerates config/config_generated.pl from config/config.yaml
+     (see that module's own header) -- config.yaml is the single
+     source of truth for every tunable constant in the theory (noise
+     sigmas, the Z discretization tables, battery drain rates,
+     robot/safety thresholds, tolerances, verification resolution).
+  2. translates plan_generation/plan/behavior_tree.xml -- a real
+     BT.cpp v4 tree, the single source of truth for the POLICY'S
+     SHAPE -- into plan_generation/plan/plan_generated.pl, validating
+     it against actions/schema.yaml on the way (see
+     plan_generation/bt_to_prolog.py's own header).
+Both steps mean a normal run always reflects whatever is currently in
+config.yaml / behavior_tree.xml, with no separate regeneration step
+needed.
 
 Requires: obstacles_generated.pl and the given plan file to be in the
 same directory (or already consulted from within the plan file), and
@@ -482,6 +489,36 @@ def main():
                 f"{os.path.join(config_dir, 'config.yaml')})")
         except Exception as e:
             tee(f"\n  [ERROR] Could not regenerate config_generated.pl: {e}")
+            sys.exit(1)
+
+        # Translate plan_generation/plan/behavior_tree.xml (the real
+        # BT.cpp v4 tree that is now the single source of truth for the
+        # POLICY'S SHAPE) into plan_generation/plan/plan_generated.pl,
+        # validating it against actions/schema.yaml on the way -- see
+        # plan_generation/bt_to_prolog.py's own header. Any structural
+        # problem (unknown node, missing/unrecognized port, a
+        # control_points blackboard key with no producer) is a hard
+        # failure here, same as a missing config fact above; there is no
+        # sensible way to run inference against a tree that doesn't
+        # actually match its own schema. Must also happen before
+        # resolve_consulted_text() below, for the same staleness reason
+        # as config_generated.pl.
+        plan_gen_dir = os.path.join(script_dir, "plan_generation")
+        if plan_gen_dir not in sys.path:
+            sys.path.insert(0, plan_gen_dir)
+        try:
+            from bt_to_prolog import generate_plan_pl, BTValidationError
+            generated_plan_path = generate_plan_pl(
+                xml_path=os.path.join(plan_gen_dir, "plan", "behavior_tree.xml"),
+                schema_path=os.path.join(script_dir, "actions", "schema.yaml"),
+                output_path=os.path.join(plan_gen_dir, "plan", "plan_generated.pl"))
+            tee(f"  Plan (BT)   : {generated_plan_path} (translated + validated "
+                f"from {os.path.join(plan_gen_dir, 'plan', 'behavior_tree.xml')})")
+        except BTValidationError as e:
+            tee(f"\n  [ERROR] behavior_tree.xml failed validation: {e}")
+            sys.exit(1)
+        except Exception as e:
+            tee(f"\n  [ERROR] Could not translate behavior_tree.xml: {e}")
             sys.exit(1)
 
         # Follow moveto_continuous.pl's own :- consult(...) directives --

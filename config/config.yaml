@@ -1,0 +1,89 @@
+# config.yaml
+#
+# Single source of truth for every tunable constant in the action
+# theory. Previously these lived as scattered `name(value).` facts
+# directly inside moveto_continuous.pl; they are now all here instead,
+# so retuning the system means editing exactly one file, in one place,
+# with units documented next to each value.
+#
+# How this reaches the theory:
+#   - config/generate_prolog_config.py turns this file into
+#     config/config_generated.pl (plain Prolog facts, same names/arities
+#     as before), which moveto_continuous.pl consults directly.
+#   - run_plan_continuous_safety.py regenerates config_generated.pl from
+#     this file automatically before every run -- you never need to run
+#     the generator by hand for a normal run, only if you want to
+#     inspect the generated Prolog without also running inference.
+#   - collision_geometry.py (the collision/obstacle-sighted black box)
+#     reads bracket_samples / crossing_eps / position_sigma directly
+#     from THIS file too (not from the generated .pl), so both the
+#     Prolog and Python sides of the theory are driven by the exact
+#     same numbers with no risk of drift.
+#
+# config_generated.pl is committed to the repo (like
+# environments/maps/obstacles_generated.pl and
+# plan_generation/plan/current_plan.pl already are) so that running
+# ProbLog directly (`problog moveto_continuous.pl`, per the project's
+# own testing convention) still works without going through
+# run_plan_continuous_safety.py first -- but treat it as a build
+# artifact: edit this file, not that one.
+
+robot:
+  radius: 0.20          # metres -- robot_radius/1
+  safety_buffer: 0.10   # metres -- safety_buffer/1 (safety_margin = radius + safety_buffer)
+
+triggers:
+  sight_threshold: 0.6           # metres -- obstacle_sighted trigger distance.
+                                  # Must stay strictly LARGER than safety_margin
+                                  # (radius + safety_buffer above) -- a sighting
+                                  # that isn't detected before collision range is
+                                  # useless as an early warning. Checked at
+                                  # evaluation time by the sight_threshold_valid
+                                  # query, not enforced here.
+  default: [collision, battery]  # default_triggers/1 -- what moveto_leg/1 (the
+                                  # sugar form, no explicit Triggers argument)
+                                  # reacts to.
+
+motion:
+  speed: 1.0   # metres per time-unit -- constant-speed spline traversal (speed/1)
+
+noise:
+  # Shared 5-point discretized N(0,1) table, used for BOTH the per-walk
+  # lateral position noise (z/2) and the mission-wide battery noise
+  # (zbatt/1) -- each scaled separately below (position_sigma /
+  # battery_sigma). Weights MUST sum to EXACTLY 1.0: ProbLog silently
+  # treats missing annotated-disjunction mass as an implicit "none of
+  # these" failure branch, which caps EVERY downstream probability --
+  # a real bug this project hit once already. The generator checks this
+  # sum and warns (but does not hard-fail, consistent with this
+  # project's existing choice not to hard-stop ProbLog loads -- see
+  # sight_threshold_valid's own note in moveto_continuous.pl) if it's
+  # off.
+  discretized_gaussian:
+    - value: -2.0
+      weight: 0.0606
+    - value: -1.0
+      weight: 0.2417
+    - value: 0.0
+      weight: 0.3954
+    - value: 1.0
+      weight: 0.2417
+    - value: 2.0
+      weight: 0.0606
+  position_sigma: 0.15   # metres per sqrt(time-unit) -- z/2's scale (sigma/1)
+  battery_sigma: 0.5     # percent per sqrt(time-unit) -- zbatt/1's scale (sigma_battery/1)
+
+battery:
+  start: 100                # percent -- battery_start/1
+  idle_drain_rate: 0.05     # percent/time-unit while not moving
+  moving_drain_rate: 0.5    # percent/time-unit while moving
+
+tolerances:
+  goal: 0.3       # metres -- goal_tolerance/1 (Status/goal_reached success check)
+  on_track: 0.5   # metres -- tolerance/1 (on_track/1 drift-reporting diagnostic)
+
+verification:
+  num_samples: 20        # reporting/plotting resolution -- decoupled from
+                          # detection, which is exact (see bracket_samples below)
+  bracket_samples: 60    # collision/obstacle_sighted bracket-scan sample count
+  crossing_eps: 0.01     # bisection refinement tolerance, time-units

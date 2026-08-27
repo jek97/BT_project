@@ -32,11 +32,13 @@ Prolog clauses.
 CORRECTNESS: the algorithm below is a LINE-FOR-LINE port of
 moveto_continuous.pl's former Prolog implementation (same bracket-scan
 sample count, same bisection epsilon, same spline/noise formulas) --
-not a re-derivation. bracket_samples/1, crossing_eps/1, and sigma/1 are
-read directly out of moveto_continuous.pl's own text at import time (see
-_read_theory_constants below) rather than hardcoded a second time here,
-so tuning either value in the .pl file takes effect automatically with
-no risk of the Prolog and Python sides drifting apart.
+not a re-derivation. bracket_samples, crossing_eps, and position_sigma
+are read directly out of config/config.yaml at import time (the SAME
+file config/generate_prolog_config.py turns into
+config/config_generated.pl for the Prolog side, see that module's own
+header) rather than hardcoded a second time here, so config.yaml stays
+the single source of truth for both the Prolog and Python halves of the
+theory with no risk of the two drifting apart.
 
 Exposes ONE predicate to ProbLog, INSTANTANEOUS and stateless, exactly
 like moveto_planners.py's plan_astar/plan_straight:
@@ -74,27 +76,25 @@ run.
 import math
 import os
 import re
+import sys
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_THEORY_PATH = os.path.join(_THIS_DIR, "moveto_continuous.pl")
 _OBSTACLES_PATH = os.path.join(_THIS_DIR, "environments", "maps", "obstacles_generated.pl")
+
+_CONFIG_DIR = os.path.join(_THIS_DIR, "config")
+if _CONFIG_DIR not in sys.path:
+    sys.path.insert(0, _CONFIG_DIR)
+from generate_prolog_config import load_config  # noqa: E402
 
 POINT_RE = re.compile(r"point\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)")
 
 
 def _strip_prolog_comments(text):
-    """Remove '%'-to-end-of-line comments before regex-parsing facts --
-    same defensive technique run_plan_continuous_safety.py already uses
-    for the same reason (a header comment showing example syntax could
-    otherwise match before the real fact)."""
+    """Remove '%'-to-end-of-line comments before regex-parsing obstacle
+    facts -- same defensive technique run_plan_continuous_safety.py
+    already uses for the same reason (a header comment showing example
+    syntax could otherwise match before the real fact)."""
     return re.sub(r"%.*$", "", text, flags=re.MULTILINE)
-
-
-def _parse_scalar_fact(text, name, cast):
-    m = re.search(rf"^{name}\(\s*(-?\d+(?:\.\d+)?)\s*\)\s*\.", text, re.MULTILINE)
-    if not m:
-        raise ValueError(f"Could not find {name}/1 fact in {_THEORY_PATH}")
-    return cast(m.group(1))
 
 
 def _parse_obstacle_polygons(text):
@@ -106,17 +106,10 @@ def _parse_obstacle_polygons(text):
     return polys
 
 
-def _read_theory_constants():
-    with open(_THEORY_PATH) as f:
-        text = _strip_prolog_comments(f.read())
-    return (
-        _parse_scalar_fact(text, "bracket_samples", int),
-        _parse_scalar_fact(text, "crossing_eps", float),
-        _parse_scalar_fact(text, "sigma", float),
-    )
-
-
-BRACKET_SAMPLES, CROSSING_EPS, SIGMA = _read_theory_constants()
+_config = load_config()
+BRACKET_SAMPLES = int(_config["verification"]["bracket_samples"])
+CROSSING_EPS = float(_config["verification"]["crossing_eps"])
+SIGMA = float(_config["noise"]["position_sigma"])
 
 try:
     with open(_OBSTACLES_PATH) as f:

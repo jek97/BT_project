@@ -81,6 +81,18 @@ obstacle_polygon(no_obstacles_placeholder, []) :- fail.
 % If you don't have a map yet, create a stub file containing at least
 % one such fact (or an empty file) so this program still loads.
 
+% config/config_generated.pl provides EVERY tunable constant in this
+% theory -- robot_radius/1, safety_buffer/1, sight_threshold/1,
+% default_triggers/1, speed/1, sigma/1, sigma_battery/1, battery_start/1,
+% idle_drain_rate/1, moving_drain_rate/1, goal_tolerance/1, tolerance/1,
+% num_samples/1, bracket_samples/1, crossing_eps/1, and the z/2 and
+% zbatt/1 annotated disjunctions -- generated from config/config.yaml by
+% config/generate_prolog_config.py (run_plan_continuous_safety.py does
+% this automatically before every run). config.yaml is the single
+% source of truth; edit IT, not this generated file, to retune the
+% system. See config.yaml's own header for the full rationale.
+:- consult('./config/config_generated.pl').
+
 % actions/moveto_planners.py provides plan_astar/5 and plan_straight/5
 % as BLACK-BOX (Python-implemented) predicates -- see that file's own
 % header for the full explanation. ProbLog imports and executes it
@@ -130,31 +142,29 @@ sum_list([H|T], Sum) :- sum_list(T, SumT), Sum is H + SumT.
 % ---------------------------------------------------------------
 % 2. ROBOT / SAFETY PARAMETERS
 % ---------------------------------------------------------------
-robot_radius(0.20).
-safety_buffer(0.10).
-safety_margin(M) :- robot_radius(R), safety_buffer(B), M is R + B.
-
-% sight_threshold: a SECOND, separate distance threshold for the
-% obstacle_sighted trigger (see the TRIGGERS section) -- deliberately
-% kept as its own independently-tunable fact, NOT derived from
-% safety_margin, but REQUIRED to be strictly larger than it (a
-% sighting that isn't detected before collision range is useless as
-% an early-warning trigger).
+% robot_radius/1, safety_buffer/1, and sight_threshold/1 are now config
+% facts (config/config.yaml -> config/config_generated.pl, consulted
+% above) -- see that file for the tunable values themselves. Kept here:
+% safety_margin/1 (a DERIVED value, not a raw constant -- always
+% recomputed from the two config facts, never itself config data) and
+% sight_threshold_valid (the RUNTIME CHECK that sight_threshold stays
+% strictly larger than safety_margin -- a sighting that isn't detected
+% before collision range is useless as an early-warning trigger).
 %
-% Enforcement: sight_threshold_valid below is the check, exposed as
-% an ORDINARY QUERY (see the query list at the end of the file) --
-% tested and confirmed this is the actual, SOLE enforcement
-% mechanism. A bare `:- sight_threshold_valid.` load-time directive
-% was also tried, but ProbLog does NOT hard-stop or warn when a plain
-% directive fails to prove -- it silently continues loading -- so a
-% failed directive here would give no visible signal at all. The
-% query is reliable (shows 0 in every run's output if misconfigured);
-% the directive was removed since it added complexity with no real
-% enforcement benefit. If you want a genuine load-time hard-stop,
-% check sight_threshold_valid manually before running problog (e.g.
-% from run_plan_continuous_safety.py) rather than relying on ProbLog
-% itself to refuse to load.
-sight_threshold(0.6).
+% Enforcement: sight_threshold_valid below is exposed as an ORDINARY
+% QUERY (see the query list at the end of the file) -- tested and
+% confirmed this is the actual, SOLE enforcement mechanism. A bare
+% `:- sight_threshold_valid.` load-time directive was also tried, but
+% ProbLog does NOT hard-stop or warn when a plain directive fails to
+% prove -- it silently continues loading -- so a failed directive here
+% would give no visible signal at all. The query is reliable (shows 0
+% in every run's output if misconfigured); the directive was removed
+% since it added complexity with no real enforcement benefit.
+% config/generate_prolog_config.py ALSO prints a (non-fatal) warning at
+% generation time if config.yaml itself violates this, as an earlier
+% heads-up -- but sight_threshold_valid below remains the sole thing
+% that actually enforces it.
+safety_margin(M) :- robot_radius(R), safety_buffer(B), M is R + B.
 
 sight_threshold_valid :- sight_threshold(ST), safety_margin(M), ST > M.
 
@@ -240,7 +250,7 @@ arc_length(ControlPoints, Length) :-
         ), Ds),
     sum_list(Ds, Length).
 
-speed(1.0).  % metres per time unit
+% speed/1 is now a config fact -- see config/config.yaml's motion.speed.
 
 walk_duration(ControlPoints, Duration) :-
     arc_length(ControlPoints, Length),
@@ -258,20 +268,19 @@ walk_duration(ControlPoints, Duration) :-
 %    stops growing wherever it was at the moment of interruption --
 %    it does not "reset" or get resampled.
 % ---------------------------------------------------------------
-% NOTE: these five weights sum to EXACTLY 1.0 (0.0606*2 + 0.2417*2 +
-% 0.3954 = 1.0000). An earlier version of this table used 0.3854 for
-% the centre weight, which summed to only 0.99 -- ProbLog silently
-% treats missing mass as an implicit "none of these" failure branch,
-% which caps EVERY downstream probability at 0.99 in every world. Kept
-% as a cautionary note: always check your annotated-disjunction weights
-% sum to 1.0 exactly.
-0.0606::z(do(startMoveto(CP,Triggers,T0),S), -2.0) ;
-0.2417::z(do(startMoveto(CP,Triggers,T0),S), -1.0) ;
-0.3954::z(do(startMoveto(CP,Triggers,T0),S),  0.0) ;
-0.2417::z(do(startMoveto(CP,Triggers,T0),S),  1.0) ;
-0.0606::z(do(startMoveto(CP,Triggers,T0),S),  2.0).
-
-sigma(0.15).  % lateral noise scale, metres per sqrt(time-unit)
+% z/2's annotated-disjunction table and sigma/1 (its scale) are now
+% config facts -- see config/config.yaml's noise.discretized_gaussian
+% and noise.position_sigma, generated into config/config_generated.pl
+% (consulted at the top of this file) by
+% config/generate_prolog_config.py. NOTE kept here as a standing
+% reminder even though the table itself moved: these five weights must
+% sum to EXACTLY 1.0 (0.0606*2 + 0.2417*2 + 0.3954 = 1.0000) -- an
+% earlier version of this table used 0.3854 for the centre weight,
+% which summed to only 0.99, and ProbLog silently treats missing mass
+% as an implicit "none of these" failure branch, which caps EVERY
+% downstream probability at 0.99 in every world. The generator checks
+% this sum and warns if it's off; always verify it after editing
+% config.yaml regardless.
 
 % ---------------------------------------------------------------
 % 5. THE MOVING FLUENT -- true while a walk is in progress (between
@@ -339,12 +348,10 @@ current_walk(do(A,S), CP, Triggers, T0, SPrev) :-
 %       depletion time is solvable by plain algebra. See
 %       first_battery_depletion_time/6 below.
 % ---------------------------------------------------------------
-battery_start(100).
-idle_drain_rate(0.05).    % %/time-unit while not moving -- tune as needed
-moving_drain_rate(0.5).   % %/time-unit while moving -- tune as needed
-sigma_battery(0.5).       % noise scale, % per sqrt(time-unit) -- SAME
-                          % value used in every phase (moving, idle,
-                          % and s0) -- see zbatt/1 below.
+% battery_start/1, idle_drain_rate/1, moving_drain_rate/1, and
+% sigma_battery/1 (the SAME value used in every phase -- moving, idle,
+% and s0 -- see zbatt/1 below) are now config facts -- see
+% config/config.yaml's battery.* and noise.battery_sigma.
 
 % zbatt/1: ONE noise draw for the WHOLE MISSION -- deliberately
 % decoupled from any specific startMoveto occurrence. This is an
@@ -354,14 +361,11 @@ sigma_battery(0.5).       % noise scale, % per sqrt(time-unit) -- SAME
 % SAME single resolved value. This treats "how much this particular
 % battery underperforms" as a persistent property of the battery
 % itself -- present from the very start, not a fresh, independent
-% draw manufactured at each walk. Same corrected 5-point discretized
-% N(0,1) table as z/2 (see the note above z/2 about weights needing
-% to sum to exactly 1.0).
-0.0606::zbatt(-2.0) ;
-0.2417::zbatt(-1.0) ;
-0.3954::zbatt( 0.0) ;
-0.2417::zbatt( 1.0) ;
-0.0606::zbatt( 2.0).
+% draw manufactured at each walk. Its annotated-disjunction table is
+% now ALSO a config fact -- the SAME noise.discretized_gaussian entries
+% as z/2 (see config.yaml), instantiated a second time with zbatt/1's
+% own zero-argument functor by config/generate_prolog_config.py, so the
+% two tables can never drift apart.
 
 % s0's idle phase now ALSO carries genuine stochasticity, using the
 % SAME global Zb -- consistent with every other phase, no more
@@ -596,19 +600,17 @@ walk_noisy_point(ControlPoints, T0, Duration, Z, T, X, Y) :-
 % this is a deterministic, stateless computation over an ALREADY-
 % RESOLVED noise value Z, not a probabilistic choice in itself, so
 % there is no frame problem here to justify keeping it in Prolog.
-% bracket_samples(60) and crossing_eps(0.01) -- the bracket-scan count
-% and bisection tolerance -- are now READ DIRECTLY out of this .pl
-% file's own text by collision_geometry.py at import time (regex, the
-% same lightweight technique run_plan_continuous_safety.py already uses
-% to read back ground facts) rather than duplicated as separate Python
-% constants, so tuning either value here take effect automatically with
-% no risk of the two implementations drifting apart. FAILS (0 ProbLog
-% solutions) if the trajectory never comes within Threshold of an
-% obstacle in this resolved world -- correctly representing "never
+% bracket_samples/1 and crossing_eps/1 -- the bracket-scan count and
+% bisection tolerance -- are now config facts too (see
+% config/config.yaml's verification.bracket_samples/crossing_eps).
+% collision_geometry.py reads them (and sigma/1's value) directly out
+% of config/config.yaml itself, not out of this generated fact, since
+% config.yaml is the actual single source of truth both sides are
+% driven from -- see collision_geometry.py's own header. FAILS (0
+% ProbLog solutions) if the trajectory never comes within Threshold of
+% an obstacle in this resolved world -- correctly representing "never
 % happens" via absence, not a sentinel value, same convention as
 % everywhere else in this theory.
-bracket_samples(60).
-crossing_eps(0.01).
 
 % first_collision_time/5 kept as a thin, name-preserving wrapper over
 % the generalized machinery, at threshold=safety_margin -- every
@@ -1080,8 +1082,9 @@ holds(at_goal(Tol), S) :-
 %    first_collision_time above) -- num_samples/1 only controls the
 %    resolution used for plotting and for on_track's drift reporting,
 %    it no longer determines whether a collision is found at all.
+%    num_samples/1 is now a config fact -- see
+%    config/config.yaml's verification.num_samples.
 % ---------------------------------------------------------------
-num_samples(20).
 
 sample_frac(I, Frac) :- num_samples(N), Frac is I / N.
 
@@ -1252,7 +1255,8 @@ plan_route_blocked :- \+ verify_safe.
 %    the nominal spline position at sample I? (still sampled -- this
 %    is a REPORTING diagnostic about drift magnitude, not a safety
 %    detector, so fixed-resolution sampling remains appropriate here)
-tolerance(0.5).
+%    tolerance/1 is now a config fact -- see
+%    config/config.yaml's tolerances.on_track.
 
 on_track(I) :-
     final_situation(S),
@@ -1272,7 +1276,8 @@ on_track(I) :-
 %    hand for every future trigger; checking halted_with(completed,S)
 %    directly is correct for any number of current or future causes
 %    with no changes needed here).
-goal_tolerance(0.3).
+%    goal_tolerance/1 is now a config fact -- see
+%    config/config.yaml's tolerances.goal.
 
 goal_reached :-
     final_situation(S),
@@ -1381,7 +1386,8 @@ goal_reached :-
 % as a first, coarse version of "try A*, fall back to a straight line
 % if that doesn't work") -- flagged here as a natural next step, not
 % built yet.
-default_triggers([collision, battery]).
+% default_triggers/1 is now a config fact -- see
+% config/config.yaml's triggers.default.
 
 plan(seq_node([moveto_leg(CP,Triggers)])) :-
     control_points(CP),

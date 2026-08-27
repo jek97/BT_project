@@ -30,6 +30,14 @@ individually diagnosable):
 Usage:
     python3 run_plan_continuous_safety.py moveto_continuous.pl
 
+Before running inference, this script regenerates
+config/config_generated.pl from config/config.yaml (see that module's
+own header) -- config.yaml is the single source of truth for every
+tunable constant in the theory (noise sigmas, the Z discretization
+table, battery drain rates, robot/safety thresholds, tolerances,
+verification resolution), so a normal run always reflects whatever is
+currently in config.yaml with no separate regeneration step needed.
+
 Requires: obstacles_generated.pl and the given plan file to be in the
 same directory (or already consulted from within the plan file), and
 `problog` importable/runnable on PATH.
@@ -452,6 +460,28 @@ def main():
 
         if not os.path.isfile(plan_path):
             tee(f"\n  [ERROR] File not found: {plan_path}")
+            sys.exit(1)
+
+        # Regenerate config/config_generated.pl from config/config.yaml
+        # BEFORE anything reads the theory -- config.yaml is the single
+        # source of truth for every tunable constant (see config/
+        # generate_prolog_config.py), so every run picks up whatever is
+        # currently there with no separate step. Must happen before the
+        # resolve_consulted_text() call below, since that follows
+        # moveto_continuous.pl's own :- consult('./config/config_generated.pl')
+        # directive and would otherwise read a stale or missing file.
+        config_dir = os.path.join(script_dir, "config")
+        if config_dir not in sys.path:
+            sys.path.insert(0, config_dir)
+        try:
+            from generate_prolog_config import generate as generate_prolog_config
+            generated_path = generate_prolog_config(
+                config_path=os.path.join(config_dir, "config.yaml"),
+                output_path=os.path.join(config_dir, "config_generated.pl"))
+            tee(f"  Config      : {generated_path} (regenerated from "
+                f"{os.path.join(config_dir, 'config.yaml')})")
+        except Exception as e:
+            tee(f"\n  [ERROR] Could not regenerate config_generated.pl: {e}")
             sys.exit(1)
 
         # Follow moveto_continuous.pl's own :- consult(...) directives --

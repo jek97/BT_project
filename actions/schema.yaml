@@ -69,18 +69,19 @@ actions:
       - name: triggers
         direction: input
         type: std::vector<std::string>
-        required: false
-        default: "{collision;battery}"
+        required: true
         description: >
-          Which halting conditions this leg reacts to. Valid entries:
-          collision, battery, obstacle_sighted (see
-          trigger_crossing_time/9 in moveto_continuous.pl for the
-          complete, current list -- a future trigger added there
-          needs no schema change beyond documenting its name here).
-          Triggers=[] means the leg completes even through an
-          obstacle's margin or an empty battery -- see
-          moveto_continuous.pl's TRIGGERS section for why nothing is
-          hardcoded as always-on.
+          Which halting conditions this leg reacts to. REQUIRED, with
+          NO default -- moveto_continuous.pl deliberately has no
+          sugar/default-triggers form, so every MoveTo node instance
+          must state its own protection level explicitly at the tree
+          level. Valid entries: collision, battery, obstacle_sighted
+          (see trigger_crossing_time/9 in moveto_continuous.pl for the
+          complete, current list -- a future trigger added there needs
+          no schema change beyond documenting its name here). An empty
+          list means the leg completes even through an obstacle's
+          margin or an empty battery -- see moveto_continuous.pl's
+          TRIGGERS section for why nothing is hardcoded as always-on.
       - name: reason
         direction: output
         type: std::string

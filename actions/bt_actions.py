@@ -100,24 +100,23 @@ def bt_plan_straight(sx, sy, gx, gy):
 # =====================================================================
 # ACTIONS -- interface-only (MoveTo): term builder, not an executor
 # =====================================================================
-def moveto_leg_term(control_points, triggers=None):
+def moveto_leg_term(control_points, triggers):
     """
     Build the moveto_continuous.pl TERM TEXT for one MoveTo node's
-    bound inputs -- moveto_leg(ControlPoints,Triggers) if triggers is
-    given, or moveto_leg(ControlPoints) (falling back to
-    default_triggers/1, matching MoveTo's "triggers optional" port in
-    schema.yaml) if not.
+    bound inputs -- moveto_leg(ControlPoints,Triggers). Triggers is
+    REQUIRED, matching moveto_continuous.pl's own moveto_leg/2 (there is
+    deliberately no sugar/default form on either side -- every leg
+    states its own protection level explicitly; pass [] for a
+    genuinely unprotected leg).
 
     control_points: list of (x,y) pairs.
-    triggers: list of strings (e.g. ["collision","battery"]), or None.
+    triggers: list of strings (e.g. ["collision","battery"]).
 
     Returns Prolog source text, e.g.:
         "moveto_leg([point(1.0,2.0),point(3.0,4.0)],[collision,battery])"
     """
     cp_text = "[" + ",".join(
         f"point({float(x)},{float(y)})" for x, y in control_points) + "]"
-    if triggers is None:
-        return f"moveto_leg({cp_text})"
     trig_text = "[" + ",".join(str(t) for t in triggers) + "]"
     return f"moveto_leg({cp_text},{trig_text})"
 

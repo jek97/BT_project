@@ -109,7 +109,7 @@ def _parse_obstacle_polygons(text):
 _config = load_config()
 BRACKET_SAMPLES = int(_config["verification"]["bracket_samples"])
 CROSSING_EPS = float(_config["verification"]["crossing_eps"])
-SIGMA = float(_config["noise"]["position_sigma"])
+SIGMA = float(_config["noise"]["position"]["sigma"])
 
 try:
     with open(_OBSTACLES_PATH) as f:

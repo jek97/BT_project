@@ -6,7 +6,6 @@
 robot_radius(0.2).
 safety_buffer(0.1).
 sight_threshold(0.6).
-default_triggers([collision,battery]).
 speed(1.0).
 sigma(0.15).
 sigma_battery(0.5).

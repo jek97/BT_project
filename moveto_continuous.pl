@@ -32,10 +32,14 @@
 %     natural completion of its nominal duration, passing straight
 %     through an obstacle's margin or running the battery dry without
 %     ever noticing, if collision/battery aren't in this leg's own
-%     Triggers list. Different occurrences of moveto in a policy can
-%     react to different conditions -- see default_triggers/1 near
-%     plan/1 for the shipped default's actual choice (protected, via
-%     [collision,battery]). Whichever entry in Triggers occurs
+%     Triggers list. There is NO default Triggers list anywhere in this
+%     theory -- every moveto_leg(CP,Triggers) call states its own
+%     Triggers explicitly, by design, so a plan's protection level is
+%     always visible at the call site rather than inherited from
+%     configuration. Different occurrences of moveto in a policy can
+%     react to different conditions this way -- see plan/1 near the end
+%     of this file for the shipped plan's own explicit choice
+%     ([collision,battery]). Whichever entry in Triggers occurs
 %     EARLIEST in a given resolved world (or natural completion, if
 %     none does) determines Reason -- see the earliest-wins machinery
 %     below Poss(haltMoveto(...)).
@@ -83,7 +87,7 @@ obstacle_polygon(no_obstacles_placeholder, []) :- fail.
 
 % config/config_generated.pl provides EVERY tunable constant in this
 % theory -- robot_radius/1, safety_buffer/1, sight_threshold/1,
-% default_triggers/1, speed/1, sigma/1, sigma_battery/1, battery_start/1,
+% speed/1, sigma/1, sigma_battery/1, battery_start/1,
 % idle_drain_rate/1, moving_drain_rate/1, goal_tolerance/1, tolerance/1,
 % num_samples/1, bracket_samples/1, crossing_eps/1, and the z/2 and
 % zbatt/1 annotated disjunctions -- generated from config/config.yaml by
@@ -838,13 +842,15 @@ nominal_at(X,Y,Frac,ControlPoints) :- spline_point(ControlPoints, Frac, X, Y).
 %     cond(C)                  -- CONDITION leaf: tests C against the
 %                                  CURRENT situation via holds/2, no
 %                                  side effect (S1 = S).
-%     moveto_leg(CP)            -- ACTION leaf, Triggers defaulting to
-%                                  default_triggers/1 (sugar).
-%     moveto_leg(CP,Triggers)   -- ACTION leaf, explicit Triggers.
-%                                  Runs one startMoveto/haltMoveto
-%                                  pair to its halt; T0 auto-derived
-%                                  via now/2. Outcome IS the Status
-%                                  output, unchanged.
+%     moveto_leg(CP,Triggers)   -- ACTION leaf. Triggers is ALWAYS
+%                                  given explicitly at the call site --
+%                                  there is no sugar/default form, by
+%                                  design (see the note above Triggers
+%                                  in this file's own header). Runs one
+%                                  startMoveto/haltMoveto pair to its
+%                                  halt; T0 auto-derived via now/2.
+%                                  Outcome IS the Status output,
+%                                  unchanged.
 %     planWith(Algorithm,Goal,CP) -- PLANNING leaf: ONE TEMPLATE covering
 %                                  every planner (plan_astar,
 %                                  plan_straight, and any future one --
@@ -889,17 +895,13 @@ do_node(cond(C), S, S, true)  :- holds(C, S).
 do_node(cond(C), S, S, false) :- \+ holds(C, S).
 
 % -- ACTION leaf --------------------------------------------------------
-% moveto_leg(CP) is sugar defaulting to default_triggers/1 (see the
-% policy section further down) -- NOT to [] -- so the convenience form
-% stays protected the same way the shipped default plan is. Use
-% moveto_leg(CP,Triggers) explicitly for anything else, including
-% Triggers=[] for a genuinely unprotected leg. Status flows straight
-% through as Outcome -- no translation predicate needed, since both
-% already speak true/false.
-do_node(moveto_leg(CP), S, S1, Status) :-
-    default_triggers(Triggers),
-    do_action(startMoveto(CP,Triggers,_T0), S, S2),
-    do_action(haltMoveto(_T,_Reason,Status), S2, S1).
+% moveto_leg(CP,Triggers) -- Triggers is ALWAYS given explicitly here;
+% there is deliberately NO sugar/default form (no moveto_leg/1, no
+% config-driven fallback) -- every call site states its own protection
+% level, e.g. moveto_leg(CP,[collision,battery]) or moveto_leg(CP,[])
+% for a genuinely unprotected leg. Status flows straight through as
+% Outcome -- no translation predicate needed, since both already speak
+% true/false.
 do_node(moveto_leg(CP,Triggers), S, S1, Status) :-
     do_action(startMoveto(CP,Triggers,_T0), S, S2),
     do_action(haltMoveto(_T,_Reason,Status), S2, S1).
@@ -1070,7 +1072,7 @@ holds(halted_with_cond(Reason), S) :- halted_with(Reason, S).
 % at_goal(Tol): true iff the CURRENT position (at the current time,
 % via now/2) is within Tol of goal/2. Typical use: a fallback child
 % that skips moveto entirely if already there --
-%   fallback_node([cond(at_goal(0.3)), moveto_leg(CP)])
+%   fallback_node([cond(at_goal(0.3)), moveto_leg(CP,[collision,battery])])
 holds(at_goal(Tol), S) :-
     now(S, T), at(X,Y,T,S), goal(GX,GY), dist(X,Y,GX,GY,D), D =< Tol.
 
@@ -1224,9 +1226,8 @@ hit_by(N) :-
 %   (b) a dedicated *_in(S) exact-detection predicate (one line, via
 %       halted_with/2) + a corresponding any_* diagnostic query, if
 %       you want it separately reportable
-%   (c) including the new trigger's name in whichever Triggers
-%       list(s) should react to it -- e.g. default_triggers/1, or a
-%       specific leg's own list
+%   (c) including the new trigger's name in whichever leg(s)' own
+%       explicit Triggers list should react to it
 % Nothing else in the theory needs to change; earliest_halt/9 and
 % verify_safe below already handle an arbitrary Triggers list with no
 % further edits.
@@ -1336,17 +1337,17 @@ goal_reached :-
 % -- occupancy_grid_planner.py's output always satisfies this by
 % construction, so this is only a concern if you hand-author the file.
 
-% default_triggers/1 is [collision, battery] here -- NOT [] -- so the
-% SHIPPED default plan keeps its existing protected behavior (halts on
-% collision or battery depletion, as every example throughout this
-% file's development assumed). This is now a PLAIN CHOICE of which
-% conditions to react to, exactly like any other entry in a Triggers
-% list -- nothing about collision/battery is hardcoded into the
-% action theory anymore (see the TRIGGERS section above
-% trigger_crossing_time/9). To get a genuinely UNPROTECTED leg that
-% completes its full nominal duration even through an obstacle's
-% margin or an empty battery, use moveto_leg(CP,[]) explicitly, or
-% override default_triggers/1 to [].
+% Every moveto_leg call below states its Triggers EXPLICITLY, in place,
+% at the call site -- there is no default_triggers/1 fact and no sugar
+% moveto_leg/1 form anywhere in this theory (removed deliberately: a
+% plan's protection level should be visible where the leg is written,
+% not inherited from configuration or a convenience default elsewhere).
+% [collision,battery] below is a PLAIN CHOICE, exactly like any other
+% Triggers list -- nothing about collision/battery is hardcoded into
+% the action theory itself (see the TRIGGERS section above
+% trigger_crossing_time/9). Use moveto_leg(CP,[]) for a genuinely
+% unprotected leg that completes its full nominal duration even through
+% an obstacle's margin or an empty battery.
 %
 % To ALSO reactively halt when an obstacle first comes within
 % sight_threshold, add it alongside the others:
@@ -1355,8 +1356,10 @@ goal_reached :-
 % Since plan/1 is itself just a do_node/4 Node term, arbitrary
 % sequence/fallback/multi-leg policies are already expressible with
 % today's machinery, e.g.:
-%   plan(fallback_node([cond(at_goal(0.3)), moveto_leg(CP)])) :- control_points(CP).
-%   plan(seq_node([moveto_leg(CP1), moveto_leg(CP2)])) :- CP1=..., CP2=....
+%   plan(fallback_node([cond(at_goal(0.3)), moveto_leg(CP,[collision,battery])])) :-
+%       control_points(CP).
+%   plan(seq_node([moveto_leg(CP1,[collision,battery]),
+%                  moveto_leg(CP2,[collision,battery])])) :- CP1=..., CP2=....
 % -- only the AUTOMATIC generation of multi-leg plans (from
 % occupancy_grid_planner.py, which still emits one spline) is future
 % work; the theory itself already supports it.
@@ -1386,12 +1389,8 @@ goal_reached :-
 % as a first, coarse version of "try A*, fall back to a straight line
 % if that doesn't work") -- flagged here as a natural next step, not
 % built yet.
-% default_triggers/1 is now a config fact -- see
-% config/config.yaml's triggers.default.
-
-plan(seq_node([moveto_leg(CP,Triggers)])) :-
-    control_points(CP),
-    default_triggers(Triggers).
+plan(seq_node([moveto_leg(CP,[collision,battery])])) :-
+    control_points(CP).
 
 % ============================================================
 % 10. QUERIES

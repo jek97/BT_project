@@ -90,8 +90,15 @@ _ACTION_DISPATCH = {
     "PlanAstar": {"kind": "planWith", "algorithm": "astar"},
     "PlanStraight": {"kind": "planWith", "algorithm": "straight"},
 }
+# "single_float_port": the shared shape of every cond(Functor(Value))
+# condition whose one port is a plain float -- AtGoal, ObstacleInBound,
+# and BatteryBelow all reduce to this, just with different functor/port
+# names, so they share ONE translation branch below instead of three
+# near-identical ones.
 _CONDITION_DISPATCH = {
-    "AtGoal": {"kind": "at_goal"},
+    "AtGoal": {"kind": "single_float_port", "functor": "at_goal", "port": "tolerance"},
+    "ObstacleInBound": {"kind": "single_float_port", "functor": "obstacle_in_bound", "port": "threshold"},
+    "BatteryBelow": {"kind": "single_float_port", "functor": "battery_below", "port": "threshold"},
     "HaltedWith": {"kind": "halted_with_cond"},
 }
 _CONTROL_FLOW = {"Sequence": "seq_node", "Fallback": "fallback_node"}
@@ -227,9 +234,9 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool):
 
     if tag in _CONDITION_DISPATCH:
         info = _CONDITION_DISPATCH[tag]
-        if info["kind"] == "at_goal":
-            tol = float(attrs["tolerance"])
-            return f"cond(at_goal({tol}))"
+        if info["kind"] == "single_float_port":
+            value = float(attrs[info["port"]])
+            return f"cond({info['functor']}({value}))"
         if info["kind"] == "halted_with_cond":
             reason = attrs["reason"].strip()
             return f"cond(halted_with_cond({reason}))"

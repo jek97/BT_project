@@ -163,11 +163,23 @@ def halted_with_cond_term(reason):
     HaltedWith's reason port in schema.yaml. `reason` is written
     VERBATIM as Prolog text, unquoted: a bare atom for
     completed/battery_depleted/a trigger name, or "crashed(_)" /
-    "crashed(obs5)" (etc.) for crashed/obstacle_sighted, which now
-    carry WHICH obstacle_polygon/2 Id they fired against -- see
-    schema.yaml's own note on HaltedWith's reason port. A bare
-    "crashed" (no obstacle argument) no longer matches anything."""
+    "crashed(obs5)" / "obstacle_in_bound(_,_)" / "battery_under(20)"
+    (etc.) for the Reasons that carry extra info -- see schema.yaml's
+    own note on HaltedWith's reason port. A bare "crashed" (no
+    obstacle argument) no longer matches anything."""
     return f"cond(halted_with_cond({reason}))"
+
+
+def obstacle_in_bound_cond_term(threshold):
+    """cond(obstacle_in_bound(Threshold)) term text -- matches
+    ObstacleInBound's threshold port in schema.yaml."""
+    return f"cond(obstacle_in_bound({float(threshold)}))"
+
+
+def battery_below_cond_term(threshold):
+    """cond(battery_below(Threshold)) term text -- matches
+    BatteryBelow's threshold port in schema.yaml."""
+    return f"cond(battery_below({float(threshold)}))"
 
 
 # =====================================================================
@@ -209,5 +221,15 @@ CONDITIONS = {
         "kind": "interface_only",
         "prolog_condition": "halted_with_cond",
         "term_builder": halted_with_cond_term,
+    },
+    "ObstacleInBound": {
+        "kind": "interface_only",
+        "prolog_condition": "obstacle_in_bound",
+        "term_builder": obstacle_in_bound_cond_term,
+    },
+    "BatteryBelow": {
+        "kind": "interface_only",
+        "prolog_condition": "battery_below",
+        "term_builder": battery_below_cond_term,
     },
 }

@@ -85,23 +85,39 @@ actions:
           NO default -- moveto_continuous.pl deliberately has no
           sugar/default-triggers form, so every MoveTo node instance
           must state its own protection level explicitly at the tree
-          level. Valid entries: collision, battery, obstacle_sighted
-          (see trigger_crossing_time/9 in moveto_continuous.pl for the
-          complete, current list -- a future trigger added there needs
-          no schema change beyond documenting its name here). An empty
-          list means the leg completes even through an obstacle's
-          margin or an empty battery -- see moveto_continuous.pl's
-          TRIGGERS section for why nothing is hardcoded as always-on.
+          level. Valid entries: collision (fixed threshold, the
+          robot's own safety margin), battery (fixed threshold,
+          exactly 0%), obstacle_in_bound(Threshold) (a GENERIC,
+          per-call obstacle-proximity trigger -- what "obstacle
+          sighted" was renamed to), battery_below(Threshold) (the
+          same idea for battery level -- a SEPARATE, additional
+          trigger from the fixed battery=0% one, not a replacement for
+          it) (see trigger_crossing_time/9 in moveto_continuous.pl for
+          the complete, current list -- a future trigger added there
+          needs no schema change beyond documenting its name here). An
+          empty list means the leg completes even through an
+          obstacle's margin or an empty battery -- see
+          moveto_continuous.pl's TRIGGERS section for why nothing is
+          hardcoded as always-on. Written in a BT.cpp XML tree as a
+          semicolon-separated string, e.g.
+          triggers="collision;battery;obstacle_in_bound(0.6);battery_below(20)".
       - name: reason
         direction: output
         type: std::string
         description: >
           One of: completed, battery_depleted, crashed(ObstacleId),
-          obstacle_sighted(ObstacleId), or any other entry from
-          triggers that actually fired. crashed/obstacle_sighted carry
-          WHICH obstacle_polygon/2 Id they fired against (an argmin
-          over obstacles at the exact crossing point, computed by
+          obstacle_in_bound(Threshold,ObstacleId),
+          battery_under(Threshold), or any other entry from triggers
+          that actually fired. crashed/obstacle_in_bound carry WHICH
+          obstacle_polygon/2 Id they fired against (an argmin over
+          obstacles at the exact crossing point, computed by
           collision_geometry.py), not just that one fired.
+          obstacle_in_bound/battery_under also carry the Threshold
+          that was crossed (echoing the trigger's own argument) --
+          note the Reason functor battery_under deliberately differs
+          from the trigger name battery_below, mirroring how
+          collision's own Reason (crashed) already differs from its
+          trigger name.
       - name: status
         direction: output
         type: bool
@@ -234,11 +250,54 @@ conditions:
         required: true
         description: >
           One of: completed, battery_depleted, crashed(ObstacleId),
-          obstacle_sighted(ObstacleId), or any other Reason from
-          MoveTo's own reason port above (same note on
-          crashed/obstacle_sighted carrying WHICH obstacle applies
-          here). Written exactly as valid Prolog text, e.g.
-          reason="crashed(_)" to match ANY obstacle (a bare
-          reason="crashed" no longer matches anything -- a bare atom
-          never unifies with a compound term of the same name), or
-          reason="crashed(obs5)" for one specific obstacle.
+          obstacle_in_bound(Threshold,ObstacleId),
+          battery_under(Threshold), or any other Reason from MoveTo's
+          own reason port above (same notes on crashed/obstacle_in_bound
+          carrying WHICH obstacle, and obstacle_in_bound/battery_under
+          also carrying WHICH threshold, apply here). Written exactly
+          as valid Prolog text, e.g. reason="crashed(_)" to match ANY
+          obstacle (a bare reason="crashed" no longer matches anything
+          -- a bare atom never unifies with a compound term of the
+          same name), reason="crashed(obs5)" for one specific
+          obstacle, or reason="battery_under(20)" for one specific
+          threshold.
+
+  # ----------------------------------------------------------------
+  # holds(obstacle_in_bound(Threshold), S) in moveto_continuous.pl.
+  # ----------------------------------------------------------------
+  - id: ObstacleInBound
+    prolog_condition: obstacle_in_bound
+    description: >
+      True iff the CURRENT position (now/2 + at/4) is within
+      Threshold of ANY obstacle -- a single-point check reusing the
+      exact same underlying geometry (collision_geometry.py's
+      within_obstacle_threshold/_min_clearance_all) as the
+      obstacle_in_bound(Threshold) TRIGGER, just evaluated once
+      instead of searched across a whole future trajectory. This is
+      what "obstacle sighted" was renamed to; there is no fixed global
+      threshold anymore -- every use, trigger or condition, supplies
+      its own.
+    ports:
+      - name: threshold
+        direction: input
+        type: double
+        required: true
+        description: Distance threshold, metres.
+
+  # ----------------------------------------------------------------
+  # holds(battery_below(Threshold), S) in moveto_continuous.pl.
+  # ----------------------------------------------------------------
+  - id: BatteryBelow
+    prolog_condition: battery_below
+    description: >
+      True iff the CURRENT battery level (now/2 + battery/3) is below
+      Threshold -- a single battery/3 lookup, no black box involved.
+      SEPARATE from, and additional to, the fixed battery (=0%)
+      trigger/HaltedWith(battery_depleted) case -- this is a
+      genuinely different, caller-chosen threshold, not a replacement.
+    ports:
+      - name: threshold
+        direction: input
+        type: double
+        required: true
+        description: Battery level threshold, percent (0-100).

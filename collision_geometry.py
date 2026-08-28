@@ -12,8 +12,9 @@ for the action theory's own obstacle-clearance geometry.
 
 WHY THIS EXISTS: moveto_continuous.pl used to compute
 first_threshold_crossing_time/6 (the earliest time a noisy trajectory
-comes within a given distance of any obstacle -- the basis for both the
-`collision` and `obstacle_sighted` triggers) entirely in Prolog: a
+comes within a given distance of any obstacle -- the basis for the
+`collision` trigger and, now, the generic `obstacle_in_bound(Threshold)`
+trigger too) entirely in Prolog: a
 60-sample bracket scan, each sample checking clearance against every
 obstacle polygon's every edge, followed by a bisection refinement. None
 of that computation is actually PROBABILISTIC once Z (the resolved
@@ -40,24 +41,39 @@ header) rather than hardcoded a second time here, so config.yaml stays
 the single source of truth for both the Prolog and Python halves of the
 theory with no risk of the two drifting apart.
 
-Exposes ONE predicate to ProbLog, INSTANTANEOUS and stateless, exactly
-like moveto_planners.py's plan_astar/plan_straight:
+Exposes TWO predicates to ProbLog, both INSTANTANEOUS and stateless,
+exactly like moveto_planners.py's plan_astar/plan_straight:
 
     first_threshold_crossing_time(+ControlPoints,+T0,+Duration,+Z,
                                    +Threshold, -Tcross, -ObstacleId)
+    obstacle_within_threshold(+X,+Y,+Threshold)
+
+first_threshold_crossing_time is the TRIGGER-side primitive: searches a
+whole future trajectory (bracket scan + bisection) for the earliest
+crossing. obstacle_within_threshold is the CONDITION-side primitive:
+checks ONE point (the current situation) directly, no search at all --
+it's what backs moveto_continuous.pl's holds(obstacle_in_bound(...),S),
+the exact same underlying test (within_obstacle_threshold/
+_min_clearance_all) the trigger-side search calls repeatedly, called
+here just once. This is the "reuse the underlying machinery" the
+obstacle_in_bound(Threshold) trigger/condition pair was built around --
+see moveto_continuous.pl's own TRIGGERS section note.
 
 ObstacleId is the SAME atom as the crossed obstacle's obstacle_polygon/2
 Id (e.g. obs7) -- whichever polygon achieves the minimum clearance at
 the exact (bisected) crossing point, i.e. an argmin over obstacles, not
 just the min distance. This is what lets moveto_continuous.pl's
-trigger_crossing_time/9 report crashed(ObstacleId)/obstacle_sighted(
-ObstacleId) instead of a bare atom -- see this module's own
-_min_clearance_all for where the argmin actually happens.
+trigger_crossing_time/9 report crashed(ObstacleId)/
+obstacle_in_bound(Threshold,ObstacleId) instead of a bare atom -- see
+this module's own _min_clearance_all for where the argmin actually
+happens.
 
-FAILS (returns 0 ProbLog solutions) if the trajectory never comes within
-Threshold of an obstacle in this resolved world -- "never happens" is
-represented by absence, not a sentinel value, same convention as every
-other exact-detection predicate in this theory.
+first_threshold_crossing_time FAILS (returns 0 ProbLog solutions) if
+the trajectory never comes within Threshold of an obstacle in this
+resolved world; obstacle_within_threshold FAILS if the current point
+isn't within Threshold right now -- "never/not happening" is
+represented by absence in both, not a sentinel value, same convention
+as every other exact-detection predicate in this theory.
 
 Obstacle polygons: loaded ONCE, at import time, directly from
 ./environments/maps/obstacles_generated.pl -- the EXACT SAME file
@@ -319,6 +335,18 @@ def first_threshold_crossing_time_value(control_points, t0, duration, z, thresho
         OBSTACLE_POLYGONS)
 
 
+def obstacle_within_threshold_value(x, y, threshold):
+    """A SINGLE-POINT check -- is (x,y) within `threshold` of any
+    obstacle right now -- reusing _within_obstacle_threshold directly
+    (the SAME primitive _first_unsafe_sample/_bisect_crossing call
+    repeatedly above; this just calls it once). This is what backs the
+    obstacle_in_bound(Threshold) CONDITION in moveto_continuous.pl
+    (holds(obstacle_in_bound(...),S)), as opposed to the
+    obstacle_in_bound(Threshold) TRIGGER, which searches a whole future
+    trajectory via first_threshold_crossing_time_value above."""
+    return _within_obstacle_threshold(float(x), float(y), float(threshold), OBSTACLE_POLYGONS)
+
+
 # =====================================================================
 # PROBLOG-FACING PREDICATE -- only registered if ProbLog is importable
 # (see actions/moveto_planners.py's header for why this is guarded
@@ -347,3 +375,15 @@ if _HAVE_PROBLOG:
             return []  # no crossing in this world -- predicate FAILS
         tcross, obstacle_id = result
         return [(tcross, obstacle_id)]
+
+    # obstacle_within_threshold(+X,+Y,+Threshold): a pure boolean check,
+    # no output ports at all -- backs holds(obstacle_in_bound(...),S) in
+    # moveto_continuous.pl. A ProbLog nondet predicate with ZERO "-"
+    # specs succeeds (one solution) by returning [()] (a single empty
+    # tuple -- "here is one solution binding zero extra outputs") or
+    # fails (no solutions) by returning [].
+    @problog_export_nondet("+term", "+term", "+term")
+    def obstacle_within_threshold(x, y, threshold):
+        if obstacle_within_threshold_value(x, y, threshold):
+            return [()]
+        return []

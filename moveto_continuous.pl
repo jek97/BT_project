@@ -86,7 +86,7 @@ obstacle_polygon(no_obstacles_placeholder, []) :- fail.
 % one such fact (or an empty file) so this program still loads.
 
 % config/config_generated.pl provides EVERY tunable constant in this
-% theory -- robot_radius/1, safety_buffer/1, sight_threshold/1,
+% theory -- robot_radius/1, safety_buffer/1,
 % speed/1, sigma/1, sigma_battery/1, battery_start/1,
 % idle_drain_rate/1, moving_drain_rate/1, goal_tolerance/1, tolerance/1,
 % num_samples/1, bracket_samples/1, crossing_eps/1, and the z/2 and
@@ -146,37 +146,30 @@ sum_list([H|T], Sum) :- sum_list(T, SumT), Sum is H + SumT.
 % ---------------------------------------------------------------
 % 2. ROBOT / SAFETY PARAMETERS
 % ---------------------------------------------------------------
-% robot_radius/1, safety_buffer/1, and sight_threshold/1 are now config
-% facts (config/config.yaml -> config/config_generated.pl, consulted
-% above) -- see that file for the tunable values themselves. Kept here:
-% safety_margin/1 (a DERIVED value, not a raw constant -- always
-% recomputed from the two config facts, never itself config data) and
-% sight_threshold_valid (the RUNTIME CHECK that sight_threshold stays
-% strictly larger than safety_margin -- a sighting that isn't detected
-% before collision range is useless as an early-warning trigger).
+% robot_radius/1 and safety_buffer/1 are now config facts
+% (config/config.yaml -> config/config_generated.pl, consulted above)
+% -- see that file for the tunable values themselves. safety_margin/1
+% below is a DERIVED value, not a raw constant -- always recomputed
+% from the two config facts, never itself config data.
 %
-% Enforcement: sight_threshold_valid below is exposed as an ORDINARY
-% QUERY (see the query list at the end of the file) -- tested and
-% confirmed this is the actual, SOLE enforcement mechanism. A bare
-% `:- sight_threshold_valid.` load-time directive was also tried, but
-% ProbLog does NOT hard-stop or warn when a plain directive fails to
-% prove -- it silently continues loading -- so a failed directive here
-% would give no visible signal at all. The query is reliable (shows 0
-% in every run's output if misconfigured); the directive was removed
-% since it added complexity with no real enforcement benefit.
-% config/generate_prolog_config.py ALSO prints a (non-fatal) warning at
-% generation time if config.yaml itself violates this, as an earlier
-% heads-up -- but sight_threshold_valid below remains the sole thing
-% that actually enforces it.
+% sight_threshold/1 and sight_threshold_valid are GONE: obstacle
+% proximity used to be checked against ONE global sight_threshold
+% constant (the old obstacle_sighted trigger); it is now
+% obstacle_in_bound(Threshold), a genuinely per-call parameter (see the
+% TRIGGERS section and holds(obstacle_in_bound(...)) below) -- there is
+% no longer one global value to validate against safety_margin. NOT YET
+% BUILT: a per-instance check (e.g. in plan_generation/bt_to_prolog.py)
+% that a given obstacle_in_bound(Threshold)'s Threshold is itself
+% sensible (> safety_margin) -- currently unchecked, same as any other
+% trigger-list entry's argument.
 safety_margin(M) :- robot_radius(R), safety_buffer(B), M is R + B.
-
-sight_threshold_valid :- sight_threshold(ST), safety_margin(M), ST > M.
 
 % within_obstacle_threshold/3 (the generalized "is (PX,PY) within
 % Threshold of the nearest obstacle" test, parametrized by threshold so
-% the SAME primitive serves both collision and obstacle_sighted) now
-% lives inside collision_geometry.py's within_obstacle_threshold
-% helper, alongside the rest of the obstacle-clearance geometry it was
+% the SAME primitive serves collision, obstacle_in_bound, and any
+% future distance-based trigger) now lives inside collision_geometry.py's
+% within_obstacle_threshold helper, alongside the rest of the
+% obstacle-clearance geometry it was
 % moved with -- see the note above dist/5 in section 1.
 
 % ---------------------------------------------------------------
@@ -501,6 +494,33 @@ first_battery_depletion_time(CP,T0,Duration,B0,Zb,Tcross) :-
     Tcross0 =< T0 + Duration,
     Tcross = Tcross0.
 
+% first_battery_below_time(+CP,+T0,+Duration,+B0,+Zb,+Threshold,-Tcross):
+% the SAME closed-form algebra as first_battery_depletion_time above,
+% generalized to an arbitrary Threshold instead of hardcoded Level=0 --
+% this is what battery_below(Threshold) (see TRIGGERS section and
+% holds(battery_below(...)) further down) uses, kept as a genuinely
+% SEPARATE predicate from first_battery_depletion_time/6 (not a
+% generalize-in-place rename) since battery_depleted (Level=0 exactly)
+% stays its own distinct trigger/Reason, on request. UNLIKE
+% first_battery_depletion_time, B0 can legitimately already be AT OR
+% BELOW an arbitrary Threshold at T0 (e.g. an earlier leg already
+% drained below a later leg's chosen warning level without itself
+% using battery_below) -- so this needs the explicit "already true at
+% T0" graceful clause every other threshold-crossing predicate in this
+% theory already has, rather than relying on the algebra to degrade
+% gracefully on its own (it only does that at exactly Threshold=0).
+first_battery_below_time(CP,T0,Duration,B0,Zb,Threshold,T0) :-
+    B0 =< Threshold.
+first_battery_below_time(CP,T0,Duration,B0,Zb,Threshold,Tcross) :-
+    B0 > Threshold,
+    moving_drain_rate(MovingRate),
+    sigma_battery(SigmaB),
+    EffectiveRate is MovingRate - Zb*SigmaB/sqrt(Duration),
+    EffectiveRate > 0,
+    Tcross0 is T0 + (B0-Threshold)/EffectiveRate,
+    Tcross0 =< T0 + Duration,
+    Tcross = Tcross0.
+
 % ---------------------------------------------------------------
 % TRIGGERS -- the TEMPLATE mechanism. A leg's Triggers argument is
 % the COMPLETE list of halting conditions this leg reacts to --
@@ -525,16 +545,47 @@ first_battery_depletion_time(CP,T0,Duration,B0,Zb,Tcross) :-
 % battery_depleted -- via halted_with/2, crashed_in/1,
 % battery_depleted_in/1, first_hit/1, hit_by/1, etc.) stay STRUCTURALLY
 % as they were; only how those Reasons get triggered changed, not what
-% they're called. crashed/obstacle_sighted Reasons now carry WHICH
-% obstacle (crashed(ObstacleId), obstacle_sighted(ObstacleId)) rather
-% than being bare atoms, since first_collision_time/6 and
-% first_obstacle_sighted_time/6 now return the crossed obstacle's own
-% obstacle_polygon/2 Id alongside Tcross -- see collision_geometry.py's
-% own header for where that argmin actually happens. battery_depleted
-% stays a bare atom: draining isn't tied to any specific obstacle.
-% Matching "any crash regardless of which obstacle" now needs
-% crashed(_), not bare crashed -- see the TODO note near
-% holds(halted_with_cond(...)) for the one place this is user-facing.
+% they're called. crashed carries WHICH obstacle (crashed(ObstacleId))
+% rather than being a bare atom, since first_collision_time/6 now
+% returns the crossed obstacle's own obstacle_polygon/2 Id alongside
+% Tcross -- see collision_geometry.py's own header for where that
+% argmin actually happens. battery_depleted stays a bare atom: draining
+% isn't tied to any specific obstacle. Matching "any crash regardless
+% of which obstacle" now needs crashed(_), not bare crashed -- see the
+% TODO note near holds(halted_with_cond(...)) for the one place this is
+% user-facing.
+%
+% collision (fixed threshold=safety_margin) and battery (fixed
+% threshold=exactly-0, Reason=battery_depleted) are the ORIGINAL,
+% UNPARAMETRIZED trigger names -- kept exactly as they were, on
+% request, rather than folded into the generic versions below.
+% obstacle_in_bound(Threshold) and battery_below(Threshold) are
+% GENUINELY SEPARATE, ADDITIONAL trigger names -- a leg can react to
+% EITHER or BOTH of a fixed floor and an arbitrary per-call threshold
+% at once, e.g. Triggers=[collision,battery,battery_below(20)] halts on
+% whichever of "hits an obstacle", "hits exactly empty", or "drops
+% under 20%" happens earliest. obstacle_in_bound is what "obstacle
+% sighted" was renamed to (see the note above first_threshold_crossing_
+% time below for why sight_threshold/1 is gone): it reuses
+% first_threshold_crossing_time DIRECTLY, with Threshold now the
+% CALLER'S OWN argument instead of a fixed config constant -- the exact
+% same black box collision already used, no new machinery. Reason
+% carries Threshold too, not just ObstacleId (unlike collision's
+% crashed(ObstacleId)) -- so two obstacle_in_bound(...) triggers at
+% different thresholds in the same Triggers list stay distinguishable
+% by which one actually fired. battery_below(Threshold) is the SAME
+% relationship to battery: reuses first_battery_below_time (the
+% Threshold-generalized twin of first_battery_depletion_time, see that
+% predicate's own note), Reason battery_under(Threshold) -- a
+% DIFFERENT word from the trigger name, by request, mirroring
+% collision/crashed's own asymmetry.
+%
+% obstacle_in_bound(Threshold) and battery_below(Threshold) are ALSO
+% directly usable as cond() leaves, checking the CURRENT situation
+% instead of searching a future walk -- see holds(obstacle_in_bound(...))
+% and holds(battery_below(...)) further down, which reuse the exact
+% same underlying primitives (obstacle_within_threshold/battery/3) a
+% single time instead of across a bracket-scanned trajectory.
 % ---------------------------------------------------------------
 trigger_crossing_time(collision, CP,T0,Duration,Z,_Zb,_B0, crashed(ObstacleId), Tcross) :-
     first_collision_time(CP,T0,Duration,Z,Tcross,ObstacleId).
@@ -542,8 +593,11 @@ trigger_crossing_time(collision, CP,T0,Duration,Z,_Zb,_B0, crashed(ObstacleId), 
 trigger_crossing_time(battery, CP,T0,Duration,_Z,Zb,B0, battery_depleted, Tcross) :-
     first_battery_depletion_time(CP,T0,Duration,B0,Zb,Tcross).
 
-trigger_crossing_time(obstacle_sighted, CP,T0,Duration,Z,_Zb,_B0, obstacle_sighted(ObstacleId), Tcross) :-
-    first_obstacle_sighted_time(CP,T0,Duration,Z,Tcross,ObstacleId).
+trigger_crossing_time(obstacle_in_bound(Threshold), CP,T0,Duration,Z,_Zb,_B0, obstacle_in_bound(Threshold,ObstacleId), Tcross) :-
+    first_threshold_crossing_time(CP,T0,Duration,Z,Threshold,Tcross,ObstacleId).
+
+trigger_crossing_time(battery_below(Threshold), CP,T0,Duration,_Z,Zb,B0, battery_under(Threshold), Tcross) :-
+    first_battery_below_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
 
 % all_trigger_candidates(+Triggers,...,-Candidates): Candidates is a
 % list of Reason-Time pairs, one per trigger in Triggers that ACTUALLY
@@ -602,9 +656,13 @@ walk_noisy_point(ControlPoints, T0, Duration, Z, T, X, Y) :-
 % earliest time, within a given resolved world (fixed Z), at which
 % the noisy trajectory comes within a given distance THRESHOLD of an
 % obstacle. GENERALIZED over the threshold (rather than hardcoded to
-% collision's safety_margin) so the SAME machinery serves both
-% collision (threshold=safety_margin) and obstacle_sighted
-% (threshold=sight_threshold), and any future distance-based trigger.
+% collision's safety_margin) so the SAME machinery serves collision
+% (threshold=safety_margin, via first_collision_time/6 below),
+% obstacle_in_bound(Threshold) (called DIRECTLY with the caller's own
+% Threshold -- see trigger_crossing_time/9 above and
+% holds(obstacle_in_bound(...)) below, no separate wrapper predicate
+% needed since this black box was already threshold-generic), and any
+% future distance-based trigger.
 %
 % first_threshold_crossing_time(+ControlPoints,+T0,+Duration,+Z,
 % +Threshold,-Tcross,-ObstacleId) is now a BLACK-BOX Python predicate,
@@ -637,27 +695,20 @@ first_collision_time(CP,T0,Duration,Z,Tcross,ObstacleId) :-
     safety_margin(M),
     first_threshold_crossing_time(CP,T0,Duration,Z,M,Tcross,ObstacleId).
 
-% first_obstacle_sighted_time/6: the SAME machinery, at the (larger)
-% sight_threshold -- the crossing-time computation for the
-% obstacle_sighted trigger.
-first_obstacle_sighted_time(CP,T0,Duration,Z,Tcross,ObstacleId) :-
-    sight_threshold(ST),
-    first_threshold_crossing_time(CP,T0,Duration,Z,ST,Tcross,ObstacleId).
-
-
 % ---------------------------------------------------------------
 % Poss AXIOMS for the primitive actions.
 % ---------------------------------------------------------------
 % NOTE: startMoveto deliberately does NOT check battery > 0 (or
-% "not already colliding", or "not already within sight_threshold")
+% "not already colliding", or "not already within some obstacle_in_bound Threshold")
 % as a precondition. Doing so would make do_action FAIL ENTIRELY when
 % the battery is already empty (or the robot already unsafe) --
 % classical Golog non-derivability, i.e. "no situation exists" -- the
 % wrong semantics for a BT-style outcome (see the do_node/outcome
 % discussion earlier). Instead, ALL of collision, battery depletion,
-% and obstacle_sighted already have a graceful "already true at T0"
-% case built into first_threshold_crossing_time / first_battery_
-% depletion_time (Tcross = T0 exactly), so starting a walk with an
+% obstacle_in_bound, and battery_below already have a graceful "already
+% true at T0" case built into first_threshold_crossing_time /
+% first_battery_depletion_time / first_battery_below_time (Tcross = T0
+% exactly), so starting a walk with an
 % empty battery -- or already inside an obstacle's margin -- still
 % produces a well-formed, immediately-halted situation with the
 % correct Reason, consistent with every other halting cause, rather
@@ -679,8 +730,9 @@ now(do(A,S), T) :-
 % haltMoveto(T,Reason): the ways a walk stops other than an interrupt.
 % ALL are NATURAL events, not choices -- T/Reason are DERIVED, never
 % chosen by the plan. Whichever candidate cause -- natural completion,
-% or any condition in this leg's own Triggers list (collision,
-% battery, obstacle_sighted, or a future one) -- occurs EARLIEST in
+% or any condition in this leg's own Triggers list (collision, battery,
+% obstacle_in_bound(Threshold), battery_below(Threshold), or a future
+% one) -- occurs EARLIEST in
 % this resolved world wins. This is the genuine TEMPLATE mechanism:
 % NOTHING is hardcoded here -- a leg with Triggers=[] halts ONLY on
 % natural completion, passing straight through an obstacle's margin
@@ -1082,14 +1134,18 @@ holds(neg(P),   S) :- \+ holds(P,S).
 % halted_with/2 -- lets a cond() leaf branch on how the PREVIOUS leg
 % ended, e.g. cond(halted_with_cond(battery_depleted)).
 %
-% TODO / KNOWN INTERFACE CHANGE: crashed/obstacle_sighted Reasons are
-% now crashed(ObstacleId)/obstacle_sighted(ObstacleId), not bare atoms
-% (see trigger_crossing_time/9's own note) -- to match ANY crash
-% regardless of obstacle, write cond(halted_with_cond(crashed(_))), NOT
+% TODO / KNOWN INTERFACE CHANGE: crashed/obstacle_in_bound/battery_under
+% Reasons are compound terms carrying extra info (crashed(ObstacleId),
+% obstacle_in_bound(Threshold,ObstacleId), battery_under(Threshold) --
+% see trigger_crossing_time/9's own note), not bare atoms -- battery_depleted
+% stays a bare atom, unaffected. To match ANY crash regardless of
+% obstacle, write cond(halted_with_cond(crashed(_))), NOT
 % cond(halted_with_cond(crashed)) (which no longer unifies against
 % anything: a bare atom never matches a compound term of the same
-% name). To match a SPECIFIC obstacle, write e.g.
-% cond(halted_with_cond(crashed(obs5))). In a BT.cpp XML tree (see
+% name); similarly obstacle_in_bound(_,_) / battery_under(_) for "any
+% threshold/obstacle". To match SPECIFIC values, write e.g.
+% cond(halted_with_cond(crashed(obs5))) or
+% cond(halted_with_cond(battery_under(20))). In a BT.cpp XML tree (see
 % plan_generation/bt_to_prolog.py), this is HaltedWith's reason port,
 % written the same way: reason="crashed(_)" or reason="crashed(obs5)".
 holds(halted_with_cond(Reason), S) :- halted_with(Reason, S).
@@ -1113,6 +1169,33 @@ holds(halted_with_cond(Reason), S) :- halted_with(Reason, S).
 % substitute it automatically when the XML's goal port is left unset.
 holds(at_goal(Tol), S) :-
     now(S, T), at(X,Y,T,S), goal(GX,GY), dist(X,Y,GX,GY,D), D =< Tol.
+
+% obstacle_in_bound(Threshold): true iff the CURRENT position (at the
+% current time, via now/2) is within Threshold of ANY obstacle. Same
+% parameter, same underlying geometry as the obstacle_in_bound(Threshold)
+% TRIGGER (see trigger_crossing_time/9) -- but this checks ONE point
+% (the current situation) via a single call to
+% obstacle_within_threshold/3, a plain boolean ProbLog predicate
+% collision_geometry.py registers directly over
+% within_obstacle_threshold/_min_clearance_all (the SAME primitive the
+% trigger's bracket-scan calls repeatedly across a whole future
+% trajectory) -- see that module's own header. No bracket-scan/
+% bisection here: a condition only ever asks "is it true RIGHT NOW",
+% not "will it ever become true during this walk".
+holds(obstacle_in_bound(Threshold), S) :-
+    now(S, T), at(X,Y,T,S),
+    obstacle_within_threshold(X,Y,Threshold).
+
+% battery_below(Threshold): true iff the CURRENT battery level (at the
+% current time, via now/2) is below Threshold. Same parameter, same
+% underlying fluent as the battery_below(Threshold) TRIGGER (see
+% trigger_crossing_time/9) -- but this is a single battery/3 lookup at
+% the current situation, not first_battery_below_time's forward-looking
+% closed-form solve; no black box involved at all, battery/3 is already
+% plain Prolog.
+holds(battery_below(Threshold), S) :-
+    now(S, T), battery(Level, T, S),
+    Level < Threshold.
 
 % ---------------------------------------------------------------
 % 8. VERIFICATION-TIME SAMPLING (NOT part of the action theory) --
@@ -1178,7 +1261,7 @@ sample_walk_frac(I, S, WalkFrac) :-
 %    SAFETY QUERIES READ THE ACTUAL OUTCOME, THEY DO NOT RE-DERIVE IT.
 %    An earlier version of crashed_in/1 independently recomputed
 %    first_collision_time over the walk's FULL nominal duration,
-%    regardless of whether some OTHER cause (e.g. obstacle_sighted)
+%    regardless of whether some OTHER cause (e.g. obstacle_in_bound)
 %    had already halted the walk earlier in this same world. That's a
 %    real bug, not a subtlety: it answers "would this trajectory
 %    eventually reach the collision margin if nothing else stopped
@@ -1201,26 +1284,30 @@ sample_walk_frac(I, S, WalkFrac) :-
 halted_with(Reason, do(haltMoveto(_,Reason,_), _)).
 halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 
-% -- crashed_in(S) / battery_depleted_in(S) / obstacle_sighted_in(S):
-%    trivial one-liners reading the actual Reason, not re-deriving
-%    anything. crashed(_)/obstacle_sighted(_) use a wildcard since
-%    these two Reasons now carry WHICH obstacle (crashed(ObstacleId),
-%    see trigger_crossing_time/9's own note) -- an unbound ObstacleId
-%    here correctly means "regardless of which obstacle". Any FUTURE
-%    trigger's own "did it actually fire" diagnostic is exactly this
-%    same one-liner pattern -- no trigger-specific re-derivation logic
-%    to get wrong.
+% -- crashed_in(S) / battery_depleted_in(S) / obstacle_in_bound_in(S) /
+%    battery_under_in(S): trivial one-liners reading the actual Reason,
+%    not re-deriving anything. crashed(_)/obstacle_in_bound(_,_) use
+%    wildcards since those Reasons carry WHICH obstacle (and, for
+%    obstacle_in_bound, WHICH threshold too -- see trigger_crossing_time/9's
+%    own note) -- unbound arguments here correctly mean "regardless of
+%    which obstacle/threshold". battery_under(_) similarly wildcards
+%    its Threshold. Any FUTURE trigger's own "did it actually fire"
+%    diagnostic is exactly this same one-liner pattern -- no
+%    trigger-specific re-derivation logic to get wrong.
 crashed_in(S) :- halted_with(crashed(_), S).
 battery_depleted_in(S) :- halted_with(battery_depleted, S).
-obstacle_sighted_in(S) :- halted_with(obstacle_sighted(_), S).
+obstacle_in_bound_in(S) :- halted_with(obstacle_in_bound(_,_), S).
+battery_under_in(S) :- halted_with(battery_under(_), S).
 
-% -- crashed_obstacle(S,ObstacleId) / obstacle_sighted_obstacle(S,
-%    ObstacleId): the direct accessor for WHICH obstacle -- unlike the
-%    *_in(S) checks above, ObstacleId is left bound, not wildcarded.
-%    Fails (no solution) if S didn't halt for that reason, same
-%    "absence, not sentinel" convention as everywhere else.
+% -- crashed_obstacle(S,ObstacleId) / obstacle_in_bound_obstacle(S,
+%    Threshold,ObstacleId) / battery_under_threshold(S,Threshold): the
+%    direct accessors for WHICH obstacle/threshold -- unlike the
+%    *_in(S) checks above, the extra argument(s) are left bound, not
+%    wildcarded. Fails (no solution) if S didn't halt for that reason,
+%    same "absence, not sentinel" convention as everywhere else.
 crashed_obstacle(S, ObstacleId) :- halted_with(crashed(ObstacleId), S).
-obstacle_sighted_obstacle(S, ObstacleId) :- halted_with(obstacle_sighted(ObstacleId), S).
+obstacle_in_bound_obstacle(S, Threshold, ObstacleId) :- halted_with(obstacle_in_bound(Threshold,ObstacleId), S).
+battery_under_threshold(S, Threshold) :- halted_with(battery_under(Threshold), S).
 
 % -- overall collision probability (exact) --------------------------
 any_collision :- final_situation(S), crashed_in(S).
@@ -1268,12 +1355,14 @@ hit_by(N) :-
 % ---------------------------------------------------------------
 % FUTURE EXTENSION NOTE: "safety" here is meant to cover EVERY cause
 % that could prevent the robot from reaching the goal. Currently
-% there are three, ALL expressed as ordinary Triggers entries (see
+% there are four, ALL expressed as ordinary Triggers entries (see
 % the TRIGGERS section and trigger_crossing_time/9 far above):
 % collision (first_collision_time / crashed_in / any_collision),
 % battery depletion (first_battery_depletion_time /
-% battery_depleted_in / any_battery_depletion), and obstacle_sighted.
-% Adding a FOURTH cause later -- a mechanical fault, a comms timeout,
+% battery_depleted_in / any_battery_depletion), obstacle_in_bound
+% (obstacle_in_bound_in/2, first_threshold_crossing_time), and
+% battery_below (battery_under_in/2, first_battery_below_time).
+% Adding a FIFTH cause later -- a mechanical fault, a comms timeout,
 % whatever -- means exactly:
 %   (a) one more trigger_crossing_time/9 clause, giving its own
 %       Reason and crossing-time computation
@@ -1419,14 +1508,18 @@ goal_reached :-
 % section above trigger_crossing_time/9). An empty triggers="" list
 % would give a genuinely unprotected leg that completes its full
 % nominal duration even through an obstacle's margin or an empty
-% battery; adding obstacle_sighted (triggers="collision;battery;
-% obstacle_sighted") would ALSO reactively halt when an obstacle first
-% comes within sight_threshold.
+% battery; adding obstacle_in_bound(0.6) (triggers="collision;battery;
+% obstacle_in_bound(0.6)") would ALSO reactively halt when an obstacle
+% first comes within 0.6 metres, and battery_below(20)
+% (triggers="collision;battery;battery_below(20)") would ALSO halt the
+% first time the battery drops under 20%, alongside (not instead of)
+% the fixed collision/battery(=0%) triggers.
 %
 % Since the translator handles arbitrary Sequence/Fallback nesting and
 % every schema.yaml action/condition, sequence/fallback/multi-leg
-% policies -- and conditions like AtGoal/HaltedWith -- are already
-% expressible in the XML with no further changes here; see
+% policies -- and conditions like AtGoal/HaltedWith/ObstacleInBound/
+% BatteryBelow -- are already expressible in the XML with no further
+% changes here; see
 % bt_to_prolog.py's own header for the blackboard-to-Prolog-variable
 % translation this relies on (e.g. giving two different PlanAstar/
 % PlanStraight nodes distinct blackboard keys, same as the CP1/CP2
@@ -1446,7 +1539,6 @@ query(plan_outcome(true)).
 query(plan_outcome(false)).
 query(any_collision).
 query(any_battery_depletion).
-query(sight_threshold_valid).
 query(verify_safe).
 query(plan_route_blocked).
 query(hit_by(20)).

@@ -1073,6 +1073,19 @@ holds(halted_with_cond(Reason), S) :- halted_with(Reason, S).
 % via now/2) is within Tol of goal/2. Typical use: a fallback child
 % that skips moveto entirely if already there --
 %   fallback_node([cond(at_goal(0.3)), moveto_leg(CP,[collision,battery])])
+%
+% TODO / KNOWN GAP: this reads the GLOBAL goal/2 fact (from
+% plan_generation/plan/current_plan.pl) -- NOT any PlanAstar/
+% PlanStraight node's own `goal` port (a literal in behavior_tree.xml,
+% see plan_generation/bt_to_prolog.py's translation). The two are
+% independent numbers that only happen to agree today because
+% behavior_tree.xml was hand-written to match goal/2 at the time. If
+% either changes without the other, at_goal/goal_reached below would
+% silently check against a stale/different point than what PlanAstar
+% actually planned toward. Left as-is for now (accepted, discussed
+% explicitly) -- a real fix belongs here eventually, e.g. having the
+% translator read goal/2 itself and refuse a disagreeing XML value, or
+% substitute it automatically when the XML's goal port is left unset.
 holds(at_goal(Tol), S) :-
     now(S, T), at(X,Y,T,S), goal(GX,GY), dist(X,Y,GX,GY,D), D =< Tol.
 
@@ -1279,6 +1292,9 @@ on_track(I) :-
 %    with no changes needed here).
 %    goal_tolerance/1 is now a config fact -- see
 %    config/config.yaml's tolerances.goal.
+%    TODO / KNOWN GAP: reads the global goal/2 fact, same caveat as
+%    at_goal/1 above (see the TODO note on that clause) -- not any
+%    PlanAstar/PlanStraight node's own `goal` port.
 
 goal_reached :-
     final_situation(S),

@@ -16,6 +16,8 @@
   or mission goal changes, update this value to match, or the plan will
   keep aiming at the OLD goal even though goal_reached/at_goal (which DO
   read the global goal/2 fact) would be checking against the NEW one.
+  TODO / KNOWN GAP, accepted for now: see the matching TODO comments on
+  holds(at_goal(...)) and goal_reached in moveto_continuous.pl.
 
   control_points="{cp}" on BOTH nodes is BT.cpp's standard blackboard
   wiring, not a value: PlanAstar computes ControlPoints at tick time

@@ -99,6 +99,8 @@ _CONDITION_DISPATCH = {
     "AtGoal": {"kind": "single_float_port", "functor": "at_goal", "port": "tolerance"},
     "ObstacleInBound": {"kind": "single_float_port", "functor": "obstacle_in_bound", "port": "threshold"},
     "BatteryBelow": {"kind": "single_float_port", "functor": "battery_below", "port": "threshold"},
+    "BatteryEqual": {"kind": "single_float_port", "functor": "battery_equal", "port": "threshold"},
+    "BatteryOver": {"kind": "single_float_port", "functor": "battery_over", "port": "threshold"},
     "HaltedWith": {"kind": "halted_with_cond"},
 }
 _CONTROL_FLOW = {"Sequence": "seq_node", "Fallback": "fallback_node"}

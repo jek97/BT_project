@@ -182,6 +182,18 @@ def battery_below_cond_term(threshold):
     return f"cond(battery_below({float(threshold)}))"
 
 
+def battery_equal_cond_term(threshold):
+    """cond(battery_equal(Threshold)) term text -- matches
+    BatteryEqual's threshold port in schema.yaml."""
+    return f"cond(battery_equal({float(threshold)}))"
+
+
+def battery_over_cond_term(threshold):
+    """cond(battery_over(Threshold)) term text -- matches
+    BatteryOver's threshold port in schema.yaml."""
+    return f"cond(battery_over({float(threshold)}))"
+
+
 # =====================================================================
 # Registry -- maps schema.yaml's IDs to their implementation here.
 # Not required for either caller to function (both can call the
@@ -231,5 +243,15 @@ CONDITIONS = {
         "kind": "interface_only",
         "prolog_condition": "battery_below",
         "term_builder": battery_below_cond_term,
+    },
+    "BatteryEqual": {
+        "kind": "interface_only",
+        "prolog_condition": "battery_equal",
+        "term_builder": battery_equal_cond_term,
+    },
+    "BatteryOver": {
+        "kind": "interface_only",
+        "prolog_condition": "battery_over",
+        "term_builder": battery_over_cond_term,
     },
 }

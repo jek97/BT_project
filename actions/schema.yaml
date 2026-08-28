@@ -89,17 +89,21 @@ actions:
           robot's own safety margin), battery (fixed threshold,
           exactly 0%), obstacle_in_bound(Threshold) (a GENERIC,
           per-call obstacle-proximity trigger -- what "obstacle
-          sighted" was renamed to), battery_below(Threshold) (the
-          same idea for battery level -- a SEPARATE, additional
-          trigger from the fixed battery=0% one, not a replacement for
-          it) (see trigger_crossing_time/9 in moveto_continuous.pl for
-          the complete, current list -- a future trigger added there
-          needs no schema change beyond documenting its name here). An
-          empty list means the leg completes even through an
-          obstacle's margin or an empty battery -- see
-          moveto_continuous.pl's TRIGGERS section for why nothing is
-          hardcoded as always-on. Written in a BT.cpp XML tree as a
-          semicolon-separated string, e.g.
+          sighted" was renamed to), battery_below(Threshold) /
+          battery_equal(Threshold) / battery_over(Threshold) (the same
+          per-call idea for battery level, at <, =, and > respectively
+          -- all THREE are SEPARATE, additional triggers from the
+          fixed battery=0% one, not replacements for it; battery_over
+          is degenerate in practice since battery never rises within a
+          walk, see first_battery_over_time's own note in
+          moveto_continuous.pl) (see trigger_crossing_time/9 in
+          moveto_continuous.pl for the complete, current list -- a
+          future trigger added there needs no schema change beyond
+          documenting its name here). An empty list means the leg
+          completes even through an obstacle's margin or an empty
+          battery -- see moveto_continuous.pl's TRIGGERS section for
+          why nothing is hardcoded as always-on. Written in a BT.cpp
+          XML tree as a semicolon-separated string, e.g.
           triggers="collision;battery;obstacle_in_bound(0.6);battery_below(20)".
       - name: reason
         direction: output
@@ -107,17 +111,19 @@ actions:
         description: >
           One of: completed, battery_depleted, crashed(ObstacleId),
           obstacle_in_bound(Threshold,ObstacleId),
-          battery_under(Threshold), or any other entry from triggers
+          battery_under(Threshold), battery_equal(Threshold),
+          battery_over(Threshold), or any other entry from triggers
           that actually fired. crashed/obstacle_in_bound carry WHICH
           obstacle_polygon/2 Id they fired against (an argmin over
           obstacles at the exact crossing point, computed by
-          collision_geometry.py), not just that one fired.
-          obstacle_in_bound/battery_under also carry the Threshold
-          that was crossed (echoing the trigger's own argument) --
-          note the Reason functor battery_under deliberately differs
-          from the trigger name battery_below, mirroring how
-          collision's own Reason (crashed) already differs from its
-          trigger name.
+          collision_geometry.py), not just that one fired. Every
+          battery_* Reason above also carries the Threshold that was
+          crossed (echoing the trigger's own argument). Reason functors
+          deliberately differ from their trigger names ONLY where a
+          distinct word was actually requested -- battery_below's
+          Reason is battery_under (mirroring collision/crashed's own
+          asymmetry), while battery_equal/battery_over keep the SAME
+          functor as their trigger name.
       - name: status
         direction: output
         type: bool
@@ -295,6 +301,45 @@ conditions:
       SEPARATE from, and additional to, the fixed battery (=0%)
       trigger/HaltedWith(battery_depleted) case -- this is a
       genuinely different, caller-chosen threshold, not a replacement.
+    ports:
+      - name: threshold
+        direction: input
+        type: double
+        required: true
+        description: Battery level threshold, percent (0-100).
+
+  # ----------------------------------------------------------------
+  # holds(battery_equal(Threshold), S) in moveto_continuous.pl.
+  # ----------------------------------------------------------------
+  - id: BatteryEqual
+    prolog_condition: battery_equal
+    description: >
+      True iff the CURRENT battery level (now/2 + battery/3) is EXACTLY
+      Threshold (arithmetic equality) -- a single battery/3 lookup, no
+      black box involved. In a continuous, noise-driven model this is
+      only true at whatever instant Level(T) genuinely passes through
+      Threshold (see first_battery_equal_time's own note in
+      moveto_continuous.pl) -- checking it at an arbitrary current time
+      will usually be false.
+    ports:
+      - name: threshold
+        direction: input
+        type: double
+        required: true
+        description: Battery level threshold, percent (0-100).
+
+  # ----------------------------------------------------------------
+  # holds(battery_over(Threshold), S) in moveto_continuous.pl.
+  # ----------------------------------------------------------------
+  - id: BatteryOver
+    prolog_condition: battery_over
+    description: >
+      True iff the CURRENT battery level (now/2 + battery/3) is above
+      Threshold -- a single battery/3 lookup, no black box involved.
+      As a CONDITION this is an ordinary, well-defined point-in-time
+      check; only its TRIGGER counterpart is degenerate (see
+      first_battery_over_time's own note in moveto_continuous.pl for
+      why -- battery never rises within a walk).
     ports:
       - name: threshold
         direction: input

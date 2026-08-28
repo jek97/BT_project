@@ -521,6 +521,47 @@ first_battery_below_time(CP,T0,Duration,B0,Zb,Threshold,Tcross) :-
     Tcross0 =< T0 + Duration,
     Tcross = Tcross0.
 
+% first_battery_equal_time(+CP,+T0,+Duration,+B0,+Zb,+Threshold,-Tcross):
+% the SAME closed-form algebra again, this time for Level(T) = Threshold
+% EXACTLY. Battery is a continuous, monotonically non-increasing
+% function of T within one walk (see noisy_drain/3's own note), so for
+% any Threshold strictly between the walk's start and end level there
+% is EXACTLY ONE instant it passes through it -- the same Tcross0
+% formula as first_battery_below_time above, not a separate derivation.
+% UNLIKE first_battery_below_time, there is NO "already true" grace
+% clause for B0 < Threshold: if the battery is already BELOW Threshold
+% at T0, it was EQUAL to it at some earlier, already-elapsed instant
+% not covered by this walk -- it can only keep draining further away
+% from Threshold from here, so this correctly FAILS (no clause matches)
+% rather than firing at T0. B0 = Threshold exactly is its own graceful
+% "already true" case (Tcross=T0), same convention as everywhere else.
+first_battery_equal_time(CP,T0,Duration,B0,Zb,Threshold,T0) :-
+    B0 =:= Threshold.
+first_battery_equal_time(CP,T0,Duration,B0,Zb,Threshold,Tcross) :-
+    B0 > Threshold,
+    moving_drain_rate(MovingRate),
+    sigma_battery(SigmaB),
+    EffectiveRate is MovingRate - Zb*SigmaB/sqrt(Duration),
+    EffectiveRate > 0,
+    Tcross0 is T0 + (B0-Threshold)/EffectiveRate,
+    Tcross0 =< T0 + Duration,
+    Tcross = Tcross0.
+
+% first_battery_over_time(+CP,+T0,+Duration,+B0,+Zb,+Threshold,-Tcross):
+% DEGENERATE compared to the other two, and deliberately so: battery
+% NEVER increases within a walk (monotonically non-increasing, by
+% construction -- see noisy_drain/3), so it can never "become" over a
+% threshold as T advances -- only ever AT OR BELOW where it started.
+% The only way Level(T) > Threshold can be true anywhere in this walk
+% is if it was ALREADY true at T0 (the walk's own starting level), so
+% this reduces to a single check AT T0, not a search: fires immediately
+% (Tcross=T0) iff B0 > Threshold, otherwise fails outright (no clause
+% matches -- correctly "never happens", not a sentinel). CP/Duration/Zb
+% are still accepted, unused, purely so this keeps the SAME uniform
+% signature every trigger_crossing_time/9 caller already relies on.
+first_battery_over_time(_CP,T0,_Duration,B0,_Zb,Threshold,T0) :-
+    B0 > Threshold.
+
 % ---------------------------------------------------------------
 % TRIGGERS -- the TEMPLATE mechanism. A leg's Triggers argument is
 % the COMPLETE list of halting conditions this leg reacts to --
@@ -580,12 +621,25 @@ first_battery_below_time(CP,T0,Duration,B0,Zb,Threshold,Tcross) :-
 % DIFFERENT word from the trigger name, by request, mirroring
 % collision/crashed's own asymmetry.
 %
-% obstacle_in_bound(Threshold) and battery_below(Threshold) are ALSO
+% battery_equal(Threshold) and battery_over(Threshold) are two more
+% additional, SEPARATE battery triggers, same family as battery_below.
+% battery_equal(Threshold) fires at the exact instant Level(T)=Threshold
+% (no "already below" grace -- see first_battery_equal_time's own
+% note); Reason keeps the SAME functor as the trigger (battery_equal),
+% not a distinct word, since no distinct Reason was requested for these
+% two (unlike battery_below/battery_under). battery_over(Threshold) is
+% DEGENERATE by construction: battery never increases within a walk, so
+% it can only ever be "already true at T0" or never true at all -- see
+% first_battery_over_time's own note for why there is no search here.
+%
+% obstacle_in_bound(Threshold), battery_below(Threshold),
+% battery_equal(Threshold), and battery_over(Threshold) are ALSO
 % directly usable as cond() leaves, checking the CURRENT situation
-% instead of searching a future walk -- see holds(obstacle_in_bound(...))
-% and holds(battery_below(...)) further down, which reuse the exact
-% same underlying primitives (obstacle_within_threshold/battery/3) a
-% single time instead of across a bracket-scanned trajectory.
+% instead of searching a future walk -- see holds(obstacle_in_bound(...)),
+% holds(battery_below(...)), holds(battery_equal(...)), and
+% holds(battery_over(...)) further down, which reuse the exact same
+% underlying primitives (obstacle_within_threshold/battery/3) a single
+% time instead of across a bracket-scanned trajectory.
 % ---------------------------------------------------------------
 trigger_crossing_time(collision, CP,T0,Duration,Z,_Zb,_B0, crashed(ObstacleId), Tcross) :-
     first_collision_time(CP,T0,Duration,Z,Tcross,ObstacleId).
@@ -598,6 +652,12 @@ trigger_crossing_time(obstacle_in_bound(Threshold), CP,T0,Duration,Z,_Zb,_B0, ob
 
 trigger_crossing_time(battery_below(Threshold), CP,T0,Duration,_Z,Zb,B0, battery_under(Threshold), Tcross) :-
     first_battery_below_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
+
+trigger_crossing_time(battery_equal(Threshold), CP,T0,Duration,_Z,Zb,B0, battery_equal(Threshold), Tcross) :-
+    first_battery_equal_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
+
+trigger_crossing_time(battery_over(Threshold), CP,T0,Duration,_Z,Zb,B0, battery_over(Threshold), Tcross) :-
+    first_battery_over_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
 
 % all_trigger_candidates(+Triggers,...,-Candidates): Candidates is a
 % list of Reason-Time pairs, one per trigger in Triggers that ACTUALLY
@@ -1197,6 +1257,23 @@ holds(battery_below(Threshold), S) :-
     now(S, T), battery(Level, T, S),
     Level < Threshold.
 
+% battery_equal(Threshold) / battery_over(Threshold): the SAME shape as
+% battery_below above -- a single battery/3 lookup at the current
+% situation, no black box, just a different arithmetic comparison.
+% battery_equal uses exact arithmetic equality (=:=) per its own name;
+% in a continuous, noise-driven model this is true only at whatever
+% instant Level(T) genuinely passes through Threshold (see
+% first_battery_equal_time's own note on why that's a well-defined,
+% single instant, not a probability-zero non-event) -- checking it at
+% an ARBITRARY current time will usually be false, same as asking "is
+% it exactly noon" at a random moment.
+holds(battery_equal(Threshold), S) :-
+    now(S, T), battery(Level, T, S),
+    Level =:= Threshold.
+holds(battery_over(Threshold), S) :-
+    now(S, T), battery(Level, T, S),
+    Level > Threshold.
+
 % ---------------------------------------------------------------
 % 8. VERIFICATION-TIME SAMPLING (NOT part of the action theory) --
 %    a purely deterministic choice of how finely to CHECK/REPORT the
@@ -1298,16 +1375,22 @@ crashed_in(S) :- halted_with(crashed(_), S).
 battery_depleted_in(S) :- halted_with(battery_depleted, S).
 obstacle_in_bound_in(S) :- halted_with(obstacle_in_bound(_,_), S).
 battery_under_in(S) :- halted_with(battery_under(_), S).
+battery_equal_in(S) :- halted_with(battery_equal(_), S).
+battery_over_in(S) :- halted_with(battery_over(_), S).
 
 % -- crashed_obstacle(S,ObstacleId) / obstacle_in_bound_obstacle(S,
-%    Threshold,ObstacleId) / battery_under_threshold(S,Threshold): the
-%    direct accessors for WHICH obstacle/threshold -- unlike the
-%    *_in(S) checks above, the extra argument(s) are left bound, not
-%    wildcarded. Fails (no solution) if S didn't halt for that reason,
-%    same "absence, not sentinel" convention as everywhere else.
+%    Threshold,ObstacleId) / battery_under_threshold(S,Threshold) /
+%    battery_equal_threshold(S,Threshold) /
+%    battery_over_threshold(S,Threshold): the direct accessors for
+%    WHICH obstacle/threshold -- unlike the *_in(S) checks above, the
+%    extra argument(s) are left bound, not wildcarded. Fails (no
+%    solution) if S didn't halt for that reason, same "absence, not
+%    sentinel" convention as everywhere else.
 crashed_obstacle(S, ObstacleId) :- halted_with(crashed(ObstacleId), S).
 obstacle_in_bound_obstacle(S, Threshold, ObstacleId) :- halted_with(obstacle_in_bound(Threshold,ObstacleId), S).
 battery_under_threshold(S, Threshold) :- halted_with(battery_under(Threshold), S).
+battery_equal_threshold(S, Threshold) :- halted_with(battery_equal(Threshold), S).
+battery_over_threshold(S, Threshold) :- halted_with(battery_over(Threshold), S).
 
 % -- overall collision probability (exact) --------------------------
 any_collision :- final_situation(S), crashed_in(S).
@@ -1355,14 +1438,16 @@ hit_by(N) :-
 % ---------------------------------------------------------------
 % FUTURE EXTENSION NOTE: "safety" here is meant to cover EVERY cause
 % that could prevent the robot from reaching the goal. Currently
-% there are four, ALL expressed as ordinary Triggers entries (see
+% there are six, ALL expressed as ordinary Triggers entries (see
 % the TRIGGERS section and trigger_crossing_time/9 far above):
 % collision (first_collision_time / crashed_in / any_collision),
 % battery depletion (first_battery_depletion_time /
 % battery_depleted_in / any_battery_depletion), obstacle_in_bound
-% (obstacle_in_bound_in/2, first_threshold_crossing_time), and
-% battery_below (battery_under_in/2, first_battery_below_time).
-% Adding a FIFTH cause later -- a mechanical fault, a comms timeout,
+% (obstacle_in_bound_in/2, first_threshold_crossing_time),
+% battery_below (battery_under_in/2, first_battery_below_time),
+% battery_equal (battery_equal_in/2, first_battery_equal_time), and
+% battery_over (battery_over_in/2, first_battery_over_time).
+% Adding a SEVENTH cause later -- a mechanical fault, a comms timeout,
 % whatever -- means exactly:
 %   (a) one more trigger_crossing_time/9 clause, giving its own
 %       Reason and crossing-time computation

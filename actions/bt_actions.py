@@ -160,10 +160,13 @@ def at_goal_cond_term(tolerance):
 
 def halted_with_cond_term(reason):
     """cond(halted_with_cond(Reason)) term text -- matches
-    HaltedWith's reason port in schema.yaml. `reason` is a bare
-    Prolog atom (completed/crashed/battery_depleted/a trigger name),
-    written unquoted since all of those are already valid lowercase
-    Prolog atoms."""
+    HaltedWith's reason port in schema.yaml. `reason` is written
+    VERBATIM as Prolog text, unquoted: a bare atom for
+    completed/battery_depleted/a trigger name, or "crashed(_)" /
+    "crashed(obs5)" (etc.) for crashed/obstacle_sighted, which now
+    carry WHICH obstacle_polygon/2 Id they fired against -- see
+    schema.yaml's own note on HaltedWith's reason port. A bare
+    "crashed" (no obstacle argument) no longer matches anything."""
     return f"cond(halted_with_cond({reason}))"
 
 

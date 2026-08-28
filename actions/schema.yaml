@@ -96,8 +96,12 @@ actions:
         direction: output
         type: std::string
         description: >
-          One of: completed, crashed, battery_depleted, or any entry
-          from triggers that actually fired (e.g. obstacle_sighted).
+          One of: completed, battery_depleted, crashed(ObstacleId),
+          obstacle_sighted(ObstacleId), or any other entry from
+          triggers that actually fired. crashed/obstacle_sighted carry
+          WHICH obstacle_polygon/2 Id they fired against (an argmin
+          over obstacles at the exact crossing point, computed by
+          collision_geometry.py), not just that one fired.
       - name: status
         direction: output
         type: bool
@@ -229,6 +233,12 @@ conditions:
         type: std::string
         required: true
         description: >
-          One of: completed, crashed, battery_depleted, or any
-          trigger name (e.g. obstacle_sighted) that can appear as a
-          Reason -- see MoveTo's own reason port above.
+          One of: completed, battery_depleted, crashed(ObstacleId),
+          obstacle_sighted(ObstacleId), or any other Reason from
+          MoveTo's own reason port above (same note on
+          crashed/obstacle_sighted carrying WHICH obstacle applies
+          here). Written exactly as valid Prolog text, e.g.
+          reason="crashed(_)" to match ANY obstacle (a bare
+          reason="crashed" no longer matches anything -- a bare atom
+          never unifies with a compound term of the same name), or
+          reason="crashed(obs5)" for one specific obstacle.

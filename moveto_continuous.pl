@@ -521,19 +521,29 @@ first_battery_depletion_time(CP,T0,Duration,B0,Zb,Tcross) :-
 %
 % Reason is a SEPARATE output from the trigger name itself for
 % collision/battery specifically, so the Reason atoms every other
-% part of the theory already keys on (crashed, battery_depleted --
-% via halted_with/2, crashed_in/1, battery_depleted_in/1,
-% first_hit/1, hit_by/1, etc.) stay EXACTLY as they were; only how
-% those Reasons get triggered changed, not what they're called.
+% part of the theory already keys on (crashed(ObstacleId),
+% battery_depleted -- via halted_with/2, crashed_in/1,
+% battery_depleted_in/1, first_hit/1, hit_by/1, etc.) stay STRUCTURALLY
+% as they were; only how those Reasons get triggered changed, not what
+% they're called. crashed/obstacle_sighted Reasons now carry WHICH
+% obstacle (crashed(ObstacleId), obstacle_sighted(ObstacleId)) rather
+% than being bare atoms, since first_collision_time/6 and
+% first_obstacle_sighted_time/6 now return the crossed obstacle's own
+% obstacle_polygon/2 Id alongside Tcross -- see collision_geometry.py's
+% own header for where that argmin actually happens. battery_depleted
+% stays a bare atom: draining isn't tied to any specific obstacle.
+% Matching "any crash regardless of which obstacle" now needs
+% crashed(_), not bare crashed -- see the TODO note near
+% holds(halted_with_cond(...)) for the one place this is user-facing.
 % ---------------------------------------------------------------
-trigger_crossing_time(collision, CP,T0,Duration,Z,_Zb,_B0, crashed, Tcross) :-
-    first_collision_time(CP,T0,Duration,Z,Tcross).
+trigger_crossing_time(collision, CP,T0,Duration,Z,_Zb,_B0, crashed(ObstacleId), Tcross) :-
+    first_collision_time(CP,T0,Duration,Z,Tcross,ObstacleId).
 
 trigger_crossing_time(battery, CP,T0,Duration,_Z,Zb,B0, battery_depleted, Tcross) :-
     first_battery_depletion_time(CP,T0,Duration,B0,Zb,Tcross).
 
-trigger_crossing_time(obstacle_sighted, CP,T0,Duration,Z,_Zb,_B0, obstacle_sighted, Tcross) :-
-    first_obstacle_sighted_time(CP,T0,Duration,Z,Tcross).
+trigger_crossing_time(obstacle_sighted, CP,T0,Duration,Z,_Zb,_B0, obstacle_sighted(ObstacleId), Tcross) :-
+    first_obstacle_sighted_time(CP,T0,Duration,Z,Tcross,ObstacleId).
 
 % all_trigger_candidates(+Triggers,...,-Candidates): Candidates is a
 % list of Reason-Time pairs, one per trigger in Triggers that ACTUALLY
@@ -597,38 +607,42 @@ walk_noisy_point(ControlPoints, T0, Duration, Z, T, X, Y) :-
 % (threshold=sight_threshold), and any future distance-based trigger.
 %
 % first_threshold_crossing_time(+ControlPoints,+T0,+Duration,+Z,
-% +Threshold,-Tcross) is now a BLACK-BOX Python predicate, registered
-% by collision_geometry.py's own :- use_module(...) directive (see
-% below) -- exactly the same "deliberately NOT part of the situation-
-% calculus machinery" reasoning already used for planWith/plan_call:
-% this is a deterministic, stateless computation over an ALREADY-
-% RESOLVED noise value Z, not a probabilistic choice in itself, so
-% there is no frame problem here to justify keeping it in Prolog.
-% bracket_samples/1 and crossing_eps/1 -- the bracket-scan count and
-% bisection tolerance -- are now config facts too (see
-% config/config.yaml's verification.bracket_samples/crossing_eps).
-% collision_geometry.py reads them (and sigma/1's value) directly out
-% of config/config.yaml itself, not out of this generated fact, since
-% config.yaml is the actual single source of truth both sides are
-% driven from -- see collision_geometry.py's own header. FAILS (0
-% ProbLog solutions) if the trajectory never comes within Threshold of
-% an obstacle in this resolved world -- correctly representing "never
-% happens" via absence, not a sentinel value, same convention as
-% everywhere else in this theory.
+% +Threshold,-Tcross,-ObstacleId) is now a BLACK-BOX Python predicate,
+% registered by collision_geometry.py's own :- use_module(...)
+% directive (see below) -- exactly the same "deliberately NOT part of
+% the situation-calculus machinery" reasoning already used for
+% planWith/plan_call: this is a deterministic, stateless computation
+% over an ALREADY-RESOLVED noise value Z, not a probabilistic choice in
+% itself, so there is no frame problem here to justify keeping it in
+% Prolog. ObstacleId is the crossed obstacle's own obstacle_polygon/2
+% Id (an argmin over obstacles at the exact crossing point, not just
+% the crossing time itself). bracket_samples/1 and crossing_eps/1 --
+% the bracket-scan count and bisection tolerance -- are now config
+% facts too (see config/config.yaml's
+% verification.bracket_samples/crossing_eps). collision_geometry.py
+% reads them (and sigma/1's value) directly out of config/config.yaml
+% itself, not out of this generated fact, since config.yaml is the
+% actual single source of truth both sides are driven from -- see
+% collision_geometry.py's own header. FAILS (0 ProbLog solutions) if
+% the trajectory never comes within Threshold of an obstacle in this
+% resolved world -- correctly representing "never happens" via
+% absence, not a sentinel value, same convention as everywhere else in
+% this theory.
 
-% first_collision_time/5 kept as a thin, name-preserving wrapper over
+% first_collision_time/6 kept as a thin, name-preserving wrapper over
 % the generalized machinery, at threshold=safety_margin -- every
-% EXISTING caller (crashed_in, verify_safe, etc.) is unaffected.
-first_collision_time(CP,T0,Duration,Z,Tcross) :-
+% EXISTING caller (crashed_in, verify_safe, etc.) is unaffected beyond
+% the new ObstacleId output.
+first_collision_time(CP,T0,Duration,Z,Tcross,ObstacleId) :-
     safety_margin(M),
-    first_threshold_crossing_time(CP,T0,Duration,Z,M,Tcross).
+    first_threshold_crossing_time(CP,T0,Duration,Z,M,Tcross,ObstacleId).
 
-% first_obstacle_sighted_time/5: the SAME machinery, at the (larger)
+% first_obstacle_sighted_time/6: the SAME machinery, at the (larger)
 % sight_threshold -- the crossing-time computation for the
 % obstacle_sighted trigger.
-first_obstacle_sighted_time(CP,T0,Duration,Z,Tcross) :-
+first_obstacle_sighted_time(CP,T0,Duration,Z,Tcross,ObstacleId) :-
     sight_threshold(ST),
-    first_threshold_crossing_time(CP,T0,Duration,Z,ST,Tcross).
+    first_threshold_crossing_time(CP,T0,Duration,Z,ST,Tcross,ObstacleId).
 
 
 % ---------------------------------------------------------------
@@ -1067,6 +1081,17 @@ holds(neg(P),   S) :- \+ holds(P,S).
 % halted_with_cond(Reason): reads the LAST halt's Reason via
 % halted_with/2 -- lets a cond() leaf branch on how the PREVIOUS leg
 % ended, e.g. cond(halted_with_cond(battery_depleted)).
+%
+% TODO / KNOWN INTERFACE CHANGE: crashed/obstacle_sighted Reasons are
+% now crashed(ObstacleId)/obstacle_sighted(ObstacleId), not bare atoms
+% (see trigger_crossing_time/9's own note) -- to match ANY crash
+% regardless of obstacle, write cond(halted_with_cond(crashed(_))), NOT
+% cond(halted_with_cond(crashed)) (which no longer unifies against
+% anything: a bare atom never matches a compound term of the same
+% name). To match a SPECIFIC obstacle, write e.g.
+% cond(halted_with_cond(crashed(obs5))). In a BT.cpp XML tree (see
+% plan_generation/bt_to_prolog.py), this is HaltedWith's reason port,
+% written the same way: reason="crashed(_)" or reason="crashed(obs5)".
 holds(halted_with_cond(Reason), S) :- halted_with(Reason, S).
 
 % at_goal(Tol): true iff the CURRENT position (at the current time,
@@ -1176,14 +1201,26 @@ sample_walk_frac(I, S, WalkFrac) :-
 halted_with(Reason, do(haltMoveto(_,Reason,_), _)).
 halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 
-% -- crashed_in(S) / battery_depleted_in(S): now trivial one-liners --
-%    reading the actual Reason, not re-deriving anything. Any FUTURE
+% -- crashed_in(S) / battery_depleted_in(S) / obstacle_sighted_in(S):
+%    trivial one-liners reading the actual Reason, not re-deriving
+%    anything. crashed(_)/obstacle_sighted(_) use a wildcard since
+%    these two Reasons now carry WHICH obstacle (crashed(ObstacleId),
+%    see trigger_crossing_time/9's own note) -- an unbound ObstacleId
+%    here correctly means "regardless of which obstacle". Any FUTURE
 %    trigger's own "did it actually fire" diagnostic is exactly this
-%    same one-liner pattern, e.g.
-%      obstacle_sighted_in(S) :- halted_with(obstacle_sighted, S).
-%    -- no trigger-specific re-derivation logic to get wrong.
-crashed_in(S) :- halted_with(crashed, S).
+%    same one-liner pattern -- no trigger-specific re-derivation logic
+%    to get wrong.
+crashed_in(S) :- halted_with(crashed(_), S).
 battery_depleted_in(S) :- halted_with(battery_depleted, S).
+obstacle_sighted_in(S) :- halted_with(obstacle_sighted(_), S).
+
+% -- crashed_obstacle(S,ObstacleId) / obstacle_sighted_obstacle(S,
+%    ObstacleId): the direct accessor for WHICH obstacle -- unlike the
+%    *_in(S) checks above, ObstacleId is left bound, not wildcarded.
+%    Fails (no solution) if S didn't halt for that reason, same
+%    "absence, not sentinel" convention as everywhere else.
+crashed_obstacle(S, ObstacleId) :- halted_with(crashed(ObstacleId), S).
+obstacle_sighted_obstacle(S, ObstacleId) :- halted_with(obstacle_sighted(ObstacleId), S).
 
 % -- overall collision probability (exact) --------------------------
 any_collision :- final_situation(S), crashed_in(S).
@@ -1206,10 +1243,14 @@ sample_index_for_time(T,T0,Duration,I) :-
 %    to exactly one bucket. T is read DIRECTLY off the actual halted
 %    situation (no re-derivation) -- if some OTHER cause preempted
 %    collision in this world, S's outermost haltMoveto simply won't
-%    match Reason=crashed, and this correctly contributes nothing.
+%    match Reason=crashed(_), and this correctly contributes nothing.
+%    _ObstacleId is deliberately unbound/ignored here -- first_hit is
+%    a PMF over WHEN, not WHICH obstacle; see crashed_obstacle/2 for
+%    that question, e.g. crashed_obstacle(S,ObstacleId) alongside
+%    final_situation(S) for a specific resolved situation.
 first_hit(I) :-
     final_situation(S),
-    S = do(haltMoveto(Tcross,crashed,_), _),
+    S = do(haltMoveto(Tcross,crashed(_ObstacleId),_), _),
     current_walk(S, CP, _Triggers, T0, _SPrev),
     walk_duration(CP, Duration),
     sample_index_for_time(Tcross,T0,Duration,I).
@@ -1218,7 +1259,7 @@ first_hit(I) :-
 %    before reporting sample N) ----------------------------------
 hit_by(N) :-
     final_situation(S),
-    S = do(haltMoveto(Tcross,crashed,_), _),
+    S = do(haltMoveto(Tcross,crashed(_ObstacleId),_), _),
     current_walk(S, CP, _Triggers, T0, _SPrev),
     walk_duration(CP, Duration),
     sample_index_for_time(Tcross,T0,Duration,I),
@@ -1321,7 +1362,8 @@ goal_reached :-
 %    Poss(haltMoveto(T,Reason),S), never chosen by the plan: Reason
 %    comes out `completed` if the walk finishes without ever coming
 %    within the safety margin of an obstacle in that resolved world,
-%    or `crashed` (with T = the exact collision time) otherwise.
+%    or `crashed(ObstacleId)` (with T = the exact collision time, and
+%    ObstacleId = which obstacle) otherwise.
 %
 %    Default plan below runs the walk to its natural halt (no
 %    interruption). To model an interruption, replace it with

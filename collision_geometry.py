@@ -44,7 +44,15 @@ Exposes ONE predicate to ProbLog, INSTANTANEOUS and stateless, exactly
 like moveto_planners.py's plan_astar/plan_straight:
 
     first_threshold_crossing_time(+ControlPoints,+T0,+Duration,+Z,
-                                   +Threshold, -Tcross)
+                                   +Threshold, -Tcross, -ObstacleId)
+
+ObstacleId is the SAME atom as the crossed obstacle's obstacle_polygon/2
+Id (e.g. obs7) -- whichever polygon achieves the minimum clearance at
+the exact (bisected) crossing point, i.e. an argmin over obstacles, not
+just the min distance. This is what lets moveto_continuous.pl's
+trigger_crossing_time/9 report crashed(ObstacleId)/obstacle_sighted(
+ObstacleId) instead of a bare atom -- see this module's own
+_min_clearance_all for where the argmin actually happens.
 
 FAILS (returns 0 ProbLog solutions) if the trajectory never comes within
 Threshold of an obstacle in this resolved world -- "never happens" is
@@ -98,11 +106,15 @@ def _strip_prolog_comments(text):
 
 
 def _parse_obstacle_polygons(text):
+    """Returns [(id, [(x,y),...]), ...] -- id is kept (not just the
+    point list) so a crossing can be reported AGAINST a specific
+    obstacle, not just "some obstacle" -- see _min_clearance_all."""
     polys = []
-    for m in re.finditer(r"obstacle_polygon\([^,]+,\s*\[(.*?)\]\s*\)\s*\.", text, re.S):
-        pts = [(float(x), float(y)) for x, y in POINT_RE.findall(m.group(1))]
+    for m in re.finditer(r"obstacle_polygon\(([^,]+),\s*\[(.*?)\]\s*\)\s*\.", text, re.S):
+        obstacle_id = m.group(1).strip()
+        pts = [(float(x), float(y)) for x, y in POINT_RE.findall(m.group(2))]
         if len(pts) >= 3:
-            polys.append(pts)
+            polys.append((obstacle_id, pts))
     return polys
 
 
@@ -229,13 +241,22 @@ def _signed_clearance(px, py, points):
 
 
 def _min_clearance_all(px, py, obstacle_polygons):
+    """obstacle_polygons: [(id, points), ...]. Returns (min_distance,
+    nearest_obstacle_id) -- an ARGMIN over obstacles, not just the min
+    distance, so callers can report WHICH obstacle a crossing is
+    against, not just that one exists. nearest_obstacle_id is None only
+    when there are no obstacles at all (min_distance is then the
+    original "so far away it never matters" sentinel, unreachable by
+    any real threshold)."""
     if not obstacle_polygons:
-        return 1000000.0
-    return min(_signed_clearance(px, py, poly) for poly in obstacle_polygons)
+        return 1000000.0, None
+    return min((_signed_clearance(px, py, poly), obstacle_id)
+               for obstacle_id, poly in obstacle_polygons)
 
 
 def _within_obstacle_threshold(px, py, threshold, obstacle_polygons):
-    return _min_clearance_all(px, py, obstacle_polygons) <= threshold
+    d, _ = _min_clearance_all(px, py, obstacle_polygons)
+    return d <= threshold
 
 
 # =====================================================================
@@ -264,25 +285,35 @@ def _bisect_crossing(control_points, t0, duration, z, threshold, tlo, thi, eps, 
 
 
 def _first_threshold_crossing_time(control_points, t0, duration, z, threshold, obstacle_polygons):
+    """Returns (Tcross, ObstacleId) or None. ObstacleId is resolved by
+    ONE extra _min_clearance_all argmin call at the final crossing
+    point -- the bracket scan/bisection loop itself only needs the
+    boolean within/not-within-threshold test, so this stays a single
+    added lookup, not a change to the search itself."""
     n = BRACKET_SAMPLES
     i = _first_unsafe_sample(control_points, t0, duration, z, threshold, obstacle_polygons, n)
     if i is None:
         return None
     if i == 0:
-        return t0
-    tlo = t0 + duration*((i-1)/n)
-    thi = t0 + duration*(i/n)
-    return _bisect_crossing(control_points, t0, duration, z, threshold, tlo, thi,
-                             CROSSING_EPS, obstacle_polygons)
+        tcross = t0
+    else:
+        tlo = t0 + duration*((i-1)/n)
+        thi = t0 + duration*(i/n)
+        tcross = _bisect_crossing(control_points, t0, duration, z, threshold, tlo, thi,
+                                   CROSSING_EPS, obstacle_polygons)
+    x, y = _walk_noisy_point(control_points, t0, duration, z, tcross)
+    _, obstacle_id = _min_clearance_all(x, y, obstacle_polygons)
+    return tcross, obstacle_id
 
 
 # =====================================================================
 # PLAIN-PYTHON API -- ALWAYS available, testable without ProbLog.
 # =====================================================================
 def first_threshold_crossing_time_value(control_points, t0, duration, z, threshold):
-    """control_points: [(x,y), ...]. Returns the crossing time (float),
-    or None if the trajectory never comes within `threshold` of any
-    obstacle in this resolved world."""
+    """control_points: [(x,y), ...]. Returns (Tcross, ObstacleId), or
+    None if the trajectory never comes within `threshold` of any
+    obstacle in this resolved world. ObstacleId is the obstacle_polygon/2
+    Id (e.g. "obs7") nearest at the exact crossing point."""
     return _first_threshold_crossing_time(
         control_points, float(t0), float(duration), float(z), float(threshold),
         OBSTACLE_POLYGONS)
@@ -307,11 +338,12 @@ if _HAVE_PROBLOG:
     # does the float() conversion itself. Duration/Z/Threshold are
     # always the result of `is` arithmetic or float literals in
     # practice, but are taken as "+term" too for the same robustness.
-    @problog_export_nondet("+list", "+term", "+term", "+term", "+term", "-float")
+    @problog_export_nondet("+list", "+term", "+term", "+term", "+term", "-float", "-str")
     def first_threshold_crossing_time(control_points, t0, duration, z, threshold):
         cp = [(float(p.args[0]), float(p.args[1])) for p in control_points]
-        tcross = first_threshold_crossing_time_value(
+        result = first_threshold_crossing_time_value(
             cp, float(t0), float(duration), float(z), float(threshold))
-        if tcross is None:
+        if result is None:
             return []  # no crossing in this world -- predicate FAILS
-        return [tcross]
+        tcross, obstacle_id = result
+        return [(tcross, obstacle_id)]

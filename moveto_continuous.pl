@@ -97,9 +97,10 @@ obstacle_polygon(no_obstacles_placeholder, []) :- fail.
 % system. See config.yaml's own header for the full rationale.
 :- consult('./config/config_generated.pl').
 
-% actions/moveto_planners.py provides plan_astar/5 and plan_straight/5
-% as BLACK-BOX (Python-implemented) predicates -- see that file's own
-% header for the full explanation. ProbLog imports and executes it
+% actions/moveto_planners.py provides plan_astar/5, plan_straight/5,
+% and follow_boarder0/7 as BLACK-BOX (Python-implemented) predicates --
+% see that file's own header for the full explanation. ProbLog imports
+% and executes it
 % directly the moment this directive loads (problog.clausedb's
 % load_external_module), registering both predicates before anything
 % below that calls them is ever evaluated. Path is resolved relative to
@@ -1153,6 +1154,26 @@ plan_call(straight, SX,SY,GX,GY, CP, completed, true) :-
     plan_straight(SX,SY,GX,GY, CP).
 plan_call(straight, SX,SY,GX,GY, [], no_path, false) :-
     \+ plan_straight(SX,SY,GX,GY, _).
+
+% follow_boarder0(ObstacleId,Offset) -- a THIRD planner, exactly the
+% "add one more plan_astar-style function plus one more pair of
+% plan_call/8 clauses" recipe this section's own header comment
+% already anticipated: a Bug0-style boundary-following planner
+% (moveto_planners.py's follow_boarder0/7). Algorithm here is a
+% COMPOUND term, not a bare atom like astar/straight -- ObstacleId
+% (which obstacle_polygon/2 to circle) and Offset (how far out to stay
+% from its boundary) are carried INSIDE Algorithm itself, so planWith/
+% do_node/planned_with need NO interface change at all: they already
+% treat Algorithm as opaque. Offset is typically unified with the SAME
+% Threshold as whichever obstacle_on_path(Threshold)/obstacle_in_bound
+% (Threshold) trigger or condition supplied ObstacleId in the first
+% place -- see moveto_planners.py's own follow_boarder0_points
+% docstring for why a small residual gap between the robot's actual
+% position and that nominal Offset is harmless.
+plan_call(follow_boarder0(ObstacleId,Offset), SX,SY,GX,GY, CP, completed, true) :-
+    follow_boarder0(SX,SY,GX,GY,ObstacleId,Offset, CP).
+plan_call(follow_boarder0(ObstacleId,Offset), SX,SY,GX,GY, [], no_path, false) :-
+    \+ follow_boarder0(SX,SY,GX,GY,ObstacleId,Offset, _).
 
 % -- PLANNING leaf: ONE template, planWith(Algorithm,Goal,CP), covering
 %    every planner via plan_call/8's own dispatch on Algorithm --

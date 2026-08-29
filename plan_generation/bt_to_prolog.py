@@ -89,6 +89,12 @@ _ACTION_DISPATCH = {
     "MoveTo": {"kind": "moveto_leg"},
     "PlanAstar": {"kind": "planWith", "algorithm": "astar"},
     "PlanStraight": {"kind": "planWith", "algorithm": "straight"},
+    # A third planner, dispatched through the SAME planWith template,
+    # but with a COMPOUND Algorithm term (obstacle_id/offset ride
+    # inside it, not a fixed atom) -- its own "kind" branch below
+    # builds that term from its own ports instead of using a static
+    # "algorithm" string.
+    "FollowBoarder0": {"kind": "planWith_follow_boarder0"},
 }
 # "single_float_port": the shared shape of every cond(Functor(Value))
 # condition whose one port is a plain float -- AtGoal, ObstacleInBound,
@@ -234,6 +240,27 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool):
             var_pool.producers.add(key)
             cp_var = var_pool.var_for(key)
             return f"planWith({info['algorithm']},{goal_point},{cp_var})"
+
+        if info["kind"] == "planWith_follow_boarder0":
+            goal_point = _point_literal(attrs["goal"], tag, "goal")
+            # obstacle_id is written VERBATIM as Prolog text (a bare
+            # atom), same convention as HaltedWith's own reason port
+            # below -- NOT quoted, NOT blackboard-ref-checked (nothing
+            # in this schema produces obstacle_id as its own port yet;
+            # a future producer would need this branch extended the
+            # same way MoveTo/PlanAstar's control_points already is).
+            obstacle_id = attrs["obstacle_id"].strip()
+            offset = float(attrs["offset"])
+            cp_value = attrs["control_points"]
+            if not _is_blackboard_ref(cp_value):
+                raise BTValidationError(
+                    f"<{tag}>'s control_points port ('{cp_value}') must be "
+                    f"a blackboard reference like \"{{cp}}\" -- it is this "
+                    f"node's own OUTPUT, never a literal.")
+            key = _blackboard_key(cp_value)
+            var_pool.producers.add(key)
+            cp_var = var_pool.var_for(key)
+            return f"planWith(follow_boarder0({obstacle_id},{offset}),{goal_point},{cp_var})"
 
     if tag in _CONDITION_DISPATCH:
         info = _CONDITION_DISPATCH[tag]

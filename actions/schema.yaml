@@ -232,6 +232,88 @@ actions:
         type: bool
         description: "true iff reason=completed."
 
+  # ----------------------------------------------------------------
+  # A THIRD planner -- Bug0-style boundary following, dispatched
+  # through the SAME planWith(Algorithm,Goal,CP)/plan_call/8 template
+  # as PlanAstar/PlanStraight above, just with a COMPOUND Algorithm
+  # term (follow_boarder0(ObstacleId,Offset)) instead of a bare atom,
+  # so the two extra inputs this planner needs ride along with zero
+  # change to planWith/do_node/planned_with -- see plan_call/8's own
+  # follow_boarder0 clauses in moveto_continuous.pl.
+  # ----------------------------------------------------------------
+  - id: FollowBoarder0
+    prolog_action: planWith
+    description: >
+      Bug0-style boundary-following planner (moveto_planners.py's
+      follow_boarder0/7): from the CURRENT position (now/2 + at/4),
+      traces CLOCKWISE around obstacle_id's own obstacle_polygon/2
+      boundary, offset outward by `offset`, stopping at the first
+      point from which obstacle_id no longer occludes a straight line
+      to the EXPLICIT goal port -- deliberately NOT all the way to
+      goal itself; a subsequent PlanStraight+MoveTo leg is expected to
+      cover the rest, per the Bug0 "go straight, circle the obstacle
+      when blocked, go straight again once clear" pattern. `offset` is
+      typically unified with the SAME Threshold as whichever
+      obstacle_on_path(Threshold)/obstacle_in_bound(Threshold)
+      trigger/condition supplied obstacle_id in the first place -- a
+      small residual gap between the robot's actual position and that
+      nominal offset (from bisection tolerance, not noise -- see
+      first_on_path_crossing_time's own note) is harmless, absorbed
+      into the planner's own first path segment. Same instantaneous/
+      traceability semantics as PlanAstar/PlanStraight otherwise
+      (records a planned(follow_boarder0(ObstacleId,Offset),Reason)
+      marker, does not gate on a precondition).
+    ports:
+      - name: goal
+        direction: input
+        type: Point
+        required: true
+        description: >
+          Target position for this planning call -- see PlanAstar's
+          own goal port.
+      - name: obstacle_id
+        direction: input
+        type: std::string
+        required: true
+        description: >
+          Which obstacle_polygon/2 Id to circle. Written VERBATIM as
+          Prolog text (a bare atom, e.g. obstacle_id="obs5"), same
+          convention as HaltedWith's own reason port below -- NOT
+          quoted. Typically the SAME ObstacleId a preceding trigger/
+          condition reported (e.g. obstacle_on_path(Threshold,
+          ObstacleId)'s second argument).
+      - name: offset
+        direction: input
+        type: double
+        required: true
+        description: >
+          Distance to maintain from the obstacle's own boundary edge
+          while circling it, metres -- same units/definition as
+          obstacle_in_bound/obstacle_on_path's own Threshold (raw
+          clearance to the polygon boundary; this planner does not
+          separately add robot radius/safety_buffer, so pass a
+          Threshold that already accounts for them if that's the
+          intent, same as every other Threshold in this schema).
+      - name: control_points
+        direction: output
+        type: std::vector<Point>
+        description: >
+          The boundary-following path, as chained cubic Bezier control
+          points, from the current position to the first point along
+          the offset boundary where obstacle_id stops occluding the
+          straight line to goal. Empty if reason=no_path.
+      - name: reason
+        direction: output
+        type: std::string
+        description: >
+          One of: completed, no_path (obstacle_id names no known
+          obstacle, or a full circuit of its offset boundary never
+          clears line-of-sight to goal).
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason=completed."
+
 conditions:
 
   # ----------------------------------------------------------------

@@ -108,7 +108,7 @@ obstacle_polygon(no_obstacles_placeholder, []) :- fail.
 % side of the same node set).
 :- use_module('./actions/moveto_planners.py').
 
-% collision_geometry.py provides first_threshold_crossing_time/6 as a
+% collision_geometry.py provides first_threshold_crossing_time/8 as a
 % BLACK-BOX (Python-implemented) predicate -- the obstacle-clearance
 % geometry and bracket-scan/bisection crossing-time search that used to
 % be plain Prolog in sections 1 and the TRIGGERS section below (see
@@ -125,7 +125,7 @@ obstacle_polygon(no_obstacles_placeholder, []) :- fail.
 %    ray-casting point-in-polygon, signed clearance, min-clearance-to-
 %    any-obstacle) has been MOVED to collision_geometry.py, a Python
 %    black box exactly like moveto_planners.py's planners -- see the
-%    TRIGGERS section further down (first_threshold_crossing_time/6)
+%    TRIGGERS section further down (first_threshold_crossing_time/8)
 %    for why: that geometry is pure deterministic arithmetic once Z is
 %    resolved, with no probabilistic content of its own, so ProbLog was
 %    paying full SLD-grounding cost (a materialized proof node per
@@ -686,25 +686,25 @@ first_battery_over_time(CP,T0,Duration,B0,Zb,Threshold,T0) :-
 % obstacle_on_path_within_threshold/battery/3) a single time instead of
 % across a bracket-scanned trajectory.
 % ---------------------------------------------------------------
-trigger_crossing_time(collision, CP,T0,Duration,Z,_Zb,_B0, crashed(ObstacleId), Tcross) :-
-    first_collision_time(CP,T0,Duration,Z,Tcross,ObstacleId).
+trigger_crossing_time(collision, CP,T0,Duration,Z,Zt,_Zb,_B0, crashed(ObstacleId), Tcross) :-
+    first_collision_time(CP,T0,Duration,Z,Zt,Tcross,ObstacleId).
 
-trigger_crossing_time(battery, CP,T0,Duration,_Z,Zb,B0, battery_depleted, Tcross) :-
+trigger_crossing_time(battery, CP,T0,Duration,_Z,_Zt,Zb,B0, battery_depleted, Tcross) :-
     first_battery_depletion_time(CP,T0,Duration,B0,Zb,Tcross).
 
-trigger_crossing_time(obstacle_in_bound(Threshold), CP,T0,Duration,Z,_Zb,_B0, obstacle_in_bound(Threshold,ObstacleId), Tcross) :-
-    first_threshold_crossing_time(CP,T0,Duration,Z,Threshold,Tcross,ObstacleId).
+trigger_crossing_time(obstacle_in_bound(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0, obstacle_in_bound(Threshold,ObstacleId), Tcross) :-
+    first_threshold_crossing_time(CP,T0,Duration,Z,Zt,Threshold,Tcross,ObstacleId).
 
-trigger_crossing_time(obstacle_on_path(Threshold), CP,T0,Duration,Z,_Zb,_B0, obstacle_on_path(Threshold,ObstacleId), Tcross) :-
-    first_on_path_crossing_time(CP,T0,Duration,Z,Threshold,Tcross,ObstacleId).
+trigger_crossing_time(obstacle_on_path(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0, obstacle_on_path(Threshold,ObstacleId), Tcross) :-
+    first_on_path_crossing_time(CP,T0,Duration,Z,Zt,Threshold,Tcross,ObstacleId).
 
-trigger_crossing_time(battery_below(Threshold), CP,T0,Duration,_Z,Zb,B0, battery_under(Threshold), Tcross) :-
+trigger_crossing_time(battery_below(Threshold), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_under(Threshold), Tcross) :-
     first_battery_below_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
 
-trigger_crossing_time(battery_equal(Threshold), CP,T0,Duration,_Z,Zb,B0, battery_equal(Threshold), Tcross) :-
+trigger_crossing_time(battery_equal(Threshold), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_equal(Threshold), Tcross) :-
     first_battery_equal_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
 
-trigger_crossing_time(battery_over(Threshold), CP,T0,Duration,_Z,Zb,B0, battery_over(Threshold), Tcross) :-
+trigger_crossing_time(battery_over(Threshold), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_over(Threshold), Tcross) :-
     first_battery_over_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
 
 % all_trigger_candidates(+Triggers,...,-Candidates): Candidates is a
@@ -712,16 +712,16 @@ trigger_crossing_time(battery_over(Threshold), CP,T0,Duration,_Z,Zb,B0, battery_
 % fires in this resolved world (triggers that don't fire contribute
 % nothing -- same "absence, not sentinel" convention as everywhere
 % else). Unrecognized trigger names (no matching
-% trigger_crossing_time/9 clause) are silently skipped, same as "never
+% trigger_crossing_time/10 clause) are silently skipped, same as "never
 % fires" -- lenient by design, so a typo in a Triggers list doesn't
 % halt the whole theory, just means that trigger never contributes.
-all_trigger_candidates([], _,_,_,_,_,_, []).
-all_trigger_candidates([Trig|Rest], CP,T0,Duration,Z,Zb,B0, [Reason-Tcross|RestCands]) :-
-    trigger_crossing_time(Trig, CP,T0,Duration,Z,Zb,B0, Reason, Tcross),
-    all_trigger_candidates(Rest, CP,T0,Duration,Z,Zb,B0, RestCands).
-all_trigger_candidates([Trig|Rest], CP,T0,Duration,Z,Zb,B0, RestCands) :-
-    \+ trigger_crossing_time(Trig, CP,T0,Duration,Z,Zb,B0, _, _),
-    all_trigger_candidates(Rest, CP,T0,Duration,Z,Zb,B0, RestCands).
+all_trigger_candidates([], _,_,_,_,_,_,_, []).
+all_trigger_candidates([Trig|Rest], CP,T0,Duration,Z,Zt,Zb,B0, [Reason-Tcross|RestCands]) :-
+    trigger_crossing_time(Trig, CP,T0,Duration,Z,Zt,Zb,B0, Reason, Tcross),
+    all_trigger_candidates(Rest, CP,T0,Duration,Z,Zt,Zb,B0, RestCands).
+all_trigger_candidates([Trig|Rest], CP,T0,Duration,Z,Zt,Zb,B0, RestCands) :-
+    \+ trigger_crossing_time(Trig, CP,T0,Duration,Z,Zt,Zb,B0, _, _),
+    all_trigger_candidates(Rest, CP,T0,Duration,Z,Zt,Zb,B0, RestCands).
 
 % earliest_of(+PairsList, -ReasonTimePair): generic "minimum by second
 % element" over a non-empty list of Reason-Time pairs. Used to combine
@@ -741,12 +741,18 @@ earliest_of([R1-T1|Rest], Result) :-
     T1 > T2,
     Result = R2-T2.
 
-% walk_noisy_point(+CP,+T0,+Duration,+Z,+T,-X,-Y): position along the
-% spline at time T, given an ALREADY-RESOLVED noise draw Z (rather
-% than looking Z up via z/2 itself). Factored out of at/4 so the same
-% formula can be reused by first_collision_time's bracket/bisection
-% search below, without re-deriving Z through a different situation.
-walk_noisy_point(ControlPoints, T0, Duration, Z, T, X, Y) :-
+% walk_noisy_point(+CP,+T0,+Duration,+Z,+Zt,+T,-X,-Y): position along
+% the spline at time T, given TWO ALREADY-RESOLVED, INDEPENDENT noise
+% draws (rather than looking them up via z/2 or zt/2 itself): Z (lateral
+% /normal drift, unchanged from before) and Zt (tangential/along-path
+% drift -- a straight metric push along the spline's own tangent
+% direction at each point, NOT a reparametrization of Frac; see
+% collision_geometry.py's _walk_noisy_point for the identical formula
+% and the reasoning for why Option B, a metric offset, was chosen over
+% shifting Frac itself). Factored out of at/4 so the same formula can
+% be reused by first_collision_time's bracket/bisection search below,
+% without re-deriving Z/Zt through a different situation.
+walk_noisy_point(ControlPoints, T0, Duration, Z, Zt, T, X, Y) :-
     Elapsed0 is T - T0,
     Elapsed is max(0.0, min(Elapsed0, Duration)),
     Frac is Elapsed / Duration,
@@ -754,10 +760,13 @@ walk_noisy_point(ControlPoints, T0, Duration, Z, T, X, Y) :-
     spline_tangent(ControlPoints, Frac, DX, DY),
     Norm is sqrt(DX*DX + DY*DY),
     perp_unit(Norm, DX, DY, PerpX, PerpY),
+    tangent_unit(Norm, DX, DY, TanX, TanY),
     sigma(Sigma),
+    sigma_tangential(SigmaT),
     Deviation is Z * Sigma * sqrt(Duration) * Frac,
-    X is NX + Deviation*PerpX,
-    Y is NY + Deviation*PerpY.
+    TangentDev is Zt * SigmaT * sqrt(Duration) * Frac,
+    X is NX + Deviation*PerpX + TangentDev*TanX,
+    Y is NY + Deviation*PerpY + TangentDev*TanY.
 
 % ---------------------------------------------------------------
 % FIRST-THRESHOLD-CROSSING-TIME -- a NATURAL (not chosen) event: the
@@ -772,7 +781,7 @@ walk_noisy_point(ControlPoints, T0, Duration, Z, T, X, Y) :-
 % needed since this black box was already threshold-generic), and any
 % future distance-based trigger.
 %
-% first_threshold_crossing_time(+ControlPoints,+T0,+Duration,+Z,
+% first_threshold_crossing_time(+ControlPoints,+T0,+Duration,+Z,+Zt,
 % +Threshold,-Tcross,-ObstacleId) is now a BLACK-BOX Python predicate,
 % registered by collision_geometry.py's own :- use_module(...)
 % directive (see below) -- exactly the same "deliberately NOT part of
@@ -799,9 +808,9 @@ walk_noisy_point(ControlPoints, T0, Duration, Z, T, X, Y) :-
 % the generalized machinery, at threshold=safety_margin -- every
 % EXISTING caller (crashed_in, verify_safe, etc.) is unaffected beyond
 % the new ObstacleId output.
-first_collision_time(CP,T0,Duration,Z,Tcross,ObstacleId) :-
+first_collision_time(CP,T0,Duration,Z,Zt,Tcross,ObstacleId) :-
     safety_margin(M),
-    first_threshold_crossing_time(CP,T0,Duration,Z,M,Tcross,ObstacleId).
+    first_threshold_crossing_time(CP,T0,Duration,Z,Zt,M,Tcross,ObstacleId).
 
 % ---------------------------------------------------------------
 % Poss AXIOMS for the primitive actions.
@@ -847,16 +856,16 @@ now(do(A,S), T) :-
 % or running the battery dry without ever noticing, if collision/
 % battery aren't in its own Triggers list.
 %
-% earliest_halt/9 is the SINGLE SHARED definition of "what happens
+% earliest_halt/10 is the SINGLE SHARED definition of "what happens
 % first" -- used here, by Poss(interrupt(...)) below, AND by
-% verify_safe further down (called there with Z=0.0,Zb=0.0 instead of
-% the resolved noise). Having exactly ONE definition, rather than the
-% same computation duplicated at each call site, is what guarantees
-% every query stays consistent with what Poss(haltMoveto(...)) itself
-% actually derives -- see the "SAFETY QUERIES READ THE ACTUAL OUTCOME"
-% note further down for why this matters.
-earliest_halt(CP,Triggers,T0,Duration,Z,Zb,B0, Reason,T) :-
-    all_trigger_candidates(Triggers, CP,T0,Duration,Z,Zb,B0, ExtraCandidates),
+% verify_safe further down (called there with Z=0.0,Zt=0.0,Zb=0.0
+% instead of the resolved noise). Having exactly ONE definition, rather
+% than the same computation duplicated at each call site, is what
+% guarantees every query stays consistent with what Poss(haltMoveto(...))
+% itself actually derives -- see the "SAFETY QUERIES READ THE ACTUAL
+% OUTCOME" note further down for why this matters.
+earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, Reason,T) :-
+    all_trigger_candidates(Triggers, CP,T0,Duration,Z,Zt,Zb,B0, ExtraCandidates),
     NaturalEnd is T0 + Duration,
     earliest_of([completed-NaturalEnd], ExtraCandidates, Reason-T).
 
@@ -865,10 +874,11 @@ poss(haltMoveto(T, Reason, Status), S) :-
     current_walk(S, CP, Triggers, T0, SPrev),
     walk_duration(CP, Duration),
     z(do(startMoveto(CP,Triggers,T0),SPrev), Z),
+    zt(do(startMoveto(CP,Triggers,T0),SPrev), Zt),
     zbatt(Zb),
     battery(B0, T0, SPrev),
-    earliest_halt(CP,Triggers,T0,Duration,Z,Zb,B0, Reason,T),
-    leg_status(Reason, CP, T0, Duration, Z, T, Status).
+    earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, Reason,T),
+    leg_status(Reason, CP, T0, Duration, Z, Zt, T, Status).
 
 % leg_target(+ControlPoints, -GX,-GY): a leg's own intended endpoint
 % is the LAST point in its OWN control_points list -- NOT necessarily
@@ -883,28 +893,28 @@ leg_target(ControlPoints, GX,GY) :-
 last_element([X], X).
 last_element([_|T], X) :- T \= [], last_element(T, X).
 
-% leg_status(+Reason,+CP,+T0,+Duration,+Z,+T,-Status): the NEW OUTPUT
-% -- Status is TRUE iff Reason=completed AND the actual (noisy) final
-% position lands within goal_tolerance of the leg's OWN endpoint.
+% leg_status(+Reason,+CP,+T0,+Duration,+Z,+Zt,+T,-Status): the NEW
+% OUTPUT -- Status is TRUE iff Reason=completed AND the actual (noisy)
+% final position lands within goal_tolerance of the leg's OWN endpoint.
 % Deliberately DISTINCT from Reason: Reason=completed only means the
 % walk wasn't cut short (by collision/battery/a trigger) before its
 % nominal duration elapsed -- it says nothing about whether noise
 % carried the robot far enough off course to miss the target despite
 % "completing". Status is what a Sequence/Fallback composite (below)
 % actually branches on.
-leg_status(completed, CP, T0, Duration, Z, T, true) :-
-    walk_noisy_point(CP, T0, Duration, Z, T, X, Y),
+leg_status(completed, CP, T0, Duration, Z, Zt, T, true) :-
+    walk_noisy_point(CP, T0, Duration, Z, Zt, T, X, Y),
     leg_target(CP, GX, GY),
     dist(X, Y, GX, GY, D),
     goal_tolerance(Tol),
     D =< Tol.
-leg_status(completed, CP, T0, Duration, Z, T, false) :-
-    walk_noisy_point(CP, T0, Duration, Z, T, X, Y),
+leg_status(completed, CP, T0, Duration, Z, Zt, T, false) :-
+    walk_noisy_point(CP, T0, Duration, Z, Zt, T, X, Y),
     leg_target(CP, GX, GY),
     dist(X, Y, GX, GY, D),
     goal_tolerance(Tol),
     D > Tol.
-leg_status(Reason, _,_,_,_,_, false) :- Reason \= completed.
+leg_status(Reason, _,_,_,_,_,_, false) :- Reason \= completed.
 
 % earliest_of/3: like earliest_of/2, but takes a fixed head list
 % (currently just [completed-NaturalEnd]) and a (possibly empty) list
@@ -928,7 +938,7 @@ append([H|T], L, [H|R]) :- append(T, L, R).
 % happens first in this resolved world among ALL candidate causes in
 % this leg's own Triggers list -- you can't "interrupt" a walk that,
 % in this world, has already halted on its own for any reason. Uses
-% the SAME earliest_halt/9 as Poss(haltMoveto(...)) above, so this
+% the SAME earliest_halt/10 as Poss(haltMoveto(...)) above, so this
 % bound can never drift out of sync with what haltMoveto itself would
 % derive.
 poss(interrupt(T), S) :-
@@ -936,9 +946,10 @@ poss(interrupt(T), S) :-
     current_walk(S, CP, Triggers, T0, SPrev),
     walk_duration(CP, Duration),
     z(do(startMoveto(CP,Triggers,T0),SPrev), Z),
+    zt(do(startMoveto(CP,Triggers,T0),SPrev), Zt),
     zbatt(Zb),
     battery(B0, T0, SPrev),
-    earliest_halt(CP,Triggers,T0,Duration,Z,Zb,B0, _Reason,Tend),
+    earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, _Reason,Tend),
     T >= T0, T < Tend.
 
 % ---------------------------------------------------------------
@@ -962,7 +973,8 @@ at(X,Y,_,s0) :- start(X,Y).
 at(X,Y,T, do(startMoveto(ControlPoints,Triggers,T0), S)) :-
     walk_duration(ControlPoints, Duration),
     z(do(startMoveto(ControlPoints,Triggers,T0),S), Z),
-    walk_noisy_point(ControlPoints, T0, Duration, Z, T, X, Y).
+    zt(do(startMoveto(ControlPoints,Triggers,T0),S), Zt),
+    walk_noisy_point(ControlPoints, T0, Duration, Z, Zt, T, X, Y).
 
 at(X,Y,T, do(haltMoveto(T1,_Reason,_Status), S)) :-
     Tc is min(T,T1),
@@ -978,6 +990,15 @@ perp_unit(Norm, _, _, 0.0, 0.0) :- Norm =< 1.0e-9.
 perp_unit(Norm, DX, DY, PerpX, PerpY) :-
     Norm > 1.0e-9,
     PerpX is -DY/Norm, PerpY is DX/Norm.
+
+% tangent_unit(+Norm, +DX, +DY, -TanX, -TanY): unit vector ALONG
+% tangent (DX,DY) itself -- the along-path direction tangential noise
+% is applied in, as opposed to perp_unit's across-path direction;
+% degenerate (near-zero tangent) case gives (0,0), same convention.
+tangent_unit(Norm, _, _, 0.0, 0.0) :- Norm =< 1.0e-9.
+tangent_unit(Norm, DX, DY, TanX, TanY) :-
+    Norm > 1.0e-9,
+    TanX is DX/Norm, TanY is DY/Norm.
 
 % pass-through clause: kept for extensibility, so that additional
 % actions that DON'T affect position (e.g. a future sensing action)
@@ -1308,8 +1329,9 @@ holds(obstacle_on_path(Threshold), S) :-
     current_walk(S, CP, Triggers, T0, SPrev),
     walk_duration(CP, Duration),
     z(do(startMoveto(CP,Triggers,T0),SPrev), Z),
+    zt(do(startMoveto(CP,Triggers,T0),SPrev), Zt),
     now(S, T), at(X,Y,T,S),
-    obstacle_on_path_within_threshold(CP,T0,Duration,Z,X,Y,Threshold).
+    obstacle_on_path_within_threshold(CP,T0,Duration,Z,Zt,X,Y,Threshold).
 
 % battery_below(Threshold): true iff the CURRENT battery level (at the
 % current time, via now/2) is below Threshold. Same parameter, same
@@ -1518,14 +1540,14 @@ hit_by(N) :-
 % battery_over (battery_over_in/2, first_battery_over_time).
 % Adding an EIGHTH cause later -- a mechanical fault, a comms timeout,
 % whatever -- means exactly:
-%   (a) one more trigger_crossing_time/9 clause, giving its own
+%   (a) one more trigger_crossing_time/10 clause, giving its own
 %       Reason and crossing-time computation
 %   (b) a dedicated *_in(S) exact-detection predicate (one line, via
 %       halted_with/2) + a corresponding any_* diagnostic query, if
 %       you want it separately reportable
 %   (c) including the new trigger's name in whichever leg(s)' own
 %       explicit Triggers list should react to it
-% Nothing else in the theory needs to change; earliest_halt/9 and
+% Nothing else in the theory needs to change; earliest_halt/10 and
 % verify_safe below already handle an arbitrary Triggers list with no
 % further edits.
 % ---------------------------------------------------------------
@@ -1545,7 +1567,7 @@ verify_safe :-
     current_walk(S, CP, Triggers, T0, SPrev),
     walk_duration(CP, Duration),
     battery(B0, T0, SPrev),
-    earliest_halt(CP,Triggers,T0,Duration,0.0,0.0,B0, completed,_).
+    earliest_halt(CP,Triggers,T0,Duration,0.0,0.0,0.0,B0, completed,_).
 
 plan_route_blocked :- \+ verify_safe.
 

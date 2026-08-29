@@ -29,54 +29,63 @@
 # artifact: edit this file, not that one.
 #
 # WHAT ISN'T HERE, ON PURPOSE: which Triggers (collision/battery/
-# obstacle_sighted/...) a given moveto_leg reacts to is NOT a config
+# obstacle_in_bound/...) a given moveto_leg reacts to is NOT a config
 # value -- moveto_continuous.pl has no default_triggers fact and no
 # moveto_leg/1 sugar form. Every moveto_leg(CP,Triggers) call (in
 # plan/1, or in any BT node instantiated via actions/bt_actions.py's
 # moveto_leg_term) states its own Triggers list explicitly, right where
 # the leg is written, e.g. moveto_leg(CP,[collision,battery]) or
-# moveto_leg(CP,[]) for a genuinely unprotected leg. sight_threshold
-# below is a DIFFERENT thing: it's the geometric distance that DEFINES
-# what "obstacle_sighted" even means (exactly like robot.radius +
-# robot.safety_buffer define what "collision" means) -- a leg still has
-# to opt into reacting to obstacle_sighted by listing it in its own
-# Triggers, same as any other trigger name.
+# moveto_leg(CP,[]) for a genuinely unprotected leg. Each parametrized
+# trigger/condition (obstacle_in_bound(Threshold), battery_below
+# (Threshold), etc.) carries its own threshold as an argument at the
+# call site instead, so there is no per-trigger geometry config here
+# either.
 
 robot:
   radius: 0.20          # metres -- robot_radius/1
   safety_buffer: 0.10   # metres -- safety_buffer/1 (safety_margin = radius + safety_buffer)
 
-triggers:
-  # The DEFINITION of the obstacle_sighted trigger's geometry (how close
-  # counts as "sighted"), not a list of which triggers are active --
-  # see the note above about there being no default trigger list.
-  sight_threshold: 0.6   # metres -- must stay strictly LARGER than
-                          # safety_margin (robot.radius +
-                          # robot.safety_buffer above) -- a sighting
-                          # that isn't detected before collision range
-                          # is useless as an early warning. Checked at
-                          # evaluation time by the sight_threshold_valid
-                          # query; the generator also warns (non-fatally)
-                          # if this file itself violates it.
-
 motion:
   speed: 1.0   # metres per time-unit -- constant-speed spline traversal (speed/1)
 
 noise:
-  # Position (z/2, per-walk lateral drift) and battery (zbatt/1,
-  # mission-wide) noise are INDEPENDENT random variables with their own
+  # Position (z/2, per-walk LATERAL/normal drift), tangential (zt/2,
+  # per-walk ALONG-PATH drift), and battery (zbatt/1, mission-wide)
+  # noise are INDEPENDENT random variables with their own
   # discretized-Gaussian tables below -- different point counts and/or
-  # weights are fine, they no longer have to match. Each table's
+  # weights are fine, none of them have to match. Each table's
   # weights MUST sum to EXACTLY 1.0: ProbLog silently treats missing
   # annotated-disjunction mass as an implicit "none of these" failure
   # branch, which caps EVERY downstream probability -- a real bug this
   # project hit once already. The generator checks each table's sum
   # separately and warns (but does not hard-fail, consistent with this
-  # project's existing choice not to hard-stop ProbLog loads -- see
-  # sight_threshold_valid's own note in moveto_continuous.pl) if either
+  # project's existing choice not to hard-stop ProbLog loads) if any
   # is off.
   position:
     sigma: 0.15   # metres per sqrt(time-unit) -- z/2's scale (sigma/1)
+    discretized_gaussian:
+      - value: -2.0
+        weight: 0.0606
+      - value: -1.0
+        weight: 0.2417
+      - value: 0.0
+        weight: 0.3954
+      - value: 1.0
+        weight: 0.2417
+      - value: 2.0
+        weight: 0.0606
+  tangential:
+    # Applied along the spline's own tangent direction at each point
+    # (a straight metric push, same Brownian-bridge growth law as
+    # position's normal-direction one -- see collision_geometry.py's
+    # _walk_noisy_point for the exact formula and why this is a
+    # SEPARATE, independent draw from position's). Models
+    # speed/timing error (further along or behind the nominal
+    # schedule) as opposed to position's steering error (off to the
+    # side of it). Defaulted to the SAME sigma as position below --
+    # retune independently once you have a real sense of which error
+    # source actually dominates for your robot.
+    sigma: 0.15   # metres per sqrt(time-unit) -- zt/2's scale (sigma_tangential/1)
     discretized_gaussian:
       - value: -2.0
         weight: 0.0606

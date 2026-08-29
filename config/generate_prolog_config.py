@@ -51,20 +51,6 @@ def _check_gaussian_weights(label, discretized_gaussian):
         )
 
 
-def _check_sight_threshold(config):
-    safety_margin = config["robot"]["radius"] + config["robot"]["safety_buffer"]
-    sight_threshold = config["triggers"]["sight_threshold"]
-    if sight_threshold <= safety_margin:
-        print(
-            f"[warn] config.yaml's triggers.sight_threshold ({sight_threshold}) "
-            f"is not strictly greater than robot.radius + robot.safety_buffer "
-            f"({safety_margin}) -- obstacle_sighted would never fire before "
-            f"collision. sight_threshold_valid will report this at evaluation "
-            f"time too, but fix it here.",
-            file=sys.stderr,
-        )
-
-
 def _format_number(x):
     """Preserve int vs. float formatting from the YAML source (e.g.
     battery_start(100). stays an integer fact, sigma(0.15). stays a
@@ -96,12 +82,15 @@ def _gaussian_disjunction(functor, args_prefix, discretized_gaussian):
 
 def render_prolog(config):
     _check_gaussian_weights("position", config["noise"]["position"]["discretized_gaussian"])
+    _check_gaussian_weights("tangential", config["noise"]["tangential"]["discretized_gaussian"])
     _check_gaussian_weights("battery", config["noise"]["battery"]["discretized_gaussian"])
-    _check_sight_threshold(config)
 
     z_block = _gaussian_disjunction(
         "z", "do(startMoveto(CP,Triggers,T0),S), ",
         config["noise"]["position"]["discretized_gaussian"])
+    zt_block = _gaussian_disjunction(
+        "zt", "do(startMoveto(CP,Triggers,T0),S), ",
+        config["noise"]["tangential"]["discretized_gaussian"])
     zbatt_block = _gaussian_disjunction(
         "zbatt", "", config["noise"]["battery"]["discretized_gaussian"])
 
@@ -113,9 +102,9 @@ def render_prolog(config):
         "",
         f"robot_radius({_format_number(config['robot']['radius'])}).",
         f"safety_buffer({_format_number(config['robot']['safety_buffer'])}).",
-        f"sight_threshold({_format_number(config['triggers']['sight_threshold'])}).",
         f"speed({_format_number(config['motion']['speed'])}).",
         f"sigma({_format_number(config['noise']['position']['sigma'])}).",
+        f"sigma_tangential({_format_number(config['noise']['tangential']['sigma'])}).",
         f"sigma_battery({_format_number(config['noise']['battery']['sigma'])}).",
         f"battery_start({_format_number(config['battery']['start'])}).",
         f"idle_drain_rate({_format_number(config['battery']['idle_drain_rate'])}).",
@@ -127,6 +116,8 @@ def render_prolog(config):
         f"crossing_eps({_format_number(config['verification']['crossing_eps'])}).",
         "",
         z_block,
+        "",
+        zt_block,
         "",
         zbatt_block,
         "",

@@ -44,13 +44,21 @@ theory with no risk of the two drifting apart.
 Exposes FOUR predicates to ProbLog, all INSTANTANEOUS and stateless,
 exactly like moveto_planners.py's plan_astar/plan_straight:
 
-    first_threshold_crossing_time(+ControlPoints,+T0,+Duration,+Z,
+    first_threshold_crossing_time(+ControlPoints,+T0,+Duration,+Z,+Zt,
                                    +Threshold, -Tcross, -ObstacleId)
     obstacle_within_threshold(+X,+Y,+Threshold)
-    first_on_path_crossing_time(+ControlPoints,+T0,+Duration,+Z,
+    first_on_path_crossing_time(+ControlPoints,+T0,+Duration,+Z,+Zt,
                                  +Threshold, -Tcross, -ObstacleId)
-    obstacle_on_path_within_threshold(+ControlPoints,+T0,+Duration,+Z,
+    obstacle_on_path_within_threshold(+ControlPoints,+T0,+Duration,+Z,+Zt,
                                        +X,+Y,+Threshold)
+
+Z and Zt are the TWO independent, already-resolved per-walk noise
+draws _walk_noisy_point combines (normal/lateral and tangential/
+along-path respectively -- see that function's own header for the
+formula and why Duration itself stays independent of both). Every
+trajectory-searching predicate here needs both; obstacle_within_threshold
+is the one exception -- it only ever checks a single ALREADY-COMPUTED
+point, so it has no noise draws of its own to take.
 
 first_threshold_crossing_time is the TRIGGER-side primitive: searches a
 whole future trajectory (bracket scan + bisection) for the earliest
@@ -150,6 +158,7 @@ _config = load_config()
 BRACKET_SAMPLES = int(_config["verification"]["bracket_samples"])
 CROSSING_EPS = float(_config["verification"]["crossing_eps"])
 SIGMA = float(_config["noise"]["position"]["sigma"])
+SIGMA_TANGENTIAL = float(_config["noise"]["tangential"]["sigma"])
 
 try:
     with open(_OBSTACLES_PATH) as f:
@@ -208,7 +217,29 @@ def _perp_unit(norm, dx, dy):
     return -dy/norm, dx/norm
 
 
-def _walk_noisy_point(control_points, t0, duration, z, t):
+def _tangent_unit(norm, dx, dy):
+    if norm <= 1.0e-9:
+        return 0.0, 0.0
+    return dx/norm, dy/norm
+
+
+def _walk_noisy_point(control_points, t0, duration, z, zt, t):
+    """Position along the spline at time T, given TWO already-resolved,
+    INDEPENDENT per-walk noise draws: z (normal/lateral, unchanged from
+    before) and zt (tangential/along-path, new). Both use the exact same
+    Brownian-bridge growth law (deviation ~ noise*sigma*sqrt(Duration)*
+    Frac), just applied along different unit directions -- z along the
+    perpendicular (steering-error style), zt along the tangent itself
+    (speed/timing-error style: further along or behind the nominal
+    schedule, in a straight line at whatever direction the curve was
+    pointing right there -- NOT a reparametrization of the curve, see
+    moveto_continuous.pl's own note on why that option was rejected).
+    Duration itself is UNAFFECTED by either noise source -- it stays a
+    pure function of the nominal spline's own arc length (see
+    walk_duration/2 in moveto_continuous.pl); letting either noise draw
+    feed back into Duration would make the sqrt(Duration) scaling above
+    circular (Duration would depend on a deviation that itself depends
+    on sqrt(Duration))."""
     elapsed0 = t - t0
     elapsed = max(0.0, min(elapsed0, duration))
     frac = elapsed / duration
@@ -216,8 +247,11 @@ def _walk_noisy_point(control_points, t0, duration, z, t):
     dx, dy = _spline_tangent(control_points, frac)
     norm = math.sqrt(dx*dx + dy*dy)
     perp_x, perp_y = _perp_unit(norm, dx, dy)
-    deviation = z * SIGMA * math.sqrt(duration) * frac
-    return nx + deviation*perp_x, ny + deviation*perp_y
+    tan_x, tan_y = _tangent_unit(norm, dx, dy)
+    normal_dev = z * SIGMA * math.sqrt(duration) * frac
+    tangent_dev = zt * SIGMA_TANGENTIAL * math.sqrt(duration) * frac
+    return (nx + normal_dev*perp_x + tangent_dev*tan_x,
+            ny + normal_dev*perp_y + tangent_dev*tan_y)
 
 
 # =====================================================================
@@ -291,20 +325,20 @@ def _within_obstacle_threshold(px, py, threshold, obstacle_polygons):
 # BRACKET SCAN + BISECTION -- line-for-line port of
 # first_unsafe_sample(_from)/bisect_crossing/first_threshold_crossing_time.
 # =====================================================================
-def _first_unsafe_sample(control_points, t0, duration, z, threshold, obstacle_polygons, n):
+def _first_unsafe_sample(control_points, t0, duration, z, zt, threshold, obstacle_polygons, n):
     for i in range(0, n + 1):
         frac = i / n
         t = t0 + duration*frac
-        x, y = _walk_noisy_point(control_points, t0, duration, z, t)
+        x, y = _walk_noisy_point(control_points, t0, duration, z, zt, t)
         if _within_obstacle_threshold(x, y, threshold, obstacle_polygons):
             return i
     return None
 
 
-def _bisect_crossing(control_points, t0, duration, z, threshold, tlo, thi, eps, obstacle_polygons):
+def _bisect_crossing(control_points, t0, duration, z, zt, threshold, tlo, thi, eps, obstacle_polygons):
     while thi - tlo > eps:
         tmid = (tlo + thi) / 2.0
-        x, y = _walk_noisy_point(control_points, t0, duration, z, tmid)
+        x, y = _walk_noisy_point(control_points, t0, duration, z, zt, tmid)
         if _within_obstacle_threshold(x, y, threshold, obstacle_polygons):
             thi = tmid
         else:
@@ -312,14 +346,14 @@ def _bisect_crossing(control_points, t0, duration, z, threshold, tlo, thi, eps, 
     return (tlo + thi) / 2.0
 
 
-def _first_threshold_crossing_time(control_points, t0, duration, z, threshold, obstacle_polygons):
+def _first_threshold_crossing_time(control_points, t0, duration, z, zt, threshold, obstacle_polygons):
     """Returns (Tcross, ObstacleId) or None. ObstacleId is resolved by
     ONE extra _min_clearance_all argmin call at the final crossing
     point -- the bracket scan/bisection loop itself only needs the
     boolean within/not-within-threshold test, so this stays a single
     added lookup, not a change to the search itself."""
     n = BRACKET_SAMPLES
-    i = _first_unsafe_sample(control_points, t0, duration, z, threshold, obstacle_polygons, n)
+    i = _first_unsafe_sample(control_points, t0, duration, z, zt, threshold, obstacle_polygons, n)
     if i is None:
         return None
     if i == 0:
@@ -327,9 +361,9 @@ def _first_threshold_crossing_time(control_points, t0, duration, z, threshold, o
     else:
         tlo = t0 + duration*((i-1)/n)
         thi = t0 + duration*(i/n)
-        tcross = _bisect_crossing(control_points, t0, duration, z, threshold, tlo, thi,
+        tcross = _bisect_crossing(control_points, t0, duration, z, zt, threshold, tlo, thi,
                                    CROSSING_EPS, obstacle_polygons)
-    x, y = _walk_noisy_point(control_points, t0, duration, z, tcross)
+    x, y = _walk_noisy_point(control_points, t0, duration, z, zt, tcross)
     _, obstacle_id = _min_clearance_all(x, y, obstacle_polygons)
     return tcross, obstacle_id
 
@@ -347,7 +381,7 @@ def _first_threshold_crossing_time(control_points, t0, duration, z, threshold, o
 # is the existing machinery called with a FILTERED obstacle_polygons
 # list instead of the full one.
 # =====================================================================
-def _trajectory_obstacle_ids(control_points, t0, duration, z, obstacle_polygons):
+def _trajectory_obstacle_ids(control_points, t0, duration, z, zt, obstacle_polygons):
     """Which obstacle ids does this resolved trajectory's noisy position
     actually go INSIDE (not just near) at any bracket-sampled instant
     across [t0, t0+duration]? Same sample count as the rest of this
@@ -359,39 +393,39 @@ def _trajectory_obstacle_ids(control_points, t0, duration, z, obstacle_polygons)
     for i in range(n + 1):
         frac = i / n
         t = t0 + duration*frac
-        x, y = _walk_noisy_point(control_points, t0, duration, z, t)
+        x, y = _walk_noisy_point(control_points, t0, duration, z, zt, t)
         for obstacle_id, poly in obstacle_polygons:
             if _inside_polygon(x, y, poly):
                 hit_ids.add(obstacle_id)
     return hit_ids
 
 
-def _path_obstacle_polygons(control_points, t0, duration, z, obstacle_polygons):
+def _path_obstacle_polygons(control_points, t0, duration, z, zt, obstacle_polygons):
     """obstacle_polygons FILTERED down to just the ones the trajectory
     actually enters -- the single restriction point _first_threshold_
     crossing_time/_within_obstacle_threshold are then called with,
     unchanged, everywhere below."""
-    path_ids = _trajectory_obstacle_ids(control_points, t0, duration, z, obstacle_polygons)
+    path_ids = _trajectory_obstacle_ids(control_points, t0, duration, z, zt, obstacle_polygons)
     return [(oid, poly) for oid, poly in obstacle_polygons if oid in path_ids]
 
 
-def _first_on_path_crossing_time(control_points, t0, duration, z, threshold, obstacle_polygons):
+def _first_on_path_crossing_time(control_points, t0, duration, z, zt, threshold, obstacle_polygons):
     """Same shape/return as _first_threshold_crossing_time (Tcross,
     ObstacleId) or None -- None immediately if the trajectory never
     enters any obstacle at all (nothing to restrict to), otherwise
     delegates straight to the existing search over the restricted set."""
-    restricted = _path_obstacle_polygons(control_points, t0, duration, z, obstacle_polygons)
+    restricted = _path_obstacle_polygons(control_points, t0, duration, z, zt, obstacle_polygons)
     if not restricted:
         return None
-    return _first_threshold_crossing_time(control_points, t0, duration, z, threshold, restricted)
+    return _first_threshold_crossing_time(control_points, t0, duration, z, zt, threshold, restricted)
 
 
-def _obstacle_on_path_within_threshold(control_points, t0, duration, z, px, py, threshold, obstacle_polygons):
+def _obstacle_on_path_within_threshold(control_points, t0, duration, z, zt, px, py, threshold, obstacle_polygons):
     """The CONDITION-side counterpart: is (px,py) within threshold of
     an obstacle the trajectory actually enters, RIGHT NOW -- one call,
     no search, exactly mirroring _within_obstacle_threshold's own
     relationship to _first_threshold_crossing_time."""
-    restricted = _path_obstacle_polygons(control_points, t0, duration, z, obstacle_polygons)
+    restricted = _path_obstacle_polygons(control_points, t0, duration, z, zt, obstacle_polygons)
     if not restricted:
         return False
     return _within_obstacle_threshold(px, py, threshold, restricted)
@@ -400,13 +434,13 @@ def _obstacle_on_path_within_threshold(control_points, t0, duration, z, px, py, 
 # =====================================================================
 # PLAIN-PYTHON API -- ALWAYS available, testable without ProbLog.
 # =====================================================================
-def first_threshold_crossing_time_value(control_points, t0, duration, z, threshold):
+def first_threshold_crossing_time_value(control_points, t0, duration, z, zt, threshold):
     """control_points: [(x,y), ...]. Returns (Tcross, ObstacleId), or
     None if the trajectory never comes within `threshold` of any
     obstacle in this resolved world. ObstacleId is the obstacle_polygon/2
     Id (e.g. "obs7") nearest at the exact crossing point."""
     return _first_threshold_crossing_time(
-        control_points, float(t0), float(duration), float(z), float(threshold),
+        control_points, float(t0), float(duration), float(z), float(zt), float(threshold),
         OBSTACLE_POLYGONS)
 
 
@@ -418,29 +452,32 @@ def obstacle_within_threshold_value(x, y, threshold):
     obstacle_in_bound(Threshold) CONDITION in moveto_continuous.pl
     (holds(obstacle_in_bound(...),S)), as opposed to the
     obstacle_in_bound(Threshold) TRIGGER, which searches a whole future
-    trajectory via first_threshold_crossing_time_value above."""
+    trajectory via first_threshold_crossing_time_value above. Takes no
+    noise draws at all -- it's a single-point check against a position
+    already computed (by at/4, which already folds in both z and zt),
+    not a trajectory search."""
     return _within_obstacle_threshold(float(x), float(y), float(threshold), OBSTACLE_POLYGONS)
 
 
-def first_on_path_crossing_time_value(control_points, t0, duration, z, threshold):
+def first_on_path_crossing_time_value(control_points, t0, duration, z, zt, threshold):
     """control_points: [(x,y), ...]. Returns (Tcross, ObstacleId), or
     None if the trajectory never comes within `threshold` of an
     obstacle IT ACTUALLY ENTERS somewhere along this walk (as opposed
     to first_threshold_crossing_time_value, which considers every
     obstacle regardless of whether the path goes near it at all)."""
     return _first_on_path_crossing_time(
-        control_points, float(t0), float(duration), float(z), float(threshold),
+        control_points, float(t0), float(duration), float(z), float(zt), float(threshold),
         OBSTACLE_POLYGONS)
 
 
-def obstacle_on_path_within_threshold_value(control_points, t0, duration, z, x, y, threshold):
+def obstacle_on_path_within_threshold_value(control_points, t0, duration, z, zt, x, y, threshold):
     """A SINGLE-POINT check, same relationship to
     first_on_path_crossing_time_value as obstacle_within_threshold_value
     has to first_threshold_crossing_time_value: is (x,y) within
     threshold of an obstacle the trajectory actually enters, right
     now."""
     return _obstacle_on_path_within_threshold(
-        control_points, float(t0), float(duration), float(z),
+        control_points, float(t0), float(duration), float(z), float(zt),
         float(x), float(y), float(threshold), OBSTACLE_POLYGONS)
 
 
@@ -460,14 +497,14 @@ if _HAVE_PROBLOG:
     # T0 in particular can arrive as a bare Prolog INTEGER (now(s0,0) is
     # the very first walk's T0) rather than a float -- "+term" accepts
     # either representation; first_threshold_crossing_time_value below
-    # does the float() conversion itself. Duration/Z/Threshold are
+    # does the float() conversion itself. Duration/Z/Zt/Threshold are
     # always the result of `is` arithmetic or float literals in
     # practice, but are taken as "+term" too for the same robustness.
-    @problog_export_nondet("+list", "+term", "+term", "+term", "+term", "-float", "-str")
-    def first_threshold_crossing_time(control_points, t0, duration, z, threshold):
+    @problog_export_nondet("+list", "+term", "+term", "+term", "+term", "+term", "-float", "-str")
+    def first_threshold_crossing_time(control_points, t0, duration, z, zt, threshold):
         cp = [(float(p.args[0]), float(p.args[1])) for p in control_points]
         result = first_threshold_crossing_time_value(
-            cp, float(t0), float(duration), float(z), float(threshold))
+            cp, float(t0), float(duration), float(z), float(zt), float(threshold))
         if result is None:
             return []  # no crossing in this world -- predicate FAILS
         tcross, obstacle_id = result
@@ -485,28 +522,28 @@ if _HAVE_PROBLOG:
             return [()]
         return []
 
-    # first_on_path_crossing_time(+ControlPoints,+T0,+Duration,+Z,
+    # first_on_path_crossing_time(+ControlPoints,+T0,+Duration,+Z,+Zt,
     # +Threshold,-Tcross,-ObstacleId): backs the obstacle_on_path(Threshold)
     # TRIGGER. Same shape/signature as first_threshold_crossing_time
     # above, just restricted (inside collision_geometry.py itself) to
     # obstacles the trajectory actually enters.
-    @problog_export_nondet("+list", "+term", "+term", "+term", "+term", "-float", "-str")
-    def first_on_path_crossing_time(control_points, t0, duration, z, threshold):
+    @problog_export_nondet("+list", "+term", "+term", "+term", "+term", "+term", "-float", "-str")
+    def first_on_path_crossing_time(control_points, t0, duration, z, zt, threshold):
         cp = [(float(p.args[0]), float(p.args[1])) for p in control_points]
         result = first_on_path_crossing_time_value(
-            cp, float(t0), float(duration), float(z), float(threshold))
+            cp, float(t0), float(duration), float(z), float(zt), float(threshold))
         if result is None:
             return []
         tcross, obstacle_id = result
         return [(tcross, obstacle_id)]
 
     # obstacle_on_path_within_threshold(+ControlPoints,+T0,+Duration,+Z,
-    # +X,+Y,+Threshold): backs the obstacle_on_path(Threshold)
+    # +Zt,+X,+Y,+Threshold): backs the obstacle_on_path(Threshold)
     # CONDITION. Same zero-output boolean shape as
     # obstacle_within_threshold above.
-    @problog_export_nondet("+list", "+term", "+term", "+term", "+term", "+term", "+term")
-    def obstacle_on_path_within_threshold(control_points, t0, duration, z, x, y, threshold):
+    @problog_export_nondet("+list", "+term", "+term", "+term", "+term", "+term", "+term", "+term")
+    def obstacle_on_path_within_threshold(control_points, t0, duration, z, zt, x, y, threshold):
         cp = [(float(p.args[0]), float(p.args[1])) for p in control_points]
-        if obstacle_on_path_within_threshold_value(cp, t0, duration, z, x, y, threshold):
+        if obstacle_on_path_within_threshold_value(cp, t0, duration, z, zt, x, y, threshold):
             return [()]
         return []

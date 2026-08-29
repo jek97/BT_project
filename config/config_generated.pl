@@ -5,9 +5,9 @@
 
 robot_radius(0.2).
 safety_buffer(0.1).
-sight_threshold(0.6).
 speed(1.0).
 sigma(0.15).
+sigma_tangential(0.15).
 sigma_battery(0.5).
 battery_start(100).
 idle_drain_rate(0.05).
@@ -23,6 +23,12 @@ crossing_eps(0.01).
 0.3954::z(do(startMoveto(CP,Triggers,T0),S), 0.0) ;
 0.2417::z(do(startMoveto(CP,Triggers,T0),S), 1.0) ;
 0.0606::z(do(startMoveto(CP,Triggers,T0),S), 2.0).
+
+0.0606::zt(do(startMoveto(CP,Triggers,T0),S), -2.0) ;
+0.2417::zt(do(startMoveto(CP,Triggers,T0),S), -1.0) ;
+0.3954::zt(do(startMoveto(CP,Triggers,T0),S), 0.0) ;
+0.2417::zt(do(startMoveto(CP,Triggers,T0),S), 1.0) ;
+0.0606::zt(do(startMoveto(CP,Triggers,T0),S), 2.0).
 
 0.0606::zbatt(-2.0) ;
 0.2417::zbatt(-1.0) ;

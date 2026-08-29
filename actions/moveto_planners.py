@@ -22,27 +22,31 @@ same underlying A*/spline computation and neither should reimplement it:
          plan_astar(+SX,+SY,+GX,+GY, -ControlPoints)
          plan_straight(+SX,+SY,+GX,+GY, -ControlPoints)
          follow_boarder0(+SX,+SY,+GX,+GY,+ObstacleId,+Offset, -ControlPoints)
+         follow_boarder1(+SX,+SY,+GX,+GY,+ObstacleId,+Offset, -ControlPoints)
      ControlPoints = [point(X0,Y0), ...] ProbLog terms, length 3k+1, in
      EXACTLY the format moveto_continuous.pl's spline_point/4 expects.
-     follow_boarder0 is a Bug0-style boundary-following planner -- see
-     _follow_boarder0_control_points's own header for the geometry.
+     follow_boarder0/follow_boarder1 are Bug0-/Bug1-style boundary-
+     following planners, sharing the SAME clockwise offset-boundary
+     walk (_boundary_walk_setup) but with different stopping rules --
+     see their own _follow_boarderN_control_points header comments.
 
   2. PLAIN-PYTHON API for a BT.cpp / bt_actions.py caller that has
      nothing to do with ProbLog -- plan_astar_points/plan_straight_points/
-     follow_boarder0_points below, returning plain (x,y) float tuples, no
-     ProbLog Term objects and no ProbLog import required to call them.
-     The `import problog` needed for role 1 is wrapped in a try/except
-     (_HAVE_PROBLOG) so that importing this module from a pure BT.cpp
-     bridge that never installs ProbLog still works -- only the
-     plan_astar/plan_straight/follow_boarder0 ProbLog predicates
-     themselves become unavailable in that case, exactly mirroring how
-     plan_astar already degrades gracefully (fails rather than crashing)
-     when the map itself fails to load.
+     follow_boarder0_points/follow_boarder1_points below, returning
+     plain (x,y) float tuples, no ProbLog Term objects and no ProbLog
+     import required to call them. The `import problog` needed for role
+     1 is wrapped in a try/except (_HAVE_PROBLOG) so that importing this
+     module from a pure BT.cpp bridge that never installs ProbLog still
+     works -- only the ProbLog predicates themselves become unavailable
+     in that case, exactly mirroring how plan_astar already degrades
+     gracefully (fails rather than crashing) when the map itself fails
+     to load.
 
 Each role funnels through the SAME plain-Python core per planner
 (_astar_control_points / _straight_control_points /
-_follow_boarder0_control_points) -- no duplicated logic between the
-ProbLog-facing and BT.cpp-facing entry points for any of the three.
+_follow_boarder0_control_points / _follow_boarder1_control_points) --
+no duplicated logic between the ProbLog-facing and BT.cpp-facing entry
+points for any of the four.
 
 FAILURE: if A* finds no path (start/goal unreachable, or the map failed
 to load at import time), the core returns None -- the ProbLog predicate
@@ -211,17 +215,24 @@ def _astar_control_points(sx, sy, gx, gy):
 
 
 # =====================================================================
-# FOLLOW_BOARDER0 -- Bug0-style boundary-following planner. From the
-# CURRENT position, traces CLOCKWISE around one named obstacle's own
-# boundary, offset outward by a caller-given distance, stopping at the
-# first point from which that obstacle no longer occludes a straight
-# line to the goal. Deliberately does NOT plan all the way to goal --
-# see follow_boarder0_points's own docstring for why (a subsequent
-# PlanStraight+MoveTo leg is expected to cover the rest, per Bug0's own
-# "circle until clear, then go straight" shape). Shares the SAME
-# fit_spline/bspline_to_bezier_chain fitting step _astar_control_points
-# uses above, so its own output is a chained-cubic-Bezier control_points
-# list in exactly the same format, no special-casing needed downstream.
+# FOLLOW_BOARDER0 / FOLLOW_BOARDER1 -- Bug0-/Bug1-style boundary-
+# following planners. From the CURRENT position, both trace CLOCKWISE
+# around one named obstacle's own boundary, offset outward by a
+# caller-given distance, and BOTH deliberately do NOT plan all the way
+# to goal -- a subsequent PlanStraight+MoveTo leg is expected to cover
+# the rest, per the Bug-algorithm "circle the obstacle, then go
+# straight" shape. They differ ONLY in when they stop circling:
+#   follow_boarder0 -- as soon as the obstacle no longer occludes a
+#                       straight line to goal (Bug0's own rule).
+#   follow_boarder1 -- when the boundary walk re-crosses the straight
+#                       segment from this planner's own call-time
+#                       position to goal (a simplified Bug1 rule -- see
+#                       _follow_boarder1_control_points's own note).
+# Both share the SAME offset-boundary construction (_offset_boundary_
+# clockwise) and SAME fit_spline/bspline_to_bezier_chain fitting step
+# _astar_control_points uses above, so their own output is a
+# chained-cubic-Bezier control_points list in exactly the same format,
+# no special-casing needed downstream.
 # =====================================================================
 def _polygon_edges(points):
     closed = list(points) + [points[0]]
@@ -323,12 +334,18 @@ def _offset_boundary_clockwise(polygon, offset):
     return samples
 
 
-def _follow_boarder0_control_points(sx, sy, gx, gy, obstacle_id, offset):
-    """Core computation -- see follow_boarder0_points below for the
-    full contract. Returns [(x,y), ...] control points, or None if
-    obstacle_id names no known obstacle, its polygon is degenerate, or
-    a full circuit of the offset boundary never clears line-of-sight
-    to (gx,gy)."""
+def _boundary_walk_setup(sx, sy, obstacle_id, offset):
+    """Shared setup for every follow_boarderN planner: look up
+    obstacle_id's own polygon, build its offset boundary, and find
+    which sample is closest to the robot's ACTUAL current position --
+    NOT assumed to already sit exactly on the offset curve (it
+    generally won't, by a small bisection-tolerance residual -- see
+    this project's own discussion of first_on_path_crossing_time's
+    CROSSING_EPS). The small gap this leaves, if any, is absorbed into
+    each planner's own first fitted spline segment, with no separate
+    "join" step needed. Returns (polygon, boundary, start_idx), or
+    None if obstacle_id names no known obstacle or its polygon is
+    degenerate."""
     polygon = None
     for oid, pts in _OBSTACLE_POLYGONS:
         if oid == obstacle_id:
@@ -341,15 +358,37 @@ def _follow_boarder0_control_points(sx, sy, gx, gy, obstacle_id, offset):
     if not boundary:
         return None
 
-    # Start from whichever offset-boundary sample is closest to the
-    # robot's ACTUAL current position -- NOT assumed to already sit
-    # exactly on the offset curve (it generally won't, by a small
-    # bisection-tolerance residual -- see this project's own
-    # discussion of first_on_path_crossing_time's CROSSING_EPS). The
-    # small gap this leaves, if any, is absorbed into the very first
-    # fitted spline segment, with no separate "join" step needed.
     start_idx = min(range(len(boundary)),
                      key=lambda i: (boundary[i][0]-sx)**2 + (boundary[i][1]-sy)**2)
+    return polygon, boundary, start_idx
+
+
+def _fit_boundary_path(sx, sy, path_xy):
+    """Shared tail for every follow_boarderN planner: fit the walked
+    polyline (starting at the robot's actual (sx,sy)) to a chained
+    cubic Bezier, same fit_spline/bspline_to_bezier_chain pipeline
+    _astar_control_points uses above -- falling back to a straight
+    line from the actual start to the path's own last point if the
+    path is too short/degenerate for a cubic fit (e.g. the closest
+    boundary sample already satisfies the stopping test)."""
+    try:
+        tck, _u = fit_spline(path_xy, degree=3, smoothing=0.0)
+        control_points, _k = bspline_to_bezier_chain(tck)
+    except ValueError:
+        control_points = _straight_control_points(sx, sy, path_xy[-1][0], path_xy[-1][1])
+    return control_points
+
+
+def _follow_boarder0_control_points(sx, sy, gx, gy, obstacle_id, offset):
+    """Core computation -- see follow_boarder0_points below for the
+    full contract. Returns [(x,y), ...] control points, or None if
+    obstacle_id names no known obstacle, its polygon is degenerate, or
+    a full circuit of the offset boundary never clears line-of-sight
+    to (gx,gy)."""
+    setup = _boundary_walk_setup(sx, sy, obstacle_id, offset)
+    if setup is None:
+        return None
+    polygon, boundary, start_idx = setup
 
     n = len(boundary)
     path_xy = [(sx, sy)]
@@ -364,17 +403,68 @@ def _follow_boarder0_control_points(sx, sy, gx, gy, obstacle_id, offset):
     if not cleared:
         return None  # one full circuit, never cleared line-of-sight -- no_path
 
-    try:
-        tck, _u = fit_spline(path_xy, degree=3, smoothing=0.0)
-        control_points, _k = bspline_to_bezier_chain(tck)
-    except ValueError:
-        # Degenerate/too-short path for a cubic fit (e.g. the closest
-        # boundary sample already clears) -- fall back to a straight
-        # line from the actual start to the clearing point, same
-        # fallback _astar_control_points uses above.
-        control_points = _straight_control_points(sx, sy, path_xy[-1][0], path_xy[-1][1])
+    return _fit_boundary_path(sx, sy, path_xy)
 
-    return control_points
+
+def _segment_intersection_point(p1, p2, p3, p4):
+    """The EXACT (x,y) point where segments (p1,p2) and (p3,p4)
+    properly cross, or None if they don't (reuses _segments_intersect
+    for the boolean gate, then solves the standard parametric
+    line-intersection formula along (p1,p2) for the precise point --
+    used by follow_boarder1 to stop exactly where the boundary walk
+    re-crosses the original start-goal line, not just at the nearest
+    discrete boundary sample)."""
+    if not _segments_intersect(p1, p2, p3, p4):
+        return None
+    (x1, y1), (x2, y2) = p1, p2
+    (x3, y3), (x4, y4) = p3, p4
+    denom = (x1-x2)*(y3-y4) - (y1-y2)*(x3-x4)
+    if abs(denom) <= 1.0e-12:
+        return None  # parallel/collinear -- no single clean crossing point
+    t = ((x1-x3)*(y3-y4) - (y1-y3)*(x3-x4)) / denom
+    return (x1 + t*(x2-x1), y1 + t*(y2-y1))
+
+
+def _follow_boarder1_control_points(sx, sy, gx, gy, obstacle_id, offset):
+    """Core computation -- see follow_boarder1_points below for the
+    full contract. Bug1-style stopping rule: unlike follow_boarder0
+    (stops as soon as the obstacle stops occluding goal),
+    follow_boarder1 keeps circling until the boundary walk itself
+    RE-CROSSES the straight segment from the planner's own call-time
+    position (sx,sy) to the goal (gx,gy) -- the direct path the robot
+    was following before the obstacle forced it to divert. Returns
+    [(x,y), ...] control points, or None if obstacle_id names no known
+    obstacle, its polygon is degenerate, or a full circuit never
+    re-crosses that segment."""
+    setup = _boundary_walk_setup(sx, sy, obstacle_id, offset)
+    if setup is None:
+        return None
+    _polygon, boundary, start_idx = setup
+
+    n = len(boundary)
+    path_xy = [(sx, sy), boundary[start_idx]]
+    start_goal = ((sx, sy), (gx, gy))
+    crossed = False
+    # The entry edge (sx,sy)->boundary[start_idx] is deliberately NOT
+    # tested here -- (sx,sy) is itself an ENDPOINT of the start-goal
+    # segment, so that edge trivially touches it at a degenerate
+    # (zero-length-along-the-line) point; checking from the first real
+    # boundary-to-boundary edge onward avoids a spurious immediate
+    # "crossing" right where the walk begins.
+    for step in range(1, n):
+        idx_prev = (start_idx + step - 1) % n
+        idx_curr = (start_idx + step) % n
+        p_prev, p_curr = boundary[idx_prev], boundary[idx_curr]
+        cross_pt = _segment_intersection_point(start_goal[0], start_goal[1], p_prev, p_curr)
+        if cross_pt is not None:
+            path_xy.append(cross_pt)
+            crossed = True
+            break
+        path_xy.append(p_curr)
+    if not crossed:
+        return None  # one full circuit, never re-crossed the start-goal segment -- no_path
+
+    return _fit_boundary_path(sx, sy, path_xy)
 
 
 # =====================================================================
@@ -414,6 +504,24 @@ def follow_boarder0_points(sx, sy, gx, gy, obstacle_id, offset):
     circuit of its offset boundary never clears line-of-sight to
     (gx,gy)."""
     return _follow_boarder0_control_points(
+        float(sx), float(sy), float(gx), float(gy), str(obstacle_id), float(offset))
+
+
+def follow_boarder1_points(sx, sy, gx, gy, obstacle_id, offset):
+    """Plain-Python Bug1-style boundary-following planner. Same
+    signature/return shape as follow_boarder0_points above, and the
+    SAME clockwise-offset-boundary walk, but a DIFFERENT stopping
+    rule: keeps circling until the boundary walk itself re-crosses the
+    straight segment from (sx,sy) (this planner's own call-time
+    position) to (gx,gy) -- the direct path the robot was on before
+    the obstacle forced this diversion -- rather than stopping as soon
+    as line-of-sight to goal clears. Deliberately NOT all the way to
+    the goal itself, same "a subsequent PlanStraight+MoveTo leg covers
+    the rest" pattern as follow_boarder0_points.
+    Returns None if obstacle_id names no known obstacle, or if a full
+    circuit of its offset boundary never re-crosses the (sx,sy)-(gx,gy)
+    segment."""
+    return _follow_boarder1_control_points(
         float(sx), float(sy), float(gx), float(gy), str(obstacle_id), float(offset))
 
 
@@ -474,6 +582,19 @@ if _HAVE_PROBLOG:
         obstacle, or if a full circuit of its offset boundary never
         clears line-of-sight to (gx,gy)."""
         control_points = _follow_boarder0_control_points(
+            sx, sy, gx, gy, obstacle_id.functor, float(offset))
+        if control_points is None:
+            return []
+        return [_control_points_to_terms(control_points)]
+
+    @problog_export_nondet("+float", "+float", "+float", "+float", "+term", "+term", "-list")
+    def follow_boarder1(sx, sy, gx, gy, obstacle_id, offset):
+        """Black-box Bug1 boundary-following planner (ProbLog predicate)
+        -- see _follow_boarder1_control_points above for the actual
+        computation. Fails (returns []) if obstacle_id names no known
+        obstacle, or if a full circuit of its offset boundary never
+        re-crosses the (sx,sy)-(gx,gy) segment."""
+        control_points = _follow_boarder1_control_points(
             sx, sy, gx, gy, obstacle_id.functor, float(offset))
         if control_points is None:
             return []

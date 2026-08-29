@@ -58,7 +58,10 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
-from moveto_planners import plan_astar_points, plan_straight_points, follow_boarder0_points
+from moveto_planners import (
+    plan_astar_points, plan_straight_points,
+    follow_boarder0_points, follow_boarder1_points,
+)
 
 
 # =====================================================================
@@ -106,6 +109,23 @@ def bt_follow_boarder0(sx, sy, gx, gy, obstacle_id, offset):
     (gx,gy) -- see follow_boarder0_points's own docstring for why the
     returned path deliberately stops short of goal itself."""
     control_points = follow_boarder0_points(sx, sy, gx, gy, obstacle_id, offset)
+    if control_points is None:
+        return {"control_points": [], "reason": "no_path", "status": False}
+    return {
+        "control_points": [(float(x), float(y)) for x, y in control_points],
+        "reason": "completed",
+        "status": True,
+    }
+
+
+def bt_follow_boarder1(sx, sy, gx, gy, obstacle_id, offset):
+    """BT.cpp-compatible wrapper around moveto_planners.py's
+    follow_boarder1_points -- matches FollowBoarder1's ports in
+    schema.yaml exactly, same shape as bt_follow_boarder0 above.
+    control_points is [] and reason is "no_path" if obstacle_id names
+    no known obstacle, or a full circuit of its offset boundary never
+    re-crosses the (sx,sy)-(gx,gy) segment."""
+    control_points = follow_boarder1_points(sx, sy, gx, gy, obstacle_id, offset)
     if control_points is None:
         return {"control_points": [], "reason": "no_path", "status": False}
     return {
@@ -167,15 +187,18 @@ def plan_with_term(algorithm, goal, cp_var="CP"):
     return f"planWith({algorithm},point({float(gx)},{float(gy)}),{cp_var})"
 
 
-def follow_boarder0_with_term(obstacle_id, offset, goal, cp_var="CP"):
-    """Build the moveto_continuous.pl TERM TEXT for one FollowBoarder0
-    node's bound inputs -- planWith(follow_boarder0(ObstacleId,Offset),
-    point(GoalX,GoalY), CPVar), same "leave CP free" convention as
-    plan_with_term above. obstacle_id is written VERBATIM as Prolog
-    text (a bare atom, e.g. "obs5"), same convention as
-    halted_with_cond_term's own reason argument below -- NOT quoted,
-    NOT float-parsed.
+def _boundary_algorithm_term(functor, obstacle_id, offset, goal, cp_var="CP"):
+    """Build the moveto_continuous.pl TERM TEXT for one FollowBoarder0/
+    FollowBoarder1 node's bound inputs -- planWith(Functor(ObstacleId,
+    Offset), point(GoalX,GoalY), CPVar), same "leave CP free"
+    convention as plan_with_term above. Shared by both planners below
+    (identical port shape, only the Prolog functor differs -- see
+    plan_call/8's own follow_boarder0/follow_boarder1 clauses).
+    obstacle_id is written VERBATIM as Prolog text (a bare atom, e.g.
+    "obs5"), same convention as halted_with_cond_term's own reason
+    argument below -- NOT quoted, NOT float-parsed.
 
+    functor: "follow_boarder0" or "follow_boarder1".
     obstacle_id: a Prolog atom, as text (e.g. "obs5").
     offset: distance to maintain from the obstacle's own boundary,
         metres -- typically the SAME Threshold as whichever trigger/
@@ -186,7 +209,17 @@ def follow_boarder0_with_term(obstacle_id, offset, goal, cp_var="CP"):
         "planWith(follow_boarder0(obs5,0.6),point(17.0,17.0),CP)"
     """
     gx, gy = goal
-    return f"planWith(follow_boarder0({obstacle_id},{float(offset)}),point({float(gx)},{float(gy)}),{cp_var})"
+    return f"planWith({functor}({obstacle_id},{float(offset)}),point({float(gx)},{float(gy)}),{cp_var})"
+
+
+def follow_boarder0_with_term(obstacle_id, offset, goal, cp_var="CP"):
+    """FollowBoarder0's own term builder -- see _boundary_algorithm_term."""
+    return _boundary_algorithm_term("follow_boarder0", obstacle_id, offset, goal, cp_var)
+
+
+def follow_boarder1_with_term(obstacle_id, offset, goal, cp_var="CP"):
+    """FollowBoarder1's own term builder -- see _boundary_algorithm_term."""
+    return _boundary_algorithm_term("follow_boarder1", obstacle_id, offset, goal, cp_var)
 
 
 # =====================================================================
@@ -275,6 +308,12 @@ ACTIONS = {
         "prolog_action": "planWith",
         "func": bt_follow_boarder0,
         "term_builder": follow_boarder0_with_term,
+    },
+    "FollowBoarder1": {
+        "kind": "callable",
+        "prolog_action": "planWith",
+        "func": bt_follow_boarder1,
+        "term_builder": follow_boarder1_with_term,
     },
 }
 

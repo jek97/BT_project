@@ -233,13 +233,16 @@ actions:
         description: "true iff reason=completed."
 
   # ----------------------------------------------------------------
-  # A THIRD planner -- Bug0-style boundary following, dispatched
-  # through the SAME planWith(Algorithm,Goal,CP)/plan_call/8 template
-  # as PlanAstar/PlanStraight above, just with a COMPOUND Algorithm
-  # term (follow_boarder0(ObstacleId,Offset)) instead of a bare atom,
-  # so the two extra inputs this planner needs ride along with zero
-  # change to planWith/do_node/planned_with -- see plan_call/8's own
-  # follow_boarder0 clauses in moveto_continuous.pl.
+  # A THIRD/FOURTH planner -- Bug0-/Bug1-style boundary following,
+  # dispatched through the SAME planWith(Algorithm,Goal,CP)/
+  # plan_call/8 template as PlanAstar/PlanStraight above, just with a
+  # COMPOUND Algorithm term (follow_boarderN(ObstacleId,Offset))
+  # instead of a bare atom, so the two extra inputs these planners
+  # need ride along with zero change to planWith/do_node/planned_with
+  # -- see plan_call/8's own follow_boarder0/follow_boarder1 clauses
+  # in moveto_continuous.pl. FollowBoarder0 and FollowBoarder1 share
+  # an IDENTICAL port shape, differing only in WHEN they stop
+  # circling the obstacle -- see each entry's own description.
   # ----------------------------------------------------------------
   - id: FollowBoarder0
     prolog_action: planWith
@@ -309,6 +312,67 @@ actions:
           One of: completed, no_path (obstacle_id names no known
           obstacle, or a full circuit of its offset boundary never
           clears line-of-sight to goal).
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason=completed."
+
+  - id: FollowBoarder1
+    prolog_action: planWith
+    description: >
+      Bug1-style boundary-following planner (moveto_planners.py's
+      follow_boarder1/7) -- SAME clockwise boundary-offset walk as
+      FollowBoarder0 above, but a DIFFERENT stopping rule: keeps
+      circling until the boundary walk itself RE-CROSSES the straight
+      segment from THIS planning call's own start position (now/2 +
+      at/4, at the moment this node runs) to the EXPLICIT goal port --
+      the direct path the robot was on before obstacle_id forced this
+      diversion -- rather than stopping as soon as line-of-sight to
+      goal clears (FollowBoarder0's own rule). Deliberately NOT all the
+      way to goal itself, same "a subsequent PlanStraight+MoveTo leg
+      covers the rest" pattern as FollowBoarder0. Same instantaneous/
+      traceability semantics otherwise (records a
+      planned(follow_boarder1(ObstacleId,Offset),Reason) marker, does
+      not gate on a precondition).
+    ports:
+      - name: goal
+        direction: input
+        type: Point
+        required: true
+        description: >
+          Target position for this planning call -- see PlanAstar's
+          own goal port.
+      - name: obstacle_id
+        direction: input
+        type: std::string
+        required: true
+        description: >
+          Which obstacle_polygon/2 Id to circle -- see FollowBoarder0's
+          own obstacle_id port.
+      - name: offset
+        direction: input
+        type: double
+        required: true
+        description: >
+          Distance to maintain from the obstacle's own boundary edge
+          while circling it, metres -- see FollowBoarder0's own offset
+          port for units/definition.
+      - name: control_points
+        direction: output
+        type: std::vector<Point>
+        description: >
+          The boundary-following path, as chained cubic Bezier control
+          points, from the current position to the exact point where
+          the offset boundary re-crosses the straight segment from
+          this call's own start position to goal. Empty if
+          reason=no_path.
+      - name: reason
+        direction: output
+        type: std::string
+        description: >
+          One of: completed, no_path (obstacle_id names no known
+          obstacle, or a full circuit of its offset boundary never
+          re-crosses the start-goal segment).
       - name: status
         direction: output
         type: bool

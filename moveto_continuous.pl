@@ -98,9 +98,9 @@ obstacle_polygon(no_obstacles_placeholder, []) :- fail.
 :- consult('./config/config_generated.pl').
 
 % actions/moveto_planners.py provides plan_astar/5, plan_straight/5,
-% and follow_boarder0/7 as BLACK-BOX (Python-implemented) predicates --
-% see that file's own header for the full explanation. ProbLog imports
-% and executes it
+% follow_boarder0/7, and follow_boarder1/7 as BLACK-BOX (Python-
+% implemented) predicates -- see that file's own header for the full
+% explanation. ProbLog imports and executes it
 % directly the moment this directive loads (problog.clausedb's
 % load_external_module), registering both predicates before anything
 % below that calls them is ever evaluated. Path is resolved relative to
@@ -1174,6 +1174,21 @@ plan_call(follow_boarder0(ObstacleId,Offset), SX,SY,GX,GY, CP, completed, true) 
     follow_boarder0(SX,SY,GX,GY,ObstacleId,Offset, CP).
 plan_call(follow_boarder0(ObstacleId,Offset), SX,SY,GX,GY, [], no_path, false) :-
     \+ follow_boarder0(SX,SY,GX,GY,ObstacleId,Offset, _).
+
+% follow_boarder1(ObstacleId,Offset) -- a FOURTH planner, SAME compound-
+% Algorithm-term shape as follow_boarder0 above (zero further interface
+% change needed), same clockwise offset-boundary walk underneath, but a
+% DIFFERENT stopping rule: Bug1-style -- keeps circling until the
+% boundary walk re-crosses the straight segment from THIS planning
+% call's own start position to Goal (the direct path the robot was on
+% before ObstacleId forced this diversion), rather than stopping as
+% soon as line-of-sight to goal clears (follow_boarder0's own rule) --
+% see moveto_planners.py's _follow_boarder1_control_points for the
+% exact geometry.
+plan_call(follow_boarder1(ObstacleId,Offset), SX,SY,GX,GY, CP, completed, true) :-
+    follow_boarder1(SX,SY,GX,GY,ObstacleId,Offset, CP).
+plan_call(follow_boarder1(ObstacleId,Offset), SX,SY,GX,GY, [], no_path, false) :-
+    \+ follow_boarder1(SX,SY,GX,GY,ObstacleId,Offset, _).
 
 % -- PLANNING leaf: ONE template, planWith(Algorithm,Goal,CP), covering
 %    every planner via plan_call/8's own dispatch on Algorithm --

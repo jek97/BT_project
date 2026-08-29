@@ -89,12 +89,16 @@ _ACTION_DISPATCH = {
     "MoveTo": {"kind": "moveto_leg"},
     "PlanAstar": {"kind": "planWith", "algorithm": "astar"},
     "PlanStraight": {"kind": "planWith", "algorithm": "straight"},
-    # A third planner, dispatched through the SAME planWith template,
-    # but with a COMPOUND Algorithm term (obstacle_id/offset ride
-    # inside it, not a fixed atom) -- its own "kind" branch below
-    # builds that term from its own ports instead of using a static
-    # "algorithm" string.
-    "FollowBoarder0": {"kind": "planWith_follow_boarder0"},
+    # A third/fourth planner, dispatched through the SAME planWith
+    # template, but with a COMPOUND Algorithm term (obstacle_id/offset
+    # ride inside it, not a fixed atom) -- the shared "kind" branch
+    # below builds that term from each node's own ports instead of
+    # using a static "algorithm" string. FollowBoarder0/FollowBoarder1
+    # differ only in which Prolog functor plan_call/8 should dispatch
+    # on (follow_boarder0/follow_boarder1) -- both have identical port
+    # shapes (goal/obstacle_id/offset/control_points/reason/status).
+    "FollowBoarder0": {"kind": "planWith_boundary_algorithm", "functor": "follow_boarder0"},
+    "FollowBoarder1": {"kind": "planWith_boundary_algorithm", "functor": "follow_boarder1"},
 }
 # "single_float_port": the shared shape of every cond(Functor(Value))
 # condition whose one port is a plain float -- AtGoal, ObstacleInBound,
@@ -241,7 +245,7 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool):
             cp_var = var_pool.var_for(key)
             return f"planWith({info['algorithm']},{goal_point},{cp_var})"
 
-        if info["kind"] == "planWith_follow_boarder0":
+        if info["kind"] == "planWith_boundary_algorithm":
             goal_point = _point_literal(attrs["goal"], tag, "goal")
             # obstacle_id is written VERBATIM as Prolog text (a bare
             # atom), same convention as HaltedWith's own reason port
@@ -260,7 +264,7 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool):
             key = _blackboard_key(cp_value)
             var_pool.producers.add(key)
             cp_var = var_pool.var_for(key)
-            return f"planWith(follow_boarder0({obstacle_id},{offset}),{goal_point},{cp_var})"
+            return f"planWith({info['functor']}({obstacle_id},{offset}),{goal_point},{cp_var})"
 
     if tag in _CONDITION_DISPATCH:
         info = _CONDITION_DISPATCH[tag]

@@ -41,7 +41,7 @@ header) rather than hardcoded a second time here, so config.yaml stays
 the single source of truth for both the Prolog and Python halves of the
 theory with no risk of the two drifting apart.
 
-Exposes FOUR predicates to ProbLog, all INSTANTANEOUS and stateless,
+Exposes SEVEN predicates to ProbLog, all INSTANTANEOUS and stateless,
 exactly like moveto_planners.py's plan_astar/plan_straight:
 
     first_threshold_crossing_time(+ControlPoints,+T0,+Duration,+Z,+Zt,
@@ -51,14 +51,33 @@ exactly like moveto_planners.py's plan_astar/plan_straight:
                                  +Threshold, -Tcross, -ObstacleId)
     obstacle_on_path_within_threshold(+ControlPoints,+T0,+Duration,+Z,+Zt,
                                        +X,+Y,+Threshold)
+    first_line_of_sight_clear_time(+ControlPoints,+T0,+Duration,+Z,+Zt,
+                                    +ObstacleId,+GX,+GY, -Tcross)
+    line_of_sight_clear(+X,+Y,+ObstacleId,+GX,+GY)
+    first_segment_crossing_time(+ControlPoints,+T0,+Duration,+Z,+Zt,
+                                 +SX,+SY,+GX,+GY, -Tcross)
+
+The last three back the Bug-algorithm boundary-LEAVE triggers/condition
+(line_of_sight_clear = Bug0's rule, crosses_segment/first_segment_
+crossing_time = Bug2's rule) -- see the "BUG-ALGORITHM BOUNDARY-LEAVE
+PRIMITIVES" section below for why these are TRIGGER-side machinery,
+not a new planner: the planner (moveto_planners.py's follow_boarder)
+just walks a full clockwise loop around an obstacle's offset boundary
+unconditionally now; WHICH bug variant a MoveTo leg implements is a
+matter of which of these two triggers its own Triggers list names,
+exactly the same "one action, swappable Triggers list" shape collision/
+battery/obstacle_in_bound/etc. already have -- not two separate planner
+functions with the stopping rule baked in (an earlier version of this
+file's own history did that; see git log for why it changed).
 
 Z and Zt are the TWO independent, already-resolved per-walk noise
 draws _walk_noisy_point combines (normal/lateral and tangential/
 along-path respectively -- see that function's own header for the
 formula and why Duration itself stays independent of both). Every
 trajectory-searching predicate here needs both; obstacle_within_threshold
-is the one exception -- it only ever checks a single ALREADY-COMPUTED
-point, so it has no noise draws of its own to take.
+and line_of_sight_clear are the exceptions -- they only ever check a
+single ALREADY-COMPUTED point, so they have no noise draws of their
+own to take.
 
 first_threshold_crossing_time is the TRIGGER-side primitive: searches a
 whole future trajectory (bracket scan + bisection) for the earliest
@@ -432,6 +451,169 @@ def _obstacle_on_path_within_threshold(control_points, t0, duration, z, zt, px, 
 
 
 # =====================================================================
+# BUG-ALGORITHM BOUNDARY-LEAVE PRIMITIVES -- the two rules that decide
+# WHEN a boundary-following MoveTo leg (moveto_planners.py's
+# follow_boarder(ObstacleId,Offset) planner -- a full clockwise loop
+# around the obstacle's offset boundary, no stopping logic of its own)
+# should stop circling and hand back off to a straight-line planner.
+# Deliberately TRIGGER-side machinery (like first_threshold_crossing_
+# time above), not baked into the planner: this is what makes Bug0 vs
+# Bug2 a matter of WHICH trigger a leg's own Triggers list names, not
+# two different planner functions -- exactly the same shape collision/
+# obstacle_in_bound/battery_below already have (one action, swappable
+# Triggers).
+#
+#   line_of_sight_clear(ObstacleId,GX,GY) -- Bug0's rule: fires the
+#       instant ObstacleId stops occluding a straight line from the
+#       CURRENT (noisy) position to (GX,GY). Also a genuine CONDITION
+#       (line_of_sight_clear/5 below) -- a clean point-in-time question
+#       ("is it occluded RIGHT NOW"), same shape as obstacle_in_bound.
+#
+#   crosses_segment(SX,SY,GX,GY) -- Bug2's rule: fires the first time
+#       the walked trajectory RE-CROSSES the straight segment from
+#       (SX,SY) (wherever this leg's own circling began) to (GX,GY),
+#       AT a point CLOSER to (GX,GY) than (SX,SY) itself was -- the
+#       "makes actual progress" condition genuine Bug2 requires (a
+#       crossing that doesn't get closer to goal isn't a valid leave
+#       point; the search keeps going past it, exactly like a robot
+#       that circles back over its own outbound track without yet
+#       having rounded the obstacle). Deliberately TRIGGER-ONLY, no
+#       holds(crosses_segment(...),S) condition: "has my trajectory
+#       CROSSED this segment" is fundamentally an event over an
+#       interval of motion, not a fact true at a single instant the
+#       way obstacle_in_bound/line_of_sight_clear are -- forcing a
+#       point-in-time reading (e.g. "is the CURRENT position on the
+#       segment") would be a near-measure-zero, not-generally-useful
+#       question, unlike its trigger form.
+# =====================================================================
+def _orient(ax, ay, bx, by, cx, cy):
+    return (bx-ax)*(cy-ay) - (by-ay)*(cx-ax)
+
+
+def _segments_intersect(p1, p2, p3, p4):
+    """Standard orientation-based proper-crossing test -- same as
+    moveto_planners.py's own copy (kept separately per this module's
+    own no-cross-import-between-black-boxes rule; see that file's
+    header note by its own _OBSTACLE_POLYGONS load for why). Collinear
+    /touching edge cases are treated as NOT intersecting."""
+    ax, ay = p1
+    bx, by = p2
+    cx, cy = p3
+    dx, dy = p4
+    o1 = _orient(ax, ay, bx, by, cx, cy)
+    o2 = _orient(ax, ay, bx, by, dx, dy)
+    o3 = _orient(cx, cy, dx, dy, ax, ay)
+    o4 = _orient(cx, cy, dx, dy, bx, by)
+    return (o1 > 0) != (o2 > 0) and (o3 > 0) != (o4 > 0)
+
+
+def _find_polygon(obstacle_id, obstacle_polygons):
+    for oid, poly in obstacle_polygons:
+        if oid == obstacle_id:
+            return poly
+    return None
+
+
+def _segment_crosses_polygon(px, py, gx, gy, polygon):
+    """True iff the straight segment from (px,py) to (gx,gy) crosses
+    `polygon`'s own boundary -- i.e. the obstacle still occludes a
+    direct line of sight to (gx,gy) from here."""
+    return any(_segments_intersect((px, py), (gx, gy), a, b)
+               for a, b in _polygon_edges(polygon))
+
+
+def _first_clear_sample(control_points, t0, duration, z, zt, polygon, gx, gy, n):
+    for i in range(0, n + 1):
+        frac = i / n
+        t = t0 + duration*frac
+        x, y = _walk_noisy_point(control_points, t0, duration, z, zt, t)
+        if not _segment_crosses_polygon(x, y, gx, gy, polygon):
+            return i
+    return None
+
+
+def _bisect_los_crossing(control_points, t0, duration, z, zt, polygon, gx, gy, tlo, thi, eps):
+    while thi - tlo > eps:
+        tmid = (tlo + thi) / 2.0
+        x, y = _walk_noisy_point(control_points, t0, duration, z, zt, tmid)
+        if not _segment_crosses_polygon(x, y, gx, gy, polygon):
+            thi = tmid
+        else:
+            tlo = tmid
+    return (tlo + thi) / 2.0
+
+
+def _first_line_of_sight_clear_time(control_points, t0, duration, z, zt, obstacle_id, gx, gy, obstacle_polygons):
+    """Returns Tcross, or None if line of sight to (gx,gy) is never
+    clear of obstacle_id anywhere in this walk. obstacle_id naming no
+    known obstacle degrades to "nothing to occlude" -- clear from t0
+    itself -- same lenient-unknown-name spirit as an unrecognized
+    Trigger name elsewhere in this theory, not a hard error."""
+    polygon = _find_polygon(obstacle_id, obstacle_polygons)
+    if polygon is None:
+        return t0
+    n = BRACKET_SAMPLES
+    i = _first_clear_sample(control_points, t0, duration, z, zt, polygon, gx, gy, n)
+    if i is None:
+        return None
+    if i == 0:
+        return t0
+    tlo = t0 + duration*((i-1)/n)
+    thi = t0 + duration*(i/n)
+    return _bisect_los_crossing(control_points, t0, duration, z, zt, polygon, gx, gy, tlo, thi, CROSSING_EPS)
+
+
+def _bisect_segment_crossing(control_points, t0, duration, z, zt, sx, sy, gx, gy, tlo, thi, eps):
+    """Bisects on the SIGN of _orient(sx,sy,gx,gy, position(T)) -- the
+    side of the (sx,sy)-(gx,gy) LINE the walked position sits on --
+    rather than a within/not-within-threshold boolean, since crossing
+    a line (not a bounded region) is what's being detected here."""
+    def side(t):
+        x, y = _walk_noisy_point(control_points, t0, duration, z, zt, t)
+        return _orient(sx, sy, gx, gy, x, y) > 0
+    side_lo = side(tlo)
+    while thi - tlo > eps:
+        tmid = (tlo + thi) / 2.0
+        if side(tmid) == side_lo:
+            tlo = tmid
+        else:
+            thi = tmid
+    return (tlo + thi) / 2.0
+
+
+def _first_segment_crossing_time(control_points, t0, duration, z, zt, sx, sy, gx, gy):
+    """Returns Tcross, or None if the walked trajectory never
+    re-crosses segment (sx,sy)-(gx,gy) at a point CLOSER to (gx,gy)
+    than (sx,sy) itself was -- see this section's own header for why
+    that distance condition is part of the definition, not an add-on.
+    Walks bracket-sample-to-bracket-sample EDGES of the trajectory
+    (not single points -- a LINE crossing is an event between two
+    positions, unlike a threshold crossing which is a property of one
+    position at a time), bisecting each candidate edge for precision
+    and skipping any crossing that fails the distance test to keep
+    searching for a later one."""
+    n = BRACKET_SAMPLES
+    dep_dist = _dist(sx, sy, gx, gy)
+    prev_t = t0
+    prev_x, prev_y = _walk_noisy_point(control_points, t0, duration, z, zt, t0)
+    for i in range(1, n + 1):
+        frac = i / n
+        t = t0 + duration*frac
+        x, y = _walk_noisy_point(control_points, t0, duration, z, zt, t)
+        if _segments_intersect((sx, sy), (gx, gy), (prev_x, prev_y), (x, y)):
+            tcross = _bisect_segment_crossing(control_points, t0, duration, z, zt,
+                                               sx, sy, gx, gy, prev_t, t, CROSSING_EPS)
+            cx, cy = _walk_noisy_point(control_points, t0, duration, z, zt, tcross)
+            if _dist(cx, cy, gx, gy) < dep_dist:
+                return tcross
+            # crossed the line, but no closer to goal than the
+            # departure point -- not a valid Bug2 leave point, keep
+            # scanning forward for a later crossing that qualifies.
+        prev_t, prev_x, prev_y = t, x, y
+    return None
+
+
+# =====================================================================
 # PLAIN-PYTHON API -- ALWAYS available, testable without ProbLog.
 # =====================================================================
 def first_threshold_crossing_time_value(control_points, t0, duration, z, zt, threshold):
@@ -479,6 +661,36 @@ def obstacle_on_path_within_threshold_value(control_points, t0, duration, z, zt,
     return _obstacle_on_path_within_threshold(
         control_points, float(t0), float(duration), float(z), float(zt),
         float(x), float(y), float(threshold), OBSTACLE_POLYGONS)
+
+
+def first_line_of_sight_clear_time_value(control_points, t0, duration, z, zt, obstacle_id, gx, gy):
+    """control_points: [(x,y), ...]. Returns Tcross, or None if line of
+    sight from the trajectory to (gx,gy) is never clear of obstacle_id
+    anywhere in this walk."""
+    return _first_line_of_sight_clear_time(
+        control_points, float(t0), float(duration), float(z), float(zt),
+        str(obstacle_id), float(gx), float(gy), OBSTACLE_POLYGONS)
+
+
+def line_of_sight_clear_value(x, y, obstacle_id, gx, gy):
+    """A SINGLE-POINT check -- is (x,y) NOT occluded from (gx,gy) by
+    obstacle_id right now -- backs holds(line_of_sight_clear(...),S),
+    same relationship to first_line_of_sight_clear_time_value as
+    obstacle_within_threshold_value has to first_threshold_crossing_
+    time_value."""
+    polygon = _find_polygon(str(obstacle_id), OBSTACLE_POLYGONS)
+    if polygon is None:
+        return True
+    return not _segment_crosses_polygon(float(x), float(y), float(gx), float(gy), polygon)
+
+
+def first_segment_crossing_time_value(control_points, t0, duration, z, zt, sx, sy, gx, gy):
+    """control_points: [(x,y), ...]. Returns Tcross, or None if the
+    trajectory never re-crosses segment (sx,sy)-(gx,gy) at a point
+    closer to (gx,gy) than (sx,sy) itself was."""
+    return _first_segment_crossing_time(
+        control_points, float(t0), float(duration), float(z), float(zt),
+        float(sx), float(sy), float(gx), float(gy))
 
 
 # =====================================================================
@@ -547,3 +759,50 @@ if _HAVE_PROBLOG:
         if obstacle_on_path_within_threshold_value(cp, t0, duration, z, zt, x, y, threshold):
             return [()]
         return []
+
+    # ObstacleId arrives as a bare Prolog ATOM Term (e.g. obs5) --
+    # .functor is the plain Python string for a zero-arity atom Term
+    # (same pattern moveto_planners.py's follow_boarder already uses).
+    #
+    # first_line_of_sight_clear_time(+ControlPoints,+T0,+Duration,+Z,
+    # +Zt,+ObstacleId,+GX,+GY,-Tcross): backs the line_of_sight_clear
+    # (ObstacleId,GX,GY) TRIGGER (Bug0's leave rule).
+    # NOTE: for a SINGLE "-" output, problog's own problog_export_nondet
+    # wrapper (extern.py) treats each element of the returned list as
+    # the BARE output value itself, not a 1-tuple -- unlike the
+    # zero-output ([()]) and multi-output ([(a,b)]) cases above/below.
+    # Verified directly (a bare-tuple return silently bound Tcross to
+    # the tuple object itself instead of the float) before shipping
+    # this, same testing discipline as everywhere else in this project.
+    @problog_export_nondet("+list", "+term", "+term", "+term", "+term", "+term", "+term", "+term", "-float")
+    def first_line_of_sight_clear_time(control_points, t0, duration, z, zt, obstacle_id, gx, gy):
+        cp = [(float(p.args[0]), float(p.args[1])) for p in control_points]
+        tcross = first_line_of_sight_clear_time_value(
+            cp, t0, duration, z, zt, obstacle_id.functor, gx, gy)
+        if tcross is None:
+            return []
+        return [tcross]
+
+    # line_of_sight_clear(+X,+Y,+ObstacleId,+GX,+GY): backs the
+    # line_of_sight_clear(ObstacleId,GX,GY) CONDITION. Same zero-output
+    # boolean shape as obstacle_within_threshold above.
+    @problog_export_nondet("+term", "+term", "+term", "+term", "+term")
+    def line_of_sight_clear(x, y, obstacle_id, gx, gy):
+        if line_of_sight_clear_value(x, y, obstacle_id.functor, gx, gy):
+            return [()]
+        return []
+
+    # first_segment_crossing_time(+ControlPoints,+T0,+Duration,+Z,+Zt,
+    # +SX,+SY,+GX,+GY,-Tcross): backs the crosses_segment(SX,SY,GX,GY)
+    # TRIGGER (Bug2's leave rule) -- TRIGGER-ONLY, deliberately no
+    # condition counterpart, see this module's own "BUG-ALGORITHM
+    # BOUNDARY-LEAVE PRIMITIVES" section header for why.
+    # Same single-output bare-value convention as
+    # first_line_of_sight_clear_time above -- see its own note.
+    @problog_export_nondet("+list", "+term", "+term", "+term", "+term", "+term", "+term", "+term", "+term", "-float")
+    def first_segment_crossing_time(control_points, t0, duration, z, zt, sx, sy, gx, gy):
+        cp = [(float(p.args[0]), float(p.args[1])) for p in control_points]
+        tcross = first_segment_crossing_time_value(cp, t0, duration, z, zt, sx, sy, gx, gy)
+        if tcross is None:
+            return []
+        return [tcross]

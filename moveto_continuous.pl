@@ -98,9 +98,9 @@ obstacle_polygon(no_obstacles_placeholder, []) :- fail.
 :- consult('./config/config_generated.pl').
 
 % actions/moveto_planners.py provides plan_astar/5, plan_straight/5,
-% follow_boarder0/7, and follow_boarder1/7 as BLACK-BOX (Python-
-% implemented) predicates -- see that file's own header for the full
-% explanation. ProbLog imports and executes it
+% and follow_boarder/5 as BLACK-BOX (Python-implemented) predicates --
+% see that file's own header for the full explanation. ProbLog imports
+% and executes it
 % directly the moment this directive loads (problog.clausedb's
 % load_external_module), registering both predicates before anything
 % below that calls them is ever evaluated. Path is resolved relative to
@@ -686,6 +686,26 @@ first_battery_over_time(CP,T0,Duration,B0,Zb,Threshold,T0) :-
 % underlying primitives (obstacle_within_threshold/
 % obstacle_on_path_within_threshold/battery/3) a single time instead of
 % across a bracket-scanned trajectory.
+%
+% line_of_sight_clear(ObstacleId,GX,GY) and crosses_segment(SX,SY,GX,GY)
+% are the Bug-algorithm boundary-LEAVE triggers, for use on a MoveTo leg
+% whose ControlPoints came from moveto_planners.py's follow_boarder
+% (ObstacleId,Offset) planner (a full clockwise loop around the
+% obstacle's offset boundary, no stopping logic of its own -- see that
+% predicate's own header). Which bug variant a leg implements is
+% entirely a matter of WHICH of these two names its own Triggers list
+% carries -- line_of_sight_clear for Bug0 (fires as soon as ObstacleId
+% stops occluding a straight line to (GX,GY)), crosses_segment for
+% Bug2 (fires when the boundary walk re-crosses the straight segment
+% from (SX,SY) -- wherever the leg's own circling began -- to (GX,GY),
+% at a point strictly closer to goal than (SX,SY) was; see
+% collision_geometry.py's own "BUG-ALGORITHM BOUNDARY-LEAVE PRIMITIVES"
+% section for exactly why that distance condition is part of the
+% definition). line_of_sight_clear(ObstacleId,GX,GY) is ALSO usable as
+% a cond() leaf (holds(line_of_sight_clear(...)) further down);
+% crosses_segment deliberately is NOT -- see collision_geometry.py's
+% own note on why "has my trajectory crossed this segment" doesn't
+% have a meaningful point-in-time reading the way the others do.
 % ---------------------------------------------------------------
 trigger_crossing_time(collision, CP,T0,Duration,Z,Zt,_Zb,_B0, crashed(ObstacleId), Tcross) :-
     first_collision_time(CP,T0,Duration,Z,Zt,Tcross,ObstacleId).
@@ -707,6 +727,12 @@ trigger_crossing_time(battery_equal(Threshold), CP,T0,Duration,_Z,_Zt,Zb,B0, bat
 
 trigger_crossing_time(battery_over(Threshold), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_over(Threshold), Tcross) :-
     first_battery_over_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
+
+trigger_crossing_time(line_of_sight_clear(ObstacleId,GX,GY), CP,T0,Duration,Z,Zt,_Zb,_B0, line_of_sight_clear(ObstacleId,GX,GY), Tcross) :-
+    first_line_of_sight_clear_time(CP,T0,Duration,Z,Zt,ObstacleId,GX,GY,Tcross).
+
+trigger_crossing_time(crosses_segment(SX,SY,GX,GY), CP,T0,Duration,Z,Zt,_Zb,_B0, crosses_segment(SX,SY,GX,GY), Tcross) :-
+    first_segment_crossing_time(CP,T0,Duration,Z,Zt,SX,SY,GX,GY,Tcross).
 
 % all_trigger_candidates(+Triggers,...,-Candidates): Candidates is a
 % list of Reason-Time pairs, one per trigger in Triggers that ACTUALLY
@@ -1155,40 +1181,38 @@ plan_call(straight, SX,SY,GX,GY, CP, completed, true) :-
 plan_call(straight, SX,SY,GX,GY, [], no_path, false) :-
     \+ plan_straight(SX,SY,GX,GY, _).
 
-% follow_boarder0(ObstacleId,Offset) -- a THIRD planner, exactly the
+% follow_boarder(ObstacleId,Offset) -- a THIRD planner, exactly the
 % "add one more plan_astar-style function plus one more pair of
 % plan_call/8 clauses" recipe this section's own header comment
-% already anticipated: a Bug0-style boundary-following planner
-% (moveto_planners.py's follow_boarder0/7). Algorithm here is a
-% COMPOUND term, not a bare atom like astar/straight -- ObstacleId
-% (which obstacle_polygon/2 to circle) and Offset (how far out to stay
-% from its boundary) are carried INSIDE Algorithm itself, so planWith/
-% do_node/planned_with need NO interface change at all: they already
-% treat Algorithm as opaque. Offset is typically unified with the SAME
-% Threshold as whichever obstacle_on_path(Threshold)/obstacle_in_bound
-% (Threshold) trigger or condition supplied ObstacleId in the first
-% place -- see moveto_planners.py's own follow_boarder0_points
-% docstring for why a small residual gap between the robot's actual
-% position and that nominal Offset is harmless.
-plan_call(follow_boarder0(ObstacleId,Offset), SX,SY,GX,GY, CP, completed, true) :-
-    follow_boarder0(SX,SY,GX,GY,ObstacleId,Offset, CP).
-plan_call(follow_boarder0(ObstacleId,Offset), SX,SY,GX,GY, [], no_path, false) :-
-    \+ follow_boarder0(SX,SY,GX,GY,ObstacleId,Offset, _).
-
-% follow_boarder1(ObstacleId,Offset) -- a FOURTH planner, SAME compound-
-% Algorithm-term shape as follow_boarder0 above (zero further interface
-% change needed), same clockwise offset-boundary walk underneath, but a
-% DIFFERENT stopping rule: Bug1-style -- keeps circling until the
-% boundary walk re-crosses the straight segment from THIS planning
-% call's own start position to Goal (the direct path the robot was on
-% before ObstacleId forced this diversion), rather than stopping as
-% soon as line-of-sight to goal clears (follow_boarder0's own rule) --
-% see moveto_planners.py's _follow_boarder1_control_points for the
-% exact geometry.
-plan_call(follow_boarder1(ObstacleId,Offset), SX,SY,GX,GY, CP, completed, true) :-
-    follow_boarder1(SX,SY,GX,GY,ObstacleId,Offset, CP).
-plan_call(follow_boarder1(ObstacleId,Offset), SX,SY,GX,GY, [], no_path, false) :-
-    \+ follow_boarder1(SX,SY,GX,GY,ObstacleId,Offset, _).
+% already anticipated. Algorithm here is a COMPOUND term, not a bare
+% atom like astar/straight -- ObstacleId (which obstacle_polygon/2 to
+% circle) and Offset (how far out to stay from its boundary) are
+% carried INSIDE Algorithm itself, so planWith/do_node/planned_with
+% need NO interface change at all: they already treat Algorithm as
+% opaque. Offset is typically unified with the SAME Threshold as
+% whichever obstacle_on_path(Threshold)/obstacle_in_bound(Threshold)
+% trigger or condition supplied ObstacleId in the first place.
+%
+% UNLIKE an earlier version of this planner, follow_boarder does NOT
+% decide when to stop circling -- it plans a FULL clockwise loop around
+% ObstacleId's offset boundary (moveto_planners.py's follow_boarder/5),
+% always succeeding for a known obstacle (Reason=completed regardless
+% of Goal, since there is no Goal-relative stopping decision to make
+% here at all -- notice the /5 arity below has no GX,GY). WHEN to
+% actually leave the boundary and hand off to a straight-line planner
+% is entirely the job of whichever trigger halts the SUBSEQUENT
+% moveto_leg(CP,[...]) using this CP -- line_of_sight_clear(ObstacleId,
+% GX,GY) for Bug0, crosses_segment(SX,SY,GX,GY) for Bug2 (see the
+% TRIGGERS section above) -- so the bug-variant choice is a matter of
+% that Triggers list, not a different planner call. If the attached
+% trigger never fires, the leg just completes the whole loop naturally
+% and Status comes out false (not within goal_tolerance of the loop's
+% own arbitrary endpoint) via the ordinary leg_status mechanism -- no
+% special no_path case needed here for that.
+plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, CP, completed, true) :-
+    follow_boarder(SX,SY,ObstacleId,Offset, CP).
+plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, [], no_path, false) :-
+    \+ follow_boarder(SX,SY,ObstacleId,Offset, _).
 
 % -- PLANNING leaf: ONE template, planWith(Algorithm,Goal,CP), covering
 %    every planner via plan_call/8's own dispatch on Algorithm --
@@ -1350,6 +1374,17 @@ holds(at_goal(Tol), S) :-
 holds(obstacle_in_bound(Threshold), S) :-
     now(S, T), at(X,Y,T,S),
     obstacle_within_threshold(X,Y,Threshold).
+
+% line_of_sight_clear(ObstacleId,GX,GY): true iff the CURRENT position
+% is NOT occluded from (GX,GY) by ObstacleId's own boundary. Same
+% underlying primitive as the line_of_sight_clear(ObstacleId,GX,GY)
+% TRIGGER (Bug0's own leave rule -- see trigger_crossing_time/10) --
+% but this checks ONE point (the current situation) via a single call
+% to line_of_sight_clear/5, exactly the same "single check, no
+% bracket-scan" relationship obstacle_in_bound has to its own trigger.
+holds(line_of_sight_clear(ObstacleId,GX,GY), S) :-
+    now(S, T), at(X,Y,T,S),
+    line_of_sight_clear(X,Y,ObstacleId,GX,GY).
 
 % obstacle_on_path(Threshold): true iff the CURRENT position is within
 % Threshold of an obstacle THIS WALK'S OWN TRAJECTORY actually enters

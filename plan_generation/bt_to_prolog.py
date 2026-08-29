@@ -89,16 +89,12 @@ _ACTION_DISPATCH = {
     "MoveTo": {"kind": "moveto_leg"},
     "PlanAstar": {"kind": "planWith", "algorithm": "astar"},
     "PlanStraight": {"kind": "planWith", "algorithm": "straight"},
-    # A third/fourth planner, dispatched through the SAME planWith
-    # template, but with a COMPOUND Algorithm term (obstacle_id/offset
-    # ride inside it, not a fixed atom) -- the shared "kind" branch
-    # below builds that term from each node's own ports instead of
-    # using a static "algorithm" string. FollowBoarder0/FollowBoarder1
-    # differ only in which Prolog functor plan_call/8 should dispatch
-    # on (follow_boarder0/follow_boarder1) -- both have identical port
-    # shapes (goal/obstacle_id/offset/control_points/reason/status).
-    "FollowBoarder0": {"kind": "planWith_boundary_algorithm", "functor": "follow_boarder0"},
-    "FollowBoarder1": {"kind": "planWith_boundary_algorithm", "functor": "follow_boarder1"},
+    # A third planner, dispatched through the SAME planWith template,
+    # but with a COMPOUND Algorithm term (obstacle_id/offset ride
+    # inside it, not a fixed atom, and NO goal_point at all -- this
+    # planner doesn't take one, see its own "kind" branch below) --
+    # zero further interface change needed.
+    "FollowBoarder": {"kind": "planWith_follow_boarder"},
 }
 # "single_float_port": the shared shape of every cond(Functor(Value))
 # condition whose one port is a plain float -- AtGoal, ObstacleInBound,
@@ -113,6 +109,9 @@ _CONDITION_DISPATCH = {
     "BatteryEqual": {"kind": "single_float_port", "functor": "battery_equal", "port": "threshold"},
     "BatteryOver": {"kind": "single_float_port", "functor": "battery_over", "port": "threshold"},
     "HaltedWith": {"kind": "halted_with_cond"},
+    # line_of_sight_clear(ObstacleId,GX,GY) -- obstacle_id verbatim
+    # Prolog text (like HaltedWith's reason), goal a Point literal.
+    "LineOfSightClear": {"kind": "line_of_sight_clear_cond"},
 }
 _CONTROL_FLOW = {"Sequence": "seq_node", "Fallback": "fallback_node"}
 
@@ -194,18 +193,27 @@ def _validate_ports(tag, elem, port_specs):
 
 
 def _point_literal(text, tag, port_name):
+    x, y = _point_xy(text, tag, port_name)
+    return f"point({x},{y})"
+
+
+def _point_xy(text, tag, port_name):
+    """Same "X;Y" parsing as _point_literal, but returns the raw
+    (x,y) floats instead of a wrapped point(X,Y) term -- for the rarer
+    case (line_of_sight_clear(ObstacleId,GX,GY), notably) where the
+    target Prolog predicate takes GX,GY as flat arguments rather than
+    a nested point/2 term."""
     parts = text.split(";")
     if len(parts) != 2:
         raise BTValidationError(
             f"<{tag}>'s '{port_name}' port ('{text}') is not a valid Point "
             f"-- expected \"X;Y\", e.g. \"11.675;11.525\".")
     try:
-        x, y = float(parts[0]), float(parts[1])
+        return float(parts[0]), float(parts[1])
     except ValueError:
         raise BTValidationError(
             f"<{tag}>'s '{port_name}' port ('{text}') has non-numeric "
             f"X/Y -- expected \"X;Y\" with two floats.")
-    return f"point({x},{y})"
 
 
 def _string_list_literal(text):
@@ -245,8 +253,7 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool):
             cp_var = var_pool.var_for(key)
             return f"planWith({info['algorithm']},{goal_point},{cp_var})"
 
-        if info["kind"] == "planWith_boundary_algorithm":
-            goal_point = _point_literal(attrs["goal"], tag, "goal")
+        if info["kind"] == "planWith_follow_boarder":
             # obstacle_id is written VERBATIM as Prolog text (a bare
             # atom), same convention as HaltedWith's own reason port
             # below -- NOT quoted, NOT blackboard-ref-checked (nothing
@@ -264,7 +271,14 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool):
             key = _blackboard_key(cp_value)
             var_pool.producers.add(key)
             cp_var = var_pool.var_for(key)
-            return f"planWith({info['functor']}({obstacle_id},{offset}),{goal_point},{cp_var})"
+            # planWith/3's Goal slot is part of the SHARED template
+            # every planner sits inside (do_node(planWith(Algorithm,
+            # Goal,CP),...) in moveto_continuous.pl) -- FollowBoarder
+            # itself takes no goal port (see its own schema.yaml entry)
+            # and plan_call/8's follow_boarder clauses ignore it
+            # outright, so a placeholder point(0.0,0.0) is spliced in
+            # here purely to satisfy that shared shape, never read.
+            return f"planWith(follow_boarder({obstacle_id},{offset}),point(0.0,0.0),{cp_var})"
 
     if tag in _CONDITION_DISPATCH:
         info = _CONDITION_DISPATCH[tag]
@@ -274,6 +288,10 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool):
         if info["kind"] == "halted_with_cond":
             reason = attrs["reason"].strip()
             return f"cond(halted_with_cond({reason}))"
+        if info["kind"] == "line_of_sight_clear_cond":
+            obstacle_id = attrs["obstacle_id"].strip()
+            gx, gy = _point_xy(attrs["goal"], tag, "goal")
+            return f"cond(line_of_sight_clear({obstacle_id},{gx},{gy}))"
 
     raise BTValidationError(f"Unhandled schema entry '{tag}' -- add it to "
                              f"_ACTION_DISPATCH/_CONDITION_DISPATCH.")

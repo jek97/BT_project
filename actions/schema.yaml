@@ -106,7 +106,15 @@ actions:
           battery never rises within a walk today, but is structured
           for a genuine future-crossing search once recharging is
           modeled -- see first_battery_over_time's own note in
-          moveto_continuous.pl) (see trigger_crossing_time/9 in
+          moveto_continuous.pl), line_of_sight_clear(ObstacleId,GX,GY)
+          / crosses_segment(SX,SY,GX,GY) (the Bug0/Bug2 boundary-LEAVE
+          triggers for a leg whose ControlPoints came from a preceding
+          FollowBoarder node -- fires respectively as soon as
+          ObstacleId stops occluding a straight line to (GX,GY), or
+          when the walk re-crosses segment (SX,SY)-(GX,GY) at a point
+          closer to (GX,GY) than (SX,SY) was; see collision_geometry.py's
+          "BUG-ALGORITHM BOUNDARY-LEAVE PRIMITIVES" section for the
+          full geometry) (see trigger_crossing_time/10 in
           moveto_continuous.pl for the complete, current list -- a
           future trigger added there needs no schema change beyond
           documenting its name here). An empty list means the leg
@@ -233,47 +241,42 @@ actions:
         description: "true iff reason=completed."
 
   # ----------------------------------------------------------------
-  # A THIRD/FOURTH planner -- Bug0-/Bug1-style boundary following,
-  # dispatched through the SAME planWith(Algorithm,Goal,CP)/
-  # plan_call/8 template as PlanAstar/PlanStraight above, just with a
-  # COMPOUND Algorithm term (follow_boarderN(ObstacleId,Offset))
-  # instead of a bare atom, so the two extra inputs these planners
-  # need ride along with zero change to planWith/do_node/planned_with
-  # -- see plan_call/8's own follow_boarder0/follow_boarder1 clauses
-  # in moveto_continuous.pl. FollowBoarder0 and FollowBoarder1 share
-  # an IDENTICAL port shape, differing only in WHEN they stop
-  # circling the obstacle -- see each entry's own description.
+  # A THIRD planner -- boundary following, shared by EVERY Bug-
+  # algorithm variant, dispatched through the SAME planWith(Algorithm,
+  # Goal,CP)/plan_call/8 template as PlanAstar/PlanStraight above, just
+  # with a COMPOUND Algorithm term (follow_boarder(ObstacleId,Offset))
+  # instead of a bare atom -- see plan_call/8's own follow_boarder
+  # clauses in moveto_continuous.pl. UNLIKE an earlier version of this
+  # schema (which had separate FollowBoarder0/FollowBoarder1 actions,
+  # each with the stopping rule baked in), this planner does NOT decide
+  # when to leave the boundary at all -- it just plans a full clockwise
+  # loop, and WHICH bug variant a leg implements is entirely a matter
+  # of which trigger the SUBSEQUENT MoveTo node's own `triggers` port
+  # names: line_of_sight_clear(ObstacleId,GX,GY) for Bug0, crosses_
+  # segment(SX,SY,GX,GY) for Bug2 -- see MoveTo's own triggers port
+  # description below, and LineOfSightClear's entry further down for
+  # the condition-node form of the first one.
   # ----------------------------------------------------------------
-  - id: FollowBoarder0
+  - id: FollowBoarder
     prolog_action: planWith
     description: >
-      Bug0-style boundary-following planner (moveto_planners.py's
-      follow_boarder0/7): from the CURRENT position (now/2 + at/4),
-      traces CLOCKWISE around obstacle_id's own obstacle_polygon/2
-      boundary, offset outward by `offset`, stopping at the first
-      point from which obstacle_id no longer occludes a straight line
-      to the EXPLICIT goal port -- deliberately NOT all the way to
-      goal itself; a subsequent PlanStraight+MoveTo leg is expected to
-      cover the rest, per the Bug0 "go straight, circle the obstacle
-      when blocked, go straight again once clear" pattern. `offset` is
-      typically unified with the SAME Threshold as whichever
-      obstacle_on_path(Threshold)/obstacle_in_bound(Threshold)
-      trigger/condition supplied obstacle_id in the first place -- a
-      small residual gap between the robot's actual position and that
-      nominal offset (from bisection tolerance, not noise -- see
-      first_on_path_crossing_time's own note) is harmless, absorbed
-      into the planner's own first path segment. Same instantaneous/
-      traceability semantics as PlanAstar/PlanStraight otherwise
-      (records a planned(follow_boarder0(ObstacleId,Offset),Reason)
-      marker, does not gate on a precondition).
+      Boundary-following planner (moveto_planners.py's follow_boarder/
+      5): from the CURRENT position (now/2 + at/4), traces a FULL
+      CLOCKWISE LOOP around obstacle_id's own obstacle_polygon/2
+      boundary, offset outward by `offset`. Deliberately has NO goal
+      port and NO stopping condition of its own -- see this action's
+      own header comment above. `offset` is typically unified with the
+      SAME Threshold as whichever obstacle_on_path(Threshold)/
+      obstacle_in_bound(Threshold) trigger/condition supplied
+      obstacle_id in the first place -- a small residual gap between
+      the robot's actual position and that nominal offset (from
+      bisection tolerance, not noise -- see first_on_path_crossing_
+      time's own note) is harmless, absorbed into the planner's own
+      first path segment. Same instantaneous/traceability semantics as
+      PlanAstar/PlanStraight otherwise (records a
+      planned(follow_boarder(ObstacleId,Offset),Reason) marker, does
+      not gate on a precondition).
     ports:
-      - name: goal
-        direction: input
-        type: Point
-        required: true
-        description: >
-          Target position for this planning call -- see PlanAstar's
-          own goal port.
       - name: obstacle_id
         direction: input
         type: std::string
@@ -302,77 +305,13 @@ actions:
         type: std::vector<Point>
         description: >
           The boundary-following path, as chained cubic Bezier control
-          points, from the current position to the first point along
-          the offset boundary where obstacle_id stops occluding the
-          straight line to goal. Empty if reason=no_path.
+          points -- a full clockwise loop starting and ending at the
+          current position's own nearest point on the offset boundary.
+          Empty if reason=no_path.
       - name: reason
         direction: output
         type: std::string
-        description: >
-          One of: completed, no_path (obstacle_id names no known
-          obstacle, or a full circuit of its offset boundary never
-          clears line-of-sight to goal).
-      - name: status
-        direction: output
-        type: bool
-        description: "true iff reason=completed."
-
-  - id: FollowBoarder1
-    prolog_action: planWith
-    description: >
-      Bug1-style boundary-following planner (moveto_planners.py's
-      follow_boarder1/7) -- SAME clockwise boundary-offset walk as
-      FollowBoarder0 above, but a DIFFERENT stopping rule: keeps
-      circling until the boundary walk itself RE-CROSSES the straight
-      segment from THIS planning call's own start position (now/2 +
-      at/4, at the moment this node runs) to the EXPLICIT goal port --
-      the direct path the robot was on before obstacle_id forced this
-      diversion -- rather than stopping as soon as line-of-sight to
-      goal clears (FollowBoarder0's own rule). Deliberately NOT all the
-      way to goal itself, same "a subsequent PlanStraight+MoveTo leg
-      covers the rest" pattern as FollowBoarder0. Same instantaneous/
-      traceability semantics otherwise (records a
-      planned(follow_boarder1(ObstacleId,Offset),Reason) marker, does
-      not gate on a precondition).
-    ports:
-      - name: goal
-        direction: input
-        type: Point
-        required: true
-        description: >
-          Target position for this planning call -- see PlanAstar's
-          own goal port.
-      - name: obstacle_id
-        direction: input
-        type: std::string
-        required: true
-        description: >
-          Which obstacle_polygon/2 Id to circle -- see FollowBoarder0's
-          own obstacle_id port.
-      - name: offset
-        direction: input
-        type: double
-        required: true
-        description: >
-          Distance to maintain from the obstacle's own boundary edge
-          while circling it, metres -- see FollowBoarder0's own offset
-          port for units/definition.
-      - name: control_points
-        direction: output
-        type: std::vector<Point>
-        description: >
-          The boundary-following path, as chained cubic Bezier control
-          points, from the current position to the exact point where
-          the offset boundary re-crosses the straight segment from
-          this call's own start position to goal. Empty if
-          reason=no_path.
-      - name: reason
-        direction: output
-        type: std::string
-        description: >
-          One of: completed, no_path (obstacle_id names no known
-          obstacle, or a full circuit of its offset boundary never
-          re-crosses the start-goal segment).
+        description: "One of: completed, no_path (obstacle_id names no known obstacle)."
       - name: status
         direction: output
         type: bool
@@ -529,3 +468,41 @@ conditions:
         type: double
         required: true
         description: Battery level threshold, percent (0-100).
+
+  # ----------------------------------------------------------------
+  # holds(line_of_sight_clear(ObstacleId,GX,GY), S) in
+  # moveto_continuous.pl -- Bug0's own boundary-leave rule as a
+  # standalone condition node. NO CrossesSegment condition counterpart
+  # exists -- "has my trajectory crossed this segment" is fundamentally
+  # an event over an interval of motion, not a fact true at a single
+  # instant the way this one is; see collision_geometry.py's own "BUG-
+  # ALGORITHM BOUNDARY-LEAVE PRIMITIVES" section for the full reasoning.
+  # crosses_segment(SX,SY,GX,GY) remains usable as a MoveTo TRIGGER
+  # (see MoveTo's own triggers port above) -- just not as a Condition
+  # leaf on its own.
+  # ----------------------------------------------------------------
+  - id: LineOfSightClear
+    prolog_condition: line_of_sight_clear
+    description: >
+      True iff the CURRENT position (now/2 + at/4) is NOT occluded
+      from goal by obstacle_id's own boundary -- a single-point check
+      reusing the exact same underlying geometry (collision_geometry.py's
+      line_of_sight_clear/segment_crosses_polygon) as the
+      line_of_sight_clear(ObstacleId,GX,GY) TRIGGER (Bug0's own leave
+      rule), just evaluated once instead of searched across a whole
+      future trajectory.
+    ports:
+      - name: obstacle_id
+        direction: input
+        type: std::string
+        required: true
+        description: >
+          Which obstacle_polygon/2 Id to check occlusion against --
+          see FollowBoarder's own obstacle_id port.
+      - name: goal
+        direction: input
+        type: Point
+        required: true
+        description: >
+          The point line-of-sight is checked toward -- see PlanAstar's
+          own goal port.

@@ -58,10 +58,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
-from moveto_planners import (
-    plan_astar_points, plan_straight_points,
-    follow_boarder0_points, follow_boarder1_points,
-)
+from moveto_planners import plan_astar_points, plan_straight_points, follow_boarder_points
 
 
 # =====================================================================
@@ -100,32 +97,14 @@ def bt_plan_straight(sx, sy, gx, gy):
     }
 
 
-def bt_follow_boarder0(sx, sy, gx, gy, obstacle_id, offset):
+def bt_follow_boarder(sx, sy, obstacle_id, offset):
     """BT.cpp-compatible wrapper around moveto_planners.py's
-    follow_boarder0_points -- matches FollowBoarder0's five input/
-    output ports in schema.yaml exactly. control_points is [] and
-    reason is "no_path" if obstacle_id names no known obstacle, or a
-    full circuit of its offset boundary never clears line-of-sight to
-    (gx,gy) -- see follow_boarder0_points's own docstring for why the
-    returned path deliberately stops short of goal itself."""
-    control_points = follow_boarder0_points(sx, sy, gx, gy, obstacle_id, offset)
-    if control_points is None:
-        return {"control_points": [], "reason": "no_path", "status": False}
-    return {
-        "control_points": [(float(x), float(y)) for x, y in control_points],
-        "reason": "completed",
-        "status": True,
-    }
-
-
-def bt_follow_boarder1(sx, sy, gx, gy, obstacle_id, offset):
-    """BT.cpp-compatible wrapper around moveto_planners.py's
-    follow_boarder1_points -- matches FollowBoarder1's ports in
-    schema.yaml exactly, same shape as bt_follow_boarder0 above.
-    control_points is [] and reason is "no_path" if obstacle_id names
-    no known obstacle, or a full circuit of its offset boundary never
-    re-crosses the (sx,sy)-(gx,gy) segment."""
-    control_points = follow_boarder1_points(sx, sy, gx, gy, obstacle_id, offset)
+    follow_boarder_points -- matches FollowBoarder's four input/output
+    ports in schema.yaml exactly (no goal port -- this planner doesn't
+    decide when to leave the boundary, see follow_boarder_points's own
+    docstring). control_points is [] and reason is "no_path" only if
+    obstacle_id names no known obstacle."""
+    control_points = follow_boarder_points(sx, sy, obstacle_id, offset)
     if control_points is None:
         return {"control_points": [], "reason": "no_path", "status": False}
     return {
@@ -187,39 +166,30 @@ def plan_with_term(algorithm, goal, cp_var="CP"):
     return f"planWith({algorithm},point({float(gx)},{float(gy)}),{cp_var})"
 
 
-def _boundary_algorithm_term(functor, obstacle_id, offset, goal, cp_var="CP"):
-    """Build the moveto_continuous.pl TERM TEXT for one FollowBoarder0/
-    FollowBoarder1 node's bound inputs -- planWith(Functor(ObstacleId,
-    Offset), point(GoalX,GoalY), CPVar), same "leave CP free"
-    convention as plan_with_term above. Shared by both planners below
-    (identical port shape, only the Prolog functor differs -- see
-    plan_call/8's own follow_boarder0/follow_boarder1 clauses).
-    obstacle_id is written VERBATIM as Prolog text (a bare atom, e.g.
-    "obs5"), same convention as halted_with_cond_term's own reason
-    argument below -- NOT quoted, NOT float-parsed.
+def follow_boarder_term(obstacle_id, offset, cp_var="CP"):
+    """Build the moveto_continuous.pl TERM TEXT for one FollowBoarder
+    node's bound inputs -- planWith(follow_boarder(ObstacleId,Offset),
+    point(0.0,0.0), CPVar), same "leave CP free" convention as
+    plan_with_term above. The point(0.0,0.0) is a PLACEHOLDER, not a
+    real goal -- FollowBoarder takes no goal port at all (it doesn't
+    decide when to leave the boundary; see moveto_planners.py's
+    follow_boarder_points docstring), but planWith/3's Goal slot is
+    part of the shared template every planner sits inside, so
+    something has to fill it; plan_call/8's own follow_boarder clauses
+    ignore it outright. obstacle_id is written VERBATIM as Prolog text
+    (a bare atom, e.g. "obs5"), same convention as
+    halted_with_cond_term's own reason argument below -- NOT quoted,
+    NOT float-parsed.
 
-    functor: "follow_boarder0" or "follow_boarder1".
     obstacle_id: a Prolog atom, as text (e.g. "obs5").
     offset: distance to maintain from the obstacle's own boundary,
         metres -- typically the SAME Threshold as whichever trigger/
         condition supplied obstacle_id in the first place.
-    goal: an (x,y) pair.
 
     Returns Prolog source text, e.g.:
-        "planWith(follow_boarder0(obs5,0.6),point(17.0,17.0),CP)"
+        "planWith(follow_boarder(obs5,0.6),point(0.0,0.0),CP)"
     """
-    gx, gy = goal
-    return f"planWith({functor}({obstacle_id},{float(offset)}),point({float(gx)},{float(gy)}),{cp_var})"
-
-
-def follow_boarder0_with_term(obstacle_id, offset, goal, cp_var="CP"):
-    """FollowBoarder0's own term builder -- see _boundary_algorithm_term."""
-    return _boundary_algorithm_term("follow_boarder0", obstacle_id, offset, goal, cp_var)
-
-
-def follow_boarder1_with_term(obstacle_id, offset, goal, cp_var="CP"):
-    """FollowBoarder1's own term builder -- see _boundary_algorithm_term."""
-    return _boundary_algorithm_term("follow_boarder1", obstacle_id, offset, goal, cp_var)
+    return f"planWith(follow_boarder({obstacle_id},{float(offset)}),point(0.0,0.0),{cp_var})"
 
 
 # =====================================================================
@@ -276,6 +246,18 @@ def battery_over_cond_term(threshold):
     return f"cond(battery_over({float(threshold)}))"
 
 
+def line_of_sight_clear_cond_term(obstacle_id, goal):
+    """cond(line_of_sight_clear(ObstacleId,GX,GY)) term text -- matches
+    LineOfSightClear's obstacle_id/goal ports in schema.yaml. Bug0's
+    own boundary-leave rule as a standalone condition; no
+    crosses_segment counterpart exists -- see schema.yaml's own note
+    on LineOfSightClear for why. obstacle_id is written VERBATIM as
+    Prolog text (a bare atom), same convention as halted_with_cond_term
+    above."""
+    gx, gy = goal
+    return f"cond(line_of_sight_clear({obstacle_id},{float(gx)},{float(gy)}))"
+
+
 # =====================================================================
 # Registry -- maps schema.yaml's IDs to their implementation here.
 # Not required for either caller to function (both can call the
@@ -303,17 +285,11 @@ ACTIONS = {
         "func": bt_plan_straight,
         "term_builder": plan_with_term,
     },
-    "FollowBoarder0": {
+    "FollowBoarder": {
         "kind": "callable",
         "prolog_action": "planWith",
-        "func": bt_follow_boarder0,
-        "term_builder": follow_boarder0_with_term,
-    },
-    "FollowBoarder1": {
-        "kind": "callable",
-        "prolog_action": "planWith",
-        "func": bt_follow_boarder1,
-        "term_builder": follow_boarder1_with_term,
+        "func": bt_follow_boarder,
+        "term_builder": follow_boarder_term,
     },
 }
 
@@ -352,5 +328,10 @@ CONDITIONS = {
         "kind": "interface_only",
         "prolog_condition": "battery_over",
         "term_builder": battery_over_cond_term,
+    },
+    "LineOfSightClear": {
+        "kind": "interface_only",
+        "prolog_condition": "line_of_sight_clear",
+        "term_builder": line_of_sight_clear_cond_term,
     },
 }

@@ -89,13 +89,23 @@ actions:
           robot's own safety margin), battery (fixed threshold,
           exactly 0%), obstacle_in_bound(Threshold) (a GENERIC,
           per-call obstacle-proximity trigger -- what "obstacle
-          sighted" was renamed to), battery_below(Threshold) /
+          sighted" was renamed to; fires on proximity to ANY
+          obstacle's boundary, whether or not the trajectory ever
+          actually enters it), obstacle_on_path(Threshold) (the SAME
+          per-call proximity idea, but restricted to obstacles the
+          trajectory ACTUALLY ENTERS somewhere along the walk -- a
+          genuinely different, stricter geometric test, not another
+          threshold for obstacle_in_bound; see
+          first_on_path_crossing_time's own note in
+          moveto_continuous.pl), battery_below(Threshold) /
           battery_equal(Threshold) / battery_over(Threshold) (the same
           per-call idea for battery level, at <, =, and > respectively
           -- all THREE are SEPARATE, additional triggers from the
           fixed battery=0% one, not replacements for it; battery_over
-          is degenerate in practice since battery never rises within a
-          walk, see first_battery_over_time's own note in
+          currently only ever fires immediately or never, since
+          battery never rises within a walk today, but is structured
+          for a genuine future-crossing search once recharging is
+          modeled -- see first_battery_over_time's own note in
           moveto_continuous.pl) (see trigger_crossing_time/9 in
           moveto_continuous.pl for the complete, current list -- a
           future trigger added there needs no schema change beyond
@@ -111,9 +121,10 @@ actions:
         description: >
           One of: completed, battery_depleted, crashed(ObstacleId),
           obstacle_in_bound(Threshold,ObstacleId),
-          battery_under(Threshold), battery_equal(Threshold),
-          battery_over(Threshold), or any other entry from triggers
-          that actually fired. crashed/obstacle_in_bound carry WHICH
+          obstacle_on_path(Threshold,ObstacleId), battery_under(Threshold),
+          battery_equal(Threshold), battery_over(Threshold), or any
+          other entry from triggers that actually fired.
+          crashed/obstacle_in_bound/obstacle_on_path carry WHICH
           obstacle_polygon/2 Id they fired against (an argmin over
           obstacles at the exact crossing point, computed by
           collision_geometry.py), not just that one fired. Every
@@ -283,6 +294,32 @@ conditions:
       what "obstacle sighted" was renamed to; there is no fixed global
       threshold anymore -- every use, trigger or condition, supplies
       its own.
+    ports:
+      - name: threshold
+        direction: input
+        type: double
+        required: true
+        description: Distance threshold, metres.
+
+  # ----------------------------------------------------------------
+  # holds(obstacle_on_path(Threshold), S) in moveto_continuous.pl.
+  # ----------------------------------------------------------------
+  - id: ObstacleOnPath
+    prolog_condition: obstacle_on_path
+    description: >
+      True iff the CURRENT position (now/2 + at/4) is within
+      Threshold of an obstacle THIS WALK'S OWN TRAJECTORY actually
+      enters (goes geometrically inside, not just near) somewhere
+      across its full span -- a genuinely stricter, different test
+      from ObstacleInBound above, not another threshold for it: a
+      trajectory can graze within ObstacleInBound's Threshold of an
+      obstacle's boundary (e.g. because that threshold already
+      accounts for the robot's own radius) without ever actually
+      entering the obstacle's interior, in which case ObstacleOnPath
+      does NOT fire for it. Needs the CURRENT walk's own trajectory
+      to check against, so this fails outright before any walk has
+      started (e.g. at s0) -- see holds(obstacle_on_path(...))'s own
+      comment in moveto_continuous.pl.
     ports:
       - name: threshold
         direction: input

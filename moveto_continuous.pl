@@ -548,18 +548,38 @@ first_battery_equal_time(CP,T0,Duration,B0,Zb,Threshold,Tcross) :-
     Tcross = Tcross0.
 
 % first_battery_over_time(+CP,+T0,+Duration,+B0,+Zb,+Threshold,-Tcross):
-% DEGENERATE compared to the other two, and deliberately so: battery
-% NEVER increases within a walk (monotonically non-increasing, by
-% construction -- see noisy_drain/3), so it can never "become" over a
-% threshold as T advances -- only ever AT OR BELOW where it started.
-% The only way Level(T) > Threshold can be true anywhere in this walk
-% is if it was ALREADY true at T0 (the walk's own starting level), so
-% this reduces to a single check AT T0, not a search: fires immediately
-% (Tcross=T0) iff B0 > Threshold, otherwise fails outright (no clause
-% matches -- correctly "never happens", not a sentinel). CP/Duration/Zb
-% are still accepted, unused, purely so this keeps the SAME uniform
-% signature every trigger_crossing_time/9 caller already relies on.
-first_battery_over_time(_CP,T0,_Duration,B0,_Zb,Threshold,T0) :-
+% Same TWO-CLAUSE shape as first_battery_below_time/first_battery_equal_time
+% (an "already true at T0" clause plus a general future-crossing search),
+% not a bespoke single-fact shortcut, so this stays a genuinely VALID,
+% extensible check even though battery/3 only ever DRAINS today.
+%
+% Clause 1 (below): B0 > Threshold already at the walk's own start --
+% fires immediately, exactly like the other two predicates' own
+% "already true" clauses.
+%
+% Clause 2 (a genuine future-crossing search) is NOT YET WRITTEN, and
+% deliberately so, rather than filled in with a guessed formula: under
+% the CURRENT battery/3 regression, noisy_drain/3 clamps TotalDrain at
+% max(0, ...), so Level is PROVABLY non-increasing for the whole walk
+% (Level(T) <= B0 for all T) -- there is no future instant where
+% Level(T) > Threshold unless it was already true at T0, so a second
+% clause could only ever correctly FAIL today; there is nothing for it
+% to compute. Writing a "symmetric to first_battery_below_time" formula
+% now (dividing by a negative EffectiveRate to predict a future rise)
+% would NOT be a safe no-op -- EffectiveRate < 0 under the CURRENT
+% clamp means "flat, no drain this whole walk", not "charging", so that
+% formula would predict a Tcross the actual battery/3 fluent
+% contradicts (still flat, never risen) -- a genuine correctness bug,
+% not just unreachable code, the moment a Zb draw makes EffectiveRate
+% negative. If/when battery/3's regression is extended to model real
+% recharging, add clause 2 here using WHATEVER rate formula that
+% extension introduces (mirroring how clause 2 of
+% first_battery_below_time/first_battery_equal_time use
+% moving_drain_rate/sigma_battery today) -- CP/Duration/Zb are already
+% threaded through, genuinely used (not wildcarded away), specifically
+% so that clause can be added without changing this predicate's
+% signature or any of its callers.
+first_battery_over_time(CP,T0,Duration,B0,Zb,Threshold,T0) :-
     B0 > Threshold.
 
 % ---------------------------------------------------------------
@@ -627,19 +647,44 @@ first_battery_over_time(_CP,T0,_Duration,B0,_Zb,Threshold,T0) :-
 % (no "already below" grace -- see first_battery_equal_time's own
 % note); Reason keeps the SAME functor as the trigger (battery_equal),
 % not a distinct word, since no distinct Reason was requested for these
-% two (unlike battery_below/battery_under). battery_over(Threshold) is
-% DEGENERATE by construction: battery never increases within a walk, so
-% it can only ever be "already true at T0" or never true at all -- see
-% first_battery_over_time's own note for why there is no search here.
+% two (unlike battery_below/battery_under). battery_over(Threshold)
+% currently only ever fires "already true at T0" or never, since
+% battery never increases within a walk TODAY -- but its predicate is
+% structured with the SAME two-clause shape as battery_below/
+% battery_equal, ready for a genuine future-crossing search once
+% battery/3 models real recharging -- see first_battery_over_time's
+% own note for exactly why a shortcut formula can't safely be
+% written in ahead of that.
 %
-% obstacle_in_bound(Threshold), battery_below(Threshold),
-% battery_equal(Threshold), and battery_over(Threshold) are ALSO
-% directly usable as cond() leaves, checking the CURRENT situation
-% instead of searching a future walk -- see holds(obstacle_in_bound(...)),
+% obstacle_on_path(Threshold) is a DIFFERENT geometric test from
+% obstacle_in_bound(Threshold), not another threshold value for the
+% same one: obstacle_in_bound asks "is the CURRENT position close to
+% ANY obstacle's BOUNDARY", regardless of whether the trajectory ever
+% actually enters that obstacle (a path can graze within safety_margin
+% of an obstacle's edge -- e.g. because safety_margin already includes
+% the robot's own radius -- without the robot's own center ever being
+% geometrically INSIDE the polygon). obstacle_on_path instead asks "is
+% the CURRENT position close to an obstacle the trajectory ACTUALLY
+% ENTERS (goes geometrically inside, not just near) somewhere across
+% this WHOLE walk" -- confirmed by direct test to genuinely differ:
+% at Z=-1.0 and Z=+2.0 in the real 12-obstacle map, the trajectory
+% comes within safety_margin of an obstacle's boundary (obstacle_in_bound
+% WOULD fire) but never actually enters it (obstacle_on_path does NOT).
+% Reuses first_threshold_crossing_time/obstacle_within_threshold
+% UNCHANGED, just called (inside collision_geometry.py) against a
+% obstacle set FILTERED to "obstacles this trajectory enters somewhere"
+% -- see collision_geometry.py's own header, "ON PATH" section.
+%
+% obstacle_in_bound(Threshold), obstacle_on_path(Threshold),
+% battery_below(Threshold), battery_equal(Threshold), and
+% battery_over(Threshold) are ALSO directly usable as cond() leaves,
+% checking the CURRENT situation instead of searching a future walk --
+% see holds(obstacle_in_bound(...)), holds(obstacle_on_path(...)),
 % holds(battery_below(...)), holds(battery_equal(...)), and
 % holds(battery_over(...)) further down, which reuse the exact same
-% underlying primitives (obstacle_within_threshold/battery/3) a single
-% time instead of across a bracket-scanned trajectory.
+% underlying primitives (obstacle_within_threshold/
+% obstacle_on_path_within_threshold/battery/3) a single time instead of
+% across a bracket-scanned trajectory.
 % ---------------------------------------------------------------
 trigger_crossing_time(collision, CP,T0,Duration,Z,_Zb,_B0, crashed(ObstacleId), Tcross) :-
     first_collision_time(CP,T0,Duration,Z,Tcross,ObstacleId).
@@ -649,6 +694,9 @@ trigger_crossing_time(battery, CP,T0,Duration,_Z,Zb,B0, battery_depleted, Tcross
 
 trigger_crossing_time(obstacle_in_bound(Threshold), CP,T0,Duration,Z,_Zb,_B0, obstacle_in_bound(Threshold,ObstacleId), Tcross) :-
     first_threshold_crossing_time(CP,T0,Duration,Z,Threshold,Tcross,ObstacleId).
+
+trigger_crossing_time(obstacle_on_path(Threshold), CP,T0,Duration,Z,_Zb,_B0, obstacle_on_path(Threshold,ObstacleId), Tcross) :-
+    first_on_path_crossing_time(CP,T0,Duration,Z,Threshold,Tcross,ObstacleId).
 
 trigger_crossing_time(battery_below(Threshold), CP,T0,Duration,_Z,Zb,B0, battery_under(Threshold), Tcross) :-
     first_battery_below_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
@@ -1246,6 +1294,23 @@ holds(obstacle_in_bound(Threshold), S) :-
     now(S, T), at(X,Y,T,S),
     obstacle_within_threshold(X,Y,Threshold).
 
+% obstacle_on_path(Threshold): true iff the CURRENT position is within
+% Threshold of an obstacle THIS WALK'S OWN TRAJECTORY actually enters
+% somewhere across its full span -- see trigger_crossing_time/9's own
+% note on how this differs from obstacle_in_bound. Needs the CURRENT
+% walk's own (ControlPoints,Triggers,T0,SPrev) and its resolved Z --
+% current_walk/5 + the z(do(startMoveto(...),SPrev),Z) lookup is the
+% EXACT SAME pattern poss(haltMoveto(...)) already uses (works whether
+% the walk is still in progress or has just ended, per current_walk/5's
+% own doc comment); fails outright if no walk has started yet (nothing
+% to check a trajectory against, at s0).
+holds(obstacle_on_path(Threshold), S) :-
+    current_walk(S, CP, Triggers, T0, SPrev),
+    walk_duration(CP, Duration),
+    z(do(startMoveto(CP,Triggers,T0),SPrev), Z),
+    now(S, T), at(X,Y,T,S),
+    obstacle_on_path_within_threshold(CP,T0,Duration,Z,X,Y,Threshold).
+
 % battery_below(Threshold): true iff the CURRENT battery level (at the
 % current time, via now/2) is below Threshold. Same parameter, same
 % underlying fluent as the battery_below(Threshold) TRIGGER (see
@@ -1374,12 +1439,14 @@ halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 crashed_in(S) :- halted_with(crashed(_), S).
 battery_depleted_in(S) :- halted_with(battery_depleted, S).
 obstacle_in_bound_in(S) :- halted_with(obstacle_in_bound(_,_), S).
+obstacle_on_path_in(S) :- halted_with(obstacle_on_path(_,_), S).
 battery_under_in(S) :- halted_with(battery_under(_), S).
 battery_equal_in(S) :- halted_with(battery_equal(_), S).
 battery_over_in(S) :- halted_with(battery_over(_), S).
 
 % -- crashed_obstacle(S,ObstacleId) / obstacle_in_bound_obstacle(S,
-%    Threshold,ObstacleId) / battery_under_threshold(S,Threshold) /
+%    Threshold,ObstacleId) / obstacle_on_path_obstacle(S,Threshold,
+%    ObstacleId) / battery_under_threshold(S,Threshold) /
 %    battery_equal_threshold(S,Threshold) /
 %    battery_over_threshold(S,Threshold): the direct accessors for
 %    WHICH obstacle/threshold -- unlike the *_in(S) checks above, the
@@ -1388,6 +1455,7 @@ battery_over_in(S) :- halted_with(battery_over(_), S).
 %    sentinel" convention as everywhere else.
 crashed_obstacle(S, ObstacleId) :- halted_with(crashed(ObstacleId), S).
 obstacle_in_bound_obstacle(S, Threshold, ObstacleId) :- halted_with(obstacle_in_bound(Threshold,ObstacleId), S).
+obstacle_on_path_obstacle(S, Threshold, ObstacleId) :- halted_with(obstacle_on_path(Threshold,ObstacleId), S).
 battery_under_threshold(S, Threshold) :- halted_with(battery_under(Threshold), S).
 battery_equal_threshold(S, Threshold) :- halted_with(battery_equal(Threshold), S).
 battery_over_threshold(S, Threshold) :- halted_with(battery_over(Threshold), S).
@@ -1438,16 +1506,17 @@ hit_by(N) :-
 % ---------------------------------------------------------------
 % FUTURE EXTENSION NOTE: "safety" here is meant to cover EVERY cause
 % that could prevent the robot from reaching the goal. Currently
-% there are six, ALL expressed as ordinary Triggers entries (see
+% there are seven, ALL expressed as ordinary Triggers entries (see
 % the TRIGGERS section and trigger_crossing_time/9 far above):
 % collision (first_collision_time / crashed_in / any_collision),
 % battery depletion (first_battery_depletion_time /
 % battery_depleted_in / any_battery_depletion), obstacle_in_bound
 % (obstacle_in_bound_in/2, first_threshold_crossing_time),
+% obstacle_on_path (obstacle_on_path_in/2, first_on_path_crossing_time),
 % battery_below (battery_under_in/2, first_battery_below_time),
 % battery_equal (battery_equal_in/2, first_battery_equal_time), and
 % battery_over (battery_over_in/2, first_battery_over_time).
-% Adding a SEVENTH cause later -- a mechanical fault, a comms timeout,
+% Adding an EIGHTH cause later -- a mechanical fault, a comms timeout,
 % whatever -- means exactly:
 %   (a) one more trigger_crossing_time/9 clause, giving its own
 %       Reason and crossing-time computation

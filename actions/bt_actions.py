@@ -176,6 +176,15 @@ def obstacle_in_bound_cond_term(threshold):
     return f"cond(obstacle_in_bound({float(threshold)}))"
 
 
+def obstacle_on_path_cond_term(threshold):
+    """cond(obstacle_on_path(Threshold)) term text -- matches
+    ObstacleOnPath's threshold port in schema.yaml. Distinct from
+    obstacle_in_bound_cond_term above: this only fires for obstacles
+    the CURRENT walk's trajectory actually enters, not any nearby
+    obstacle."""
+    return f"cond(obstacle_on_path({float(threshold)}))"
+
+
 def battery_below_cond_term(threshold):
     """cond(battery_below(Threshold)) term text -- matches
     BatteryBelow's threshold port in schema.yaml."""
@@ -238,6 +247,11 @@ CONDITIONS = {
         "kind": "interface_only",
         "prolog_condition": "obstacle_in_bound",
         "term_builder": obstacle_in_bound_cond_term,
+    },
+    "ObstacleOnPath": {
+        "kind": "interface_only",
+        "prolog_condition": "obstacle_on_path",
+        "term_builder": obstacle_on_path_cond_term,
     },
     "BatteryBelow": {
         "kind": "interface_only",

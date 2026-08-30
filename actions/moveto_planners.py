@@ -21,9 +21,13 @@ same underlying A*/spline computation and neither should reimplement it:
      themselves as callable ProbLog predicates:
          plan_astar(+SX,+SY,+GX,+GY, -ControlPoints)
          plan_straight(+SX,+SY,+GX,+GY, -ControlPoints)
+         plan_voronoi(+SX,+SY,+GX,+GY, -ControlPoints)
          follow_boarder(+SX,+SY,+ObstacleId,+Offset, -ControlPoints)
      ControlPoints = [point(X0,Y0), ...] ProbLog terms, length 3k+1, in
      EXACTLY the format moveto_continuous.pl's spline_point/4 expects.
+     plan_voronoi is a generalized-Voronoi-diagram planner, SAME
+     interface as plan_astar/plan_straight -- see
+     _voronoi_control_points' own header for the full geometry.
      follow_boarder is a boundary-following planner shared by every
      Bug-algorithm variant: it just plans a full clockwise loop around
      an obstacle's offset boundary and does NOT decide when to leave it
@@ -35,19 +39,21 @@ same underlying A*/spline computation and neither should reimplement it:
 
   2. PLAIN-PYTHON API for a BT.cpp / bt_actions.py caller that has
      nothing to do with ProbLog -- plan_astar_points/plan_straight_points/
-     follow_boarder_points below, returning plain (x,y) float tuples, no
-     ProbLog Term objects and no ProbLog import required to call them.
-     The `import problog` needed for role 1 is wrapped in a try/except
-     (_HAVE_PROBLOG) so that importing this module from a pure BT.cpp
-     bridge that never installs ProbLog still works -- only the ProbLog
-     predicates themselves become unavailable in that case, exactly
-     mirroring how plan_astar already degrades gracefully (fails rather
-     than crashing) when the map itself fails to load.
+     plan_voronoi_points/follow_boarder_points below, returning plain
+     (x,y) float tuples, no ProbLog Term objects and no ProbLog import
+     required to call them. The `import problog` needed for role 1 is
+     wrapped in a try/except (_HAVE_PROBLOG) so that importing this
+     module from a pure BT.cpp bridge that never installs ProbLog still
+     works -- only the ProbLog predicates themselves become unavailable
+     in that case, exactly mirroring how plan_astar already degrades
+     gracefully (fails rather than crashing) when the map itself fails
+     to load.
 
 Each role funnels through the SAME plain-Python core per planner
 (_astar_control_points / _straight_control_points /
-_follow_boarder_control_points) -- no duplicated logic between the
-ProbLog-facing and BT.cpp-facing entry points for any of the three.
+_voronoi_control_points / _follow_boarder_control_points) -- no
+duplicated logic between the ProbLog-facing and BT.cpp-facing entry
+points for any of the four.
 
 FAILURE: if A* finds no path (start/goal unreachable, or the map failed
 to load at import time), the core returns None -- the ProbLog predicate
@@ -66,10 +72,13 @@ ProbLog predicate and the plain-Python function still work, but
 astar-based planning will always fail (no map to plan against) rather
 than crashing at import time.
 """
+import heapq
 import math
 import os
 import re
 import sys
+
+from scipy.spatial import Voronoi
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_THIS_DIR)
@@ -349,6 +358,199 @@ def _follow_boarder_control_points(sx, sy, obstacle_id, offset):
 
 
 # =====================================================================
+# PLAN_VORONOI -- generalized-Voronoi-diagram planner, SAME interface
+# as plan_astar/plan_straight (bare-atom Algorithm, (SX,SY,GX,GY) ->
+# ControlPoints, no extra params) -- a THIRD instance of the exact
+# "add one more plan_astar-style function plus one more pair of
+# plan_call/8 clauses" recipe, needing NO new dispatch machinery in
+# bt_to_prolog.py/bt_actions.py at all (see those files' own PlanVoronoi
+# entries, which just reuse the SAME "planWith"/plan_with_term branches
+# PlanAstar/PlanStraight already use).
+#
+# Builds a roadmap from scipy's Voronoi diagram over points densely
+# sampled along every obstacle's own boundary (reusing _OBSTACLE_
+# POLYGONS, the SAME data follow_boarder above already loads) -- a
+# standard technique: the Voronoi diagram of points sampled along
+# obstacle boundaries approximates the true generalized Voronoi
+# diagram (medial axis) of free space, since every Voronoi edge is by
+# construction equidistant from its nearest sites, i.e. maximally
+# clear of the obstacles that produced them. Ridge edges that cross
+# INTO an obstacle (a real possibility with sparse/non-convex sites --
+# a plain Voronoi tessellation has no notion of "obstacle interior")
+# are filtered out, leaving only genuinely free-space roadmap edges.
+# The CURRENT position and goal are then connected to the CLOSEST
+# POINT ON the closest EDGE of that roadmap -- not the closest VERTEX,
+# a real, deliberate distinction: an edge's closest point is generally
+# partway along it, found by splitting that edge at the projection.
+# Shortest path through the resulting graph is a plain Dijkstra (no
+# networkx dependency -- a small hand-rolled search, same spirit as
+# occupancy_grid_planner.py's own astar()).
+# =====================================================================
+_VORONOI_SAMPLES_PER_EDGE = 6
+_VORONOI_EDGE_CHECK_SAMPLES = 6
+
+
+def _voronoi_sites():
+    """Dense points sampled along every obstacle polygon's own
+    boundary -- the SITES scipy.spatial.Voronoi builds its diagram
+    from. Same per-edge sampling idea as follow_boarder's own
+    _offset_boundary_clockwise above, just without any outward
+    offset."""
+    sites = []
+    for _oid, poly in _OBSTACLE_POLYGONS:
+        for (ax, ay), (bx, by) in _polygon_edges(poly):
+            for k in range(_VORONOI_SAMPLES_PER_EDGE):
+                frac = k / _VORONOI_SAMPLES_PER_EDGE
+                sites.append((ax + (bx-ax)*frac, ay + (by-ay)*frac))
+    return sites
+
+
+def _segment_crosses_any_obstacle(ax, ay, bx, by):
+    """True iff the segment (ax,ay)-(bx,by), sampled at
+    _VORONOI_EDGE_CHECK_SAMPLES points, passes through ANY obstacle's
+    interior -- the filter that turns a plain Voronoi tessellation
+    into a roadmap using only free-space edges."""
+    for k in range(_VORONOI_EDGE_CHECK_SAMPLES + 1):
+        frac = k / _VORONOI_EDGE_CHECK_SAMPLES
+        x, y = ax + (bx-ax)*frac, ay + (by-ay)*frac
+        for _oid, poly in _OBSTACLE_POLYGONS:
+            if _inside_polygon(x, y, poly):
+                return True
+    return False
+
+
+def _closest_point_on_segment(px, py, ax, ay, bx, by):
+    sdx, sdy = bx-ax, by-ay
+    len2 = sdx*sdx + sdy*sdy
+    if len2 <= 1.0e-9:
+        return ax, ay
+    t = max(0.0, min(1.0, ((px-ax)*sdx + (py-ay)*sdy) / len2))
+    return ax + t*sdx, ay + t*sdy
+
+
+def _voronoi_roadmap_edges():
+    """[(p1,p2), ...] -- every Voronoi ridge between two FINITE
+    vertices whose connecting segment doesn't cross any obstacle.
+    Unbounded ridges (scipy marks one endpoint -1) are dropped outright
+    -- they only matter infinitely far from any obstacle, never a
+    useful shortcut through a bounded map. Returns None if there are
+    too few sites for scipy to build a diagram at all (e.g. no
+    obstacles at all, or too few/degenerate ones)."""
+    sites = _voronoi_sites()
+    if len(sites) < 4:
+        return None
+    try:
+        vor = Voronoi(sites)
+    except Exception:
+        return None
+
+    edges = []
+    for v1, v2 in vor.ridge_vertices:
+        if v1 == -1 or v2 == -1:
+            continue
+        p1 = tuple(vor.vertices[v1])
+        p2 = tuple(vor.vertices[v2])
+        if _segment_crosses_any_obstacle(p1[0], p1[1], p2[0], p2[1]):
+            continue
+        edges.append((p1, p2))
+    return edges
+
+
+def _insert_point_into_roadmap(edges, px, py):
+    """Finds the closest POINT on the closest EDGE (not vertex) of
+    `edges` to (px,py), splits that edge there, and returns new_edges
+    -- the original closest edge replaced by its two halves, plus a
+    new edge connecting (px,py) to the projection point. Returns None
+    if `edges` is empty."""
+    if not edges:
+        return None
+    best = None
+    for i, (p1, p2) in enumerate(edges):
+        cx, cy = _closest_point_on_segment(px, py, p1[0], p1[1], p2[0], p2[1])
+        d2 = (cx-px)**2 + (cy-py)**2
+        if best is None or d2 < best[0]:
+            best = (d2, i, cx, cy)
+    _d2, idx, cx, cy = best
+    p1, p2 = edges[idx]
+    new_edges = edges[:idx] + edges[idx+1:]
+    new_edges.append((p1, (cx, cy)))
+    new_edges.append(((cx, cy), p2))
+    new_edges.append(((px, py), (cx, cy)))
+    return new_edges
+
+
+def _dijkstra_shortest_path(edges, start, goal):
+    """Plain Dijkstra over an undirected weighted graph given as a
+    list of (p1,p2) edges (weight = Euclidean length) -- no networkx
+    dependency, same "small hand-rolled search" spirit as this file's
+    own astar() import above. Returns [start, ..., goal] or None if
+    goal is unreachable from start."""
+    adj = {}
+    for p1, p2 in edges:
+        w = math.hypot(p2[0]-p1[0], p2[1]-p1[1])
+        adj.setdefault(p1, []).append((p2, w))
+        adj.setdefault(p2, []).append((p1, w))
+
+    dist = {start: 0.0}
+    prev = {}
+    visited = set()
+    heap = [(0.0, start)]
+    while heap:
+        d, u = heapq.heappop(heap)
+        if u in visited:
+            continue
+        visited.add(u)
+        if u == goal:
+            break
+        for v, w in adj.get(u, []):
+            nd = d + w
+            if v not in dist or nd < dist[v]:
+                dist[v] = nd
+                prev[v] = u
+                heapq.heappush(heap, (nd, v))
+    if goal not in dist:
+        return None
+    path = [goal]
+    while path[-1] != start:
+        path.append(prev[path[-1]])
+    path.reverse()
+    return path
+
+
+def _voronoi_control_points(sx, sy, gx, gy):
+    """Core computation -- see plan_voronoi_points below for the full
+    contract. Returns [(x,y), ...] control points, a straight line if
+    there are no obstacles (or too few sites) to build a meaningful
+    diagram from -- same "always succeeds for finite input" spirit as
+    _straight_control_points, since there's nothing to route around --
+    or None if the roadmap exists but start/goal are genuinely
+    disconnected within it (a real, if unlikely, possibility for a
+    disconnected free-space topology)."""
+    start = (sx, sy)
+    goal = (gx, gy)
+    edges = _voronoi_roadmap_edges()
+    if not edges:
+        return _straight_control_points(sx, sy, gx, gy)
+
+    edges = _insert_point_into_roadmap(edges, sx, sy)
+    edges = _insert_point_into_roadmap(edges, gx, gy)
+
+    path = _dijkstra_shortest_path(edges, start, goal)
+    if path is None:
+        return None  # roadmap built, but start/goal are disconnected within it
+
+    if len(path) < 2:
+        return [(sx, sy)] * 4
+    try:
+        tck, _u = fit_spline(path, degree=3, smoothing=0.0)
+        control_points, _k = bspline_to_bezier_chain(tck)
+    except ValueError:
+        control_points = _straight_control_points(sx, sy, gx, gy)
+
+    return control_points
+
+
+# =====================================================================
 # PLAIN-PYTHON API -- ALWAYS available, no ProbLog dependency. This is
 # what bt_actions.py (and, eventually, a BT.cpp/pybind11 bridge) calls.
 # =====================================================================
@@ -362,6 +564,19 @@ def plan_straight_points(sx, sy, gx, gy):
     """Plain-Python straight-line planner. Always returns 4 control
     points for any finite (sx,sy),(gx,gy)."""
     return _straight_control_points(float(sx), float(sy), float(gx), float(gy))
+
+
+def plan_voronoi_points(sx, sy, gx, gy):
+    """Plain-Python generalized-Voronoi-diagram planner. Returns
+    [(x,y), ...] control points routed along the free-space Voronoi
+    roadmap built from the obstacle map, connecting (sx,sy) and
+    (gx,gy) to the closest POINT on the closest EDGE of that roadmap
+    (not just the closest vertex) -- see _voronoi_control_points'
+    own header for the full geometry. Degrades to a straight line if
+    there are no obstacles to route around; returns None only if a
+    roadmap exists but start/goal are genuinely disconnected within
+    it."""
+    return _voronoi_control_points(float(sx), float(sy), float(gx), float(gy))
 
 
 def follow_boarder_points(sx, sy, obstacle_id, offset):
@@ -432,6 +647,19 @@ if _HAVE_PROBLOG:
         """Black-box straight-line planner (ProbLog predicate) -- no map
         lookup at all, always succeeds for any finite (sx,sy),(gx,gy)."""
         control_points = _straight_control_points(sx, sy, gx, gy)
+        return [_control_points_to_terms(control_points)]
+
+    @problog_export_nondet("+float", "+float", "+float", "+float", "-list")
+    def plan_voronoi(sx, sy, gx, gy):
+        """Black-box generalized-Voronoi-diagram planner (ProbLog
+        predicate) -- see _voronoi_control_points above for the actual
+        computation. Fails (returns []) only if a roadmap exists but
+        start/goal are genuinely disconnected within it; degrades to a
+        straight line (never fails) when there are no obstacles to
+        route around at all."""
+        control_points = _voronoi_control_points(sx, sy, gx, gy)
+        if control_points is None:
+            return []
         return [_control_points_to_terms(control_points)]
 
     # ObstacleId arrives as a bare Prolog ATOM Term (e.g. obs5) -- "+term"

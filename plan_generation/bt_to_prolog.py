@@ -89,7 +89,10 @@ _ACTION_DISPATCH = {
     "MoveTo": {"kind": "moveto_leg"},
     "PlanAstar": {"kind": "planWith", "algorithm": "astar"},
     "PlanStraight": {"kind": "planWith", "algorithm": "straight"},
-    # A third planner, dispatched through the SAME planWith template,
+    # A third planner, SAME bare-atom shape, needing no new branch at
+    # all -- it reuses the "planWith" kind verbatim.
+    "PlanVoronoi": {"kind": "planWith", "algorithm": "voronoi"},
+    # A fourth planner, dispatched through the SAME planWith template,
     # but with a COMPOUND Algorithm term (obstacle_id/offset ride
     # inside it, not a fixed atom, and NO goal_point at all -- this
     # planner doesn't take one, see its own "kind" branch below) --

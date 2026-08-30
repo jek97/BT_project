@@ -240,8 +240,54 @@ actions:
         type: bool
         description: "true iff reason=completed."
 
+  - id: PlanVoronoi
+    prolog_action: planWith
+    prolog_algorithm: voronoi
+    description: >
+      Generalized-Voronoi-diagram planner (moveto_planners.py's
+      plan_voronoi/5) -- SAME interface as PlanAstar/PlanStraight
+      above (bare Algorithm atom, no extra ports). Builds a roadmap
+      from scipy's Voronoi diagram of points sampled along every
+      obstacle's own boundary (a standard technique: such a diagram
+      approximates the true generalized Voronoi diagram / medial axis
+      of free space, since every edge is by construction maximally
+      clear of the obstacles that produced it), filters out any ridge
+      that crosses into an obstacle, then connects the CURRENT
+      position and goal to the closest POINT on the closest EDGE of
+      that roadmap (not just the closest vertex) and takes the
+      shortest path through it. Degrades to a straight line (never
+      fails) when there are no obstacles to route around at all; only
+      fails (reason=no_path) if a roadmap exists but start/goal are
+      genuinely disconnected within it. Same instantaneous/
+      traceability semantics as PlanAstar/PlanStraight otherwise
+      (records a planned(voronoi,Reason) marker, does not gate on a
+      precondition).
+    ports:
+      - name: goal
+        direction: input
+        type: Point
+        required: true
+        description: >
+          Target position for this planning call -- see PlanAstar's
+          own goal port.
+      - name: control_points
+        direction: output
+        type: std::vector<Point>
+        description: >
+          The planned path, as chained cubic Bezier control points,
+          routed along the free-space Voronoi roadmap. Empty if
+          reason=no_path.
+      - name: reason
+        direction: output
+        type: std::string
+        description: "One of: completed, no_path."
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason=completed."
+
   # ----------------------------------------------------------------
-  # A THIRD planner -- boundary following, shared by EVERY Bug-
+  # A FOURTH planner -- boundary following, shared by EVERY Bug-
   # algorithm variant, dispatched through the SAME planWith(Algorithm,
   # Goal,CP)/plan_call/8 template as PlanAstar/PlanStraight above, just
   # with a COMPOUND Algorithm term (follow_boarder(ObstacleId,Offset))

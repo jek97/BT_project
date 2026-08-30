@@ -98,9 +98,9 @@ obstacle_polygon(no_obstacles_placeholder, []) :- fail.
 :- consult('./config/config_generated.pl').
 
 % actions/moveto_planners.py provides plan_astar/5, plan_straight/5,
-% and follow_boarder/5 as BLACK-BOX (Python-implemented) predicates --
-% see that file's own header for the full explanation. ProbLog imports
-% and executes it
+% plan_voronoi/5, and follow_boarder/5 as BLACK-BOX (Python-
+% implemented) predicates -- see that file's own header for the full
+% explanation. ProbLog imports and executes it
 % directly the moment this directive loads (problog.clausedb's
 % load_external_module), registering both predicates before anything
 % below that calls them is ever evaluated. Path is resolved relative to
@@ -1181,7 +1181,27 @@ plan_call(straight, SX,SY,GX,GY, CP, completed, true) :-
 plan_call(straight, SX,SY,GX,GY, [], no_path, false) :-
     \+ plan_straight(SX,SY,GX,GY, _).
 
-% follow_boarder(ObstacleId,Offset) -- a THIRD planner, exactly the
+% voronoi -- a THIRD planner, SAME bare-atom Algorithm shape as astar/
+% straight (no compound term needed -- this planner takes no extra
+% parameters beyond the shared SX,SY,GX,GY every planWith call already
+% carries), exactly the "add one more plan_astar-style function plus
+% one more pair of plan_call/8 clauses" recipe this section's own
+% header comment anticipated -- needing NO new dispatch machinery
+% anywhere downstream (do_node/4, schema.yaml, bt_to_prolog.py, and
+% bt_actions.py all reuse their EXISTING astar/straight branches
+% verbatim for this one). Builds a roadmap from a generalized Voronoi
+% diagram of the obstacle map (moveto_planners.py's plan_voronoi/5),
+% connecting SX,SY and GX,GY to the closest POINT on the closest EDGE
+% of that roadmap -- see that predicate's own header for the geometry.
+% Degrades to a straight line (never fails) when there are no
+% obstacles to route around at all; only fails (no_path) if a roadmap
+% exists but start/goal are genuinely disconnected within it.
+plan_call(voronoi, SX,SY,GX,GY, CP, completed, true) :-
+    plan_voronoi(SX,SY,GX,GY, CP).
+plan_call(voronoi, SX,SY,GX,GY, [], no_path, false) :-
+    \+ plan_voronoi(SX,SY,GX,GY, _).
+
+% follow_boarder(ObstacleId,Offset) -- a FOURTH planner, exactly the
 % "add one more plan_astar-style function plus one more pair of
 % plan_call/8 clauses" recipe this section's own header comment
 % already anticipated. Algorithm here is a COMPOUND term, not a bare

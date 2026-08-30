@@ -58,7 +58,9 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
-from moveto_planners import plan_astar_points, plan_straight_points, follow_boarder_points
+from moveto_planners import (
+    plan_astar_points, plan_straight_points, plan_voronoi_points, follow_boarder_points,
+)
 
 
 # =====================================================================
@@ -90,6 +92,23 @@ def bt_plan_straight(sx, sy, gx, gy):
     shape and rationale as bt_plan_astar above; a straight line between
     two finite points essentially always succeeds."""
     control_points = plan_straight_points(sx, sy, gx, gy)
+    return {
+        "control_points": [(float(x), float(y)) for x, y in control_points],
+        "reason": "completed",
+        "status": True,
+    }
+
+
+def bt_plan_voronoi(sx, sy, gx, gy):
+    """BT.cpp-compatible wrapper around moveto_planners.py's
+    plan_voronoi_points -- same shape/rationale as bt_plan_astar above.
+    control_points is [] and reason is "no_path" only if a roadmap
+    exists but start/goal are genuinely disconnected within it;
+    degrades to a straight line (never fails) when there are no
+    obstacles to route around."""
+    control_points = plan_voronoi_points(sx, sy, gx, gy)
+    if control_points is None:
+        return {"control_points": [], "reason": "no_path", "status": False}
     return {
         "control_points": [(float(x), float(y)) for x, y in control_points],
         "reason": "completed",
@@ -283,6 +302,13 @@ ACTIONS = {
         "prolog_action": "planWith",
         "prolog_algorithm": "straight",
         "func": bt_plan_straight,
+        "term_builder": plan_with_term,
+    },
+    "PlanVoronoi": {
+        "kind": "callable",
+        "prolog_action": "planWith",
+        "prolog_algorithm": "voronoi",
+        "func": bt_plan_voronoi,
         "term_builder": plan_with_term,
     },
     "FollowBoarder": {

@@ -19,15 +19,19 @@
 # do(Action,S) chain, or s0) -- needed so goal_formula_check.py can
 # verify a goal formula is UNIFORM (Reiter's own sense, "Knowledge in
 # Action": the SAME single situation term used in every situation
-# slot across the whole formula, never two different ones). This
-# position is NOT consistent across predicates below (some put S
-# first, some last -- moveto_continuous.pl was written by hand over
-# many sessions, not machine-generated with a uniform convention), so
-# it has to be declared per-predicate, not assumed. `situation_arg:
-# null` means this predicate has NO situation argument at all -- a
-# plain, situation-independent fact (goal/2, start/2) that's still
-# fine to reference inside a goal formula (e.g. to bind a coordinate),
-# since it doesn't introduce a second situation term.
+# slot across the whole formula, never two different ones). It is
+# still declared PER-PREDICATE, not assumed to be a fixed position,
+# even though every predicate below now puts S LAST per Reiter's own
+# convention -- EXCEPT now/2, which keeps S FIRST (now(S,T), not
+# now(T,S)): unlike everything else here, now/2 is called from ~15
+# places throughout moveto_continuous.pl (poss/2 and holds/2 clauses
+# mostly), so reordering it is a separate, larger refactor than the
+# six low-usage accessor predicates (crashed_obstacle/2 and friends)
+# that WERE reordered -- ask if you want that one done too.
+# `situation_arg: null` means this predicate has NO situation argument
+# at all -- a plain, situation-independent fact (goal/2, start/2)
+# that's still fine to reference inside a goal formula (e.g. to bind a
+# coordinate), since it doesn't introduce a second situation term.
 #
 # WHAT ISN'T HERE, ON PURPOSE: internal plumbing predicates
 # (current_walk/5, final_situation/1, now/2's own use as a generator,
@@ -143,52 +147,52 @@ predicates:
 
   - name: crashed_obstacle
     arity: 2
-    situation_arg: 1
+    situation_arg: 2
     args:
-      - {position: 1, name: S, type: situation, description: "The situation to check at."}
-      - {position: 2, name: ObstacleId, type: atom, description: "WHICH obstacle_polygon/2 Id was crashed into -- bound, not wildcarded."}
+      - {position: 1, name: ObstacleId, type: atom, description: "WHICH obstacle_polygon/2 Id was crashed into -- bound, not wildcarded."}
+      - {position: 2, name: S, type: situation, description: "The situation to check at."}
     description: "Like crashed_in/1, but exposes WHICH obstacle. Fails (no solution) if S didn't halt on a crash."
 
   - name: obstacle_in_bound_obstacle
     arity: 3
-    situation_arg: 1
+    situation_arg: 3
     args:
-      - {position: 1, name: S, type: situation, description: "The situation to check at."}
-      - {position: 2, name: Threshold, type: float, description: "WHICH threshold value triggered -- bound, not wildcarded."}
-      - {position: 3, name: ObstacleId, type: atom, description: "WHICH obstacle -- bound, not wildcarded."}
+      - {position: 1, name: Threshold, type: float, description: "WHICH threshold value triggered -- bound, not wildcarded."}
+      - {position: 2, name: ObstacleId, type: atom, description: "WHICH obstacle -- bound, not wildcarded."}
+      - {position: 3, name: S, type: situation, description: "The situation to check at."}
     description: "Like obstacle_in_bound_in/1, but exposes WHICH threshold/obstacle. Fails if S didn't halt for this trigger."
 
   - name: obstacle_on_path_obstacle
     arity: 3
-    situation_arg: 1
+    situation_arg: 3
     args:
-      - {position: 1, name: S, type: situation, description: "The situation to check at."}
-      - {position: 2, name: Threshold, type: float, description: "WHICH threshold value triggered -- bound, not wildcarded."}
-      - {position: 3, name: ObstacleId, type: atom, description: "WHICH obstacle -- bound, not wildcarded."}
+      - {position: 1, name: Threshold, type: float, description: "WHICH threshold value triggered -- bound, not wildcarded."}
+      - {position: 2, name: ObstacleId, type: atom, description: "WHICH obstacle -- bound, not wildcarded."}
+      - {position: 3, name: S, type: situation, description: "The situation to check at."}
     description: "Like obstacle_on_path_in/1, but exposes WHICH threshold/obstacle. Fails if S didn't halt for this trigger."
 
   - name: battery_under_threshold
     arity: 2
-    situation_arg: 1
+    situation_arg: 2
     args:
-      - {position: 1, name: S, type: situation, description: "The situation to check at."}
-      - {position: 2, name: Threshold, type: float, description: "WHICH threshold value triggered -- bound, not wildcarded."}
+      - {position: 1, name: Threshold, type: float, description: "WHICH threshold value triggered -- bound, not wildcarded."}
+      - {position: 2, name: S, type: situation, description: "The situation to check at."}
     description: "Like battery_under_in/1, but exposes WHICH threshold. Fails if S didn't halt for this trigger."
 
   - name: battery_equal_threshold
     arity: 2
-    situation_arg: 1
+    situation_arg: 2
     args:
-      - {position: 1, name: S, type: situation, description: "The situation to check at."}
-      - {position: 2, name: Threshold, type: float, description: "WHICH threshold value triggered -- bound, not wildcarded."}
+      - {position: 1, name: Threshold, type: float, description: "WHICH threshold value triggered -- bound, not wildcarded."}
+      - {position: 2, name: S, type: situation, description: "The situation to check at."}
     description: "Like battery_equal_in/1, but exposes WHICH threshold. Fails if S didn't halt for this trigger."
 
   - name: battery_over_threshold
     arity: 2
-    situation_arg: 1
+    situation_arg: 2
     args:
-      - {position: 1, name: S, type: situation, description: "The situation to check at."}
-      - {position: 2, name: Threshold, type: float, description: "WHICH threshold value triggered -- bound, not wildcarded."}
+      - {position: 1, name: Threshold, type: float, description: "WHICH threshold value triggered -- bound, not wildcarded."}
+      - {position: 2, name: S, type: situation, description: "The situation to check at."}
     description: "Like battery_over_in/1, but exposes WHICH threshold. Fails if S didn't halt for this trigger."
 
   # ----------------------------------------------------------------

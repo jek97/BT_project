@@ -1590,21 +1590,27 @@ battery_under_in(S) :- halted_with(battery_under(_), S).
 battery_equal_in(S) :- halted_with(battery_equal(_), S).
 battery_over_in(S) :- halted_with(battery_over(_), S).
 
-% -- crashed_obstacle(S,ObstacleId) / obstacle_in_bound_obstacle(S,
-%    Threshold,ObstacleId) / obstacle_on_path_obstacle(S,Threshold,
-%    ObstacleId) / battery_under_threshold(S,Threshold) /
-%    battery_equal_threshold(S,Threshold) /
-%    battery_over_threshold(S,Threshold): the direct accessors for
+% -- crashed_obstacle(ObstacleId,S) / obstacle_in_bound_obstacle
+%    (Threshold,ObstacleId,S) / obstacle_on_path_obstacle(Threshold,
+%    ObstacleId,S) / battery_under_threshold(Threshold,S) /
+%    battery_equal_threshold(Threshold,S) /
+%    battery_over_threshold(Threshold,S): the direct accessors for
 %    WHICH obstacle/threshold -- unlike the *_in(S) checks above, the
 %    extra argument(s) are left bound, not wildcarded. Fails (no
 %    solution) if S didn't halt for that reason, same "absence, not
-%    sentinel" convention as everywhere else.
-crashed_obstacle(S, ObstacleId) :- halted_with(crashed(ObstacleId), S).
-obstacle_in_bound_obstacle(S, Threshold, ObstacleId) :- halted_with(obstacle_in_bound(Threshold,ObstacleId), S).
-obstacle_on_path_obstacle(S, Threshold, ObstacleId) :- halted_with(obstacle_on_path(Threshold,ObstacleId), S).
-battery_under_threshold(S, Threshold) :- halted_with(battery_under(Threshold), S).
-battery_equal_threshold(S, Threshold) :- halted_with(battery_equal(Threshold), S).
-battery_over_threshold(S, Threshold) :- halted_with(battery_over(Threshold), S).
+%    sentinel" convention as everywhere else. Situation argument S is
+%    LAST in every one of these, per Reiter's own convention (see
+%    plan_generation/vocabulary.yaml's own note on this -- these six
+%    used to put S FIRST, an inconsistency with visited/2, halted_with
+%    /2, at/4, and battery/3 above, all of which already had S last;
+%    fixed here since nothing outside this file's own definitions
+%    referenced the old argument order).
+crashed_obstacle(ObstacleId, S) :- halted_with(crashed(ObstacleId), S).
+obstacle_in_bound_obstacle(Threshold, ObstacleId, S) :- halted_with(obstacle_in_bound(Threshold,ObstacleId), S).
+obstacle_on_path_obstacle(Threshold, ObstacleId, S) :- halted_with(obstacle_on_path(Threshold,ObstacleId), S).
+battery_under_threshold(Threshold, S) :- halted_with(battery_under(Threshold), S).
+battery_equal_threshold(Threshold, S) :- halted_with(battery_equal(Threshold), S).
+battery_over_threshold(Threshold, S) :- halted_with(battery_over(Threshold), S).
 
 % -- overall collision probability (exact) --------------------------
 any_collision :- final_situation(S), crashed_in(S).
@@ -1630,7 +1636,7 @@ sample_index_for_time(T,T0,Duration,I) :-
 %    match Reason=crashed(_), and this correctly contributes nothing.
 %    _ObstacleId is deliberately unbound/ignored here -- first_hit is
 %    a PMF over WHEN, not WHICH obstacle; see crashed_obstacle/2 for
-%    that question, e.g. crashed_obstacle(S,ObstacleId) alongside
+%    that question, e.g. crashed_obstacle(ObstacleId,S) alongside
 %    final_situation(S) for a specific resolved situation.
 first_hit(I) :-
     final_situation(S),

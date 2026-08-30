@@ -1831,6 +1831,20 @@ goal_reached :-
 % hand in the XML.
 :- consult('./plan_generation/plan/plan_generated.pl').
 
+% goal_formula/1 is hand-authored, tied to THIS PARTICULAR plan's own
+% waypoints -- see plan_generation/plan/goal_formula.pl's own header
+% for the full rationale and the "must be kept in sync with
+% behavior_tree.xml" caveat (same accepted convention as current_
+% plan.pl's own goal/2 vs the tree's goal port). It is a UNIFORM
+% formula (Reiter's sense -- one free situation argument, every fluent
+% inside applied to exactly it); verify_goal_formula below is what
+% actually applies it AT final_situation, same "zero-arg convenience
+% wrapper hardwired to final_situation" shape as goal_reached/
+% any_collision/plan_outcome below.
+:- consult('./plan_generation/plan/goal_formula.pl').
+
+verify_goal_formula :- final_situation(S), goal_formula(S).
+
 % ============================================================
 % 10. QUERIES
 % ============================================================

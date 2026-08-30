@@ -41,9 +41,15 @@ Before running inference, this script:
      SHAPE -- into plan_generation/plan/plan_generated.pl, validating
      it against actions/schema.yaml on the way (see
      plan_generation/bt_to_prolog.py's own header).
-Both steps mean a normal run always reflects whatever is currently in
-config.yaml / behavior_tree.xml, with no separate regeneration step
-needed.
+  3. validates plan_generation/plan/goal_formula.pl -- the hand-
+     authored verification goal for THIS particular plan -- against
+     plan_generation/vocabulary.yaml (see
+     plan_generation/goal_formula_check.py's own header): every
+     predicate it calls must be a known fluent, and the whole formula
+     must be uniform in one situation (Reiter's own sense).
+All three steps mean a normal run always reflects whatever is
+currently in config.yaml / behavior_tree.xml / goal_formula.pl, with
+no separate regeneration step needed.
 
 Requires: obstacles_generated.pl and the given plan file to be in the
 same directory (or already consulted from within the plan file), and
@@ -519,6 +525,28 @@ def main():
             sys.exit(1)
         except Exception as e:
             tee(f"\n  [ERROR] Could not translate behavior_tree.xml: {e}")
+            sys.exit(1)
+
+        # Validate plan_generation/plan/goal_formula.pl against
+        # plan_generation/vocabulary.yaml -- same "structural
+        # validation is a hard failure, not a warning" posture as
+        # behavior_tree.xml's own validation just above; see
+        # plan_generation/goal_formula_check.py's own header. Must
+        # also happen before resolve_consulted_text() below, for the
+        # same staleness reason as config_generated.pl/plan_generated.pl.
+        try:
+            from goal_formula_check import validate_goal_formula, GoalFormulaValidationError
+            goal_formula_path = os.path.join(plan_gen_dir, "plan", "goal_formula.pl")
+            validate_goal_formula(
+                goal_formula_path=goal_formula_path,
+                vocab_path=os.path.join(plan_gen_dir, "vocabulary.yaml"))
+            tee(f"  Goal formula: {goal_formula_path} (validated against "
+                f"{os.path.join(plan_gen_dir, 'vocabulary.yaml')})")
+        except GoalFormulaValidationError as e:
+            tee(f"\n  [ERROR] goal_formula.pl failed validation: {e}")
+            sys.exit(1)
+        except Exception as e:
+            tee(f"\n  [ERROR] Could not validate goal_formula.pl: {e}")
             sys.exit(1)
 
         # Follow moveto_continuous.pl's own :- consult(...) directives --

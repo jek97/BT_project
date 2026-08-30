@@ -1539,6 +1539,39 @@ sample_walk_frac(I, S, WalkFrac) :-
 halted_with(Reason, do(haltMoveto(_,Reason,_), _)).
 halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 
+% visited(+Loc, +S): TRUE iff the robot ACTUALLY ARRIVED at
+% Loc=point(GX,GY) -- the endpoint of SOME already-completed leg,
+% Status=true, not just Reason=completed (see leg_status/8's own
+% distinction: Reason=completed only means a leg's walk wasn't cut
+% short by a trigger, it says nothing about whether noise carried the
+% robot far enough off course to miss the target; Status=true is what
+% actually means "landed within goal_tolerance of that leg's own
+% endpoint," which is what "visited" should mean) -- anywhere in S's
+% history. SAME "search the whole history" shape as halted_with/2
+% above, and for the same reason needs no separate persistence/frame
+% axiom: situation histories only ever grow by appending do(...), so
+% "did this ever happen in S's past" is already monotonic for free --
+% a fluent that starts false and, once made true, stays true in every
+% situation built on top of that one, exactly the shape a multi-leg
+% "visited(A), visited(B), visited(C)" goal formula needs, verified
+% the same way goal_reached/any_collision already are (P(...) over
+% resolved worlds, since a collision or battery depletion partway
+% through a multi-leg plan can genuinely truncate the history before
+% a later waypoint is ever reached -- this is NOT something you could
+% check by inspecting the plan's own static structure instead).
+%
+% NOTE: for a plain LINEAR Sequence of legs (no Fallback in between),
+% seq_node/1's own definition (do_node(seq_node([Child|Rest]),S,S1,
+% Outcome):-do_node(Child,S,S2,true),...) already REQUIRES each
+% child's Status=true before the next one even starts -- so checking
+% visited/2 on just the LAST waypoint already logically entails every
+% earlier one was visited too; only worth checking each individually
+% once a Fallback sits somewhere before the waypoint you care about.
+visited(point(GX,GY), do(haltMoveto(_T,completed,true), S)) :-
+    current_walk(S, CP, _Triggers, _T0, _SPrev),
+    leg_target(CP, GX, GY).
+visited(Loc, do(_A, S)) :- visited(Loc, S).
+
 % -- crashed_in(S) / battery_depleted_in(S) / obstacle_in_bound_in(S) /
 %    battery_under_in(S): trivial one-liners reading the actual Reason,
 %    not re-deriving anything. crashed(_)/obstacle_in_bound(_,_) use

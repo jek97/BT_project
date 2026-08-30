@@ -1,6 +1,12 @@
 __pycache__/
 *.pyc
 
-# run_plan_continuous_safety.py output (timestamped, regenerated per run)
-run_plan_continuous_safety_*.log
-run_plan_continuous_safety_*.png
+# main.py output: <problem>_<YYYYMMDD>_<HHMMSS>.{log,png}, regenerated
+# fresh every run
+*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9].log
+*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9].png
+
+# main.py's per-run bootstrap: absolute, machine-specific consult paths
+# pointing at whichever --problem was last run -- see
+# module/theory/basic_action_theory.pl's Section 0.
+module/theory/problem_data.pl

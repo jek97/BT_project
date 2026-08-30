@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-plan_generation/goal_formula_check.py
+module/contracts/goal_formula_check.py
 
-Validates plan_generation/plan/goal_formula.pl against
-plan_generation/vocabulary.yaml BEFORE it's ever consulted/queried by
+Validates a problem's own goal_formula.pl against
+module/contracts/vocabulary.yaml BEFORE it's ever consulted/queried by
 ProbLog -- exactly the same "structural validation is a hard failure,
-not a warning" posture bt_to_prolog.py already takes for
-behavior_tree.xml against actions/schema.yaml (see that file's own
-header; this module is its direct sibling for the goal-formula side
+not a warning" posture module/translators/bt_to_prolog.py already takes
+for behavior_tree.xml against module/contracts/schema.yaml (see that
+file's own header; this module is its sibling for the goal-formula side
 of the pipeline).
 
 TWO checks, matching this project's own discussion of what "a
@@ -36,12 +36,12 @@ already used for bt_to_prolog.py's own XML parsing
 (xml.etree.ElementTree, not a hand-rolled tag scanner).
 
 Usage:
-    python3 plan_generation/goal_formula_check.py
+    python3 module/contracts/goal_formula_check.py
         (validates the default goal_formula.pl against the default
         vocabulary.yaml, printing OK or a validation error)
 
-run_plan_continuous_safety.py calls validate_goal_formula() itself
-before every run, so you don't normally need to run this by hand.
+main.py calls validate_goal_formula() itself before every run, so you
+don't normally need to run this by hand.
 """
 import os
 import sys
@@ -51,8 +51,10 @@ from problog.logic import And, Not, Var
 from problog.program import PrologString
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
 DEFAULT_VOCAB_PATH = os.path.join(_THIS_DIR, "vocabulary.yaml")
-DEFAULT_GOAL_FORMULA_PATH = os.path.join(_THIS_DIR, "plan", "goal_formula.pl")
+DEFAULT_GOAL_FORMULA_PATH = os.path.join(
+    _PROJECT_ROOT, "problems", "problem0", "goal_formula.pl")
 
 
 class GoalFormulaValidationError(Exception):
@@ -148,7 +150,7 @@ def validate_goal_formula(goal_formula_path=DEFAULT_GOAL_FORMULA_PATH,
             f"VARIABLE (e.g. 'S'), not a ground term ('{situation_var}') "
             f"-- it has to be applicable at whichever situation the "
             f"caller supplies (final_situation, in practice via "
-            f"moveto_continuous.pl's own verify_goal_formula wrapper), "
+            f"basic_action_theory.pl's own verify_goal_formula wrapper), "
             f"not hardwired to one here.")
 
     for term in _iter_conjuncts(body):

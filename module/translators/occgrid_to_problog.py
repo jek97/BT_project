@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-occgrid_to_problog.py
+module/translators/occgrid_to_problog.py
 
 Convert a ROS nav_msgs/OccupancyGrid map, given in its standard on-disk
 map_server form (a .pgm image + a .yaml metadata file), into polygonal
 obstacle facts for the continuous-space Golog/ProbLog action theory in
-moveto_continuous.pl.
+basic_action_theory.pl.
 
 Pipeline:
   1. load the .yaml (resolution, origin, negate, thresholds) + .pgm
@@ -22,29 +22,23 @@ do with ProbLog's probabilistic machinery and does not affect
 world-count/grounding cost at all.
 
 generate(yaml_path, output_path, epsilon_m, min_area_m2) is the
-importable core (steps 1-5 above); run_plan_continuous_safety.py calls
-it directly, before every run, exactly like it already does for
-config/generate_prolog_config.py's own generate() and
-plan_generation/bt_to_prolog.py's generate_plan_pl() -- so map.yaml is
+importable core (steps 1-5 above); main.py calls it directly, before
+every run, exactly like it already does for module/translators/
+config_to_prolog.py's own generate() and module/translators/
+bt_to_prolog.py's generate_plan_pl() -- so a problem's map.yaml is
 translated fresh every run, same as config.yaml/behavior_tree.xml, with
 no separate manual step to remember.
 
 Usage (the CLI wrapper, for standalone/one-off use):
-    python3 occgrid_to_problog.py map.yaml
-    python3 occgrid_to_problog.py map.yaml --out obstacles_generated.pl \
-        --epsilon 0.05 --min-area 0.02 --inline PLAN_FILE.pl
+    python3 module/translators/occgrid_to_problog.py map.yaml
+    python3 module/translators/occgrid_to_problog.py map.yaml \
+        --out obstacles_generated.pl --epsilon 0.05 --min-area 0.02
 
 By default, all generated output is written into a fixed ./maps/
 directory relative to the current working directory (i.e. wherever you
 invoke the script from), not next to the script or the input yaml. Pass
---out with your own path if you want to override this.
-
---inline PLAN_FILE.pl additionally rewrites start/2 and goal/2 in the
-given action-theory file if --start/--goal are supplied -- a vestigial
-feature now that start/2 lives in config.yaml and goal/2 no longer
-exists at all (moveto_continuous.pl's own goal information now lives
-entirely in plan_generation/plan/goal_formula.pl); left in place as an
-optional developer convenience, not part of the automatic pipeline.
+--out with your own path if you want to override this (main.py always
+passes an explicit --out of <problem>/obstacles_generated.pl).
 """
 import argparse
 import os
@@ -145,11 +139,11 @@ def extract_polygons(mask, resolution, origin, epsilon_m, min_area_m2):
 def generate(yaml_path, output_path, epsilon_m=0.05, min_area_m2=0.02):
     """Regenerate output_path (obstacle_polygon/2 facts) from yaml_path (a
     map_server map.yaml) -- the importable core main() itself calls, same
-    "importable function + thin CLI wrapper" shape as config/
-    generate_prolog_config.py's generate() and plan_generation/
-    bt_to_prolog.py's generate_plan_pl(). run_plan_continuous_safety.py
-    calls this directly before every run, exactly like it already does
-    for those other two -- the map pipeline used to be the one manual,
+    "importable function + thin CLI wrapper" shape as
+    config_to_prolog.py's generate() and bt_to_prolog.py's
+    generate_plan_pl() (both siblings of this file). main.py calls this
+    directly before every run, exactly like it already does for those
+    other two -- the map pipeline used to be the one manual,
     easy-to-forget step; it no longer is."""
     img, resolution, origin, negate, occ_thresh, free_thresh = load_map(yaml_path)
     mask = occupied_mask(img, negate, occ_thresh)
@@ -172,38 +166,6 @@ def write_problog_facts(polygons, out_path, source_yaml):
     print(f"Wrote {len(polygons)} obstacle polygon(s) to {out_path}")
 
 
-# ---------------------------------------------------------------------
-# Optional: patch start/2 and goal/2 into the action-theory file.
-# control_points/1 is intentionally left untouched -- the user fills
-# that in by hand once the spline is chosen.
-# ---------------------------------------------------------------------
-def patch_start_goal(theory_path, start_xy, goal_xy):
-    import re
-    with open(theory_path, "r") as f:
-        text = f.read()
-
-    # Only match FACT definitions with numeric arguments, anchored at the
-    # start of a line -- NOT other uses like "at(X,Y,_,s0) :- start(X,Y)."
-    # which use variable names and must be left untouched.
-    num = r"-?\d+(?:\.\d+)?"
-    if start_xy is not None:
-        pattern = re.compile(rf"^start\(\s*{num}\s*,\s*{num}\s*\)\.", re.MULTILINE)
-        new_start = f"start({start_xy[0]:.4f}, {start_xy[1]:.4f})."
-        text, n = pattern.subn(new_start, text, count=1)
-        if n == 0:
-            print("[warn] no numeric start(X,Y). fact found to patch", file=sys.stderr)
-    if goal_xy is not None:
-        pattern = re.compile(rf"^goal\(\s*{num}\s*,\s*{num}\s*\)\.", re.MULTILINE)
-        new_goal = f"goal({goal_xy[0]:.4f}, {goal_xy[1]:.4f})."
-        text, n = pattern.subn(new_goal, text, count=1)
-        if n == 0:
-            print("[warn] no numeric goal(X,Y). fact found to patch", file=sys.stderr)
-
-    with open(theory_path, "w") as f:
-        f.write(text)
-    print(f"Patched start/goal in {theory_path}")
-
-
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -220,16 +182,6 @@ def main():
                      help="Discard connected obstacle regions smaller than "
                           "this many SQUARE METRES (filters single-pixel "
                           "sensor noise from the raw grid). Default 0.02.")
-    ap.add_argument("--inline", default=None,
-                     help="Optionally patch start/2 and goal/2 into this "
-                          "action-theory .pl file (control_points/1 is left "
-                          "untouched -- fill that in by hand).")
-    ap.add_argument("--start", nargs=2, type=float, default=None,
-                     metavar=("X", "Y"), help="Start position in metres, "
-                     "requires --inline")
-    ap.add_argument("--goal", nargs=2, type=float, default=None,
-                     metavar=("X", "Y"), help="Goal position in metres, "
-                     "requires --inline")
     args = ap.parse_args()
 
     # Fixed default output location: ./maps/obstacles_generated.pl
@@ -239,13 +191,6 @@ def main():
         out_path = os.path.join(OUTPUT_DIR, "obstacles_generated.pl")
 
     generate(args.yaml_path, out_path, args.epsilon, args.min_area)
-
-    if args.inline:
-        if not os.path.isfile(args.inline):
-            print(f"[warn] --inline target {args.inline} not found, skipping "
-                  f"start/goal patch", file=sys.stderr)
-        else:
-            patch_start_goal(args.inline, args.start, args.goal)
 
 
 if __name__ == "__main__":

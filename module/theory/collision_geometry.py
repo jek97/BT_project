@@ -4,13 +4,14 @@ collision_geometry.py
 
 PROBLOG EXTERNAL-PREDICATE MODULE -- imported directly by ProbLog's own
 :- use_module('./collision_geometry.py'). directive inside
-moveto_continuous.pl, same mechanism as actions/moveto_planners.py's own
+basic_action_theory.pl, same mechanism as planners.py's own
 :- use_module(...) directive (see that file's header for the mechanics).
-Lives NEXT TO moveto_continuous.pl, not inside ./actions/ -- this isn't
-a BT.cpp-facing node/condition, it's an internal performance black box
-for the action theory's own obstacle-clearance geometry.
+Lives NEXT TO basic_action_theory.pl in module/theory/, not in
+module/contracts/ -- this isn't a BT.cpp-facing node/condition, it's an
+internal performance black box for the action theory's own
+obstacle-clearance geometry.
 
-WHY THIS EXISTS: moveto_continuous.pl used to compute
+WHY THIS EXISTS: basic_action_theory.pl used to compute
 first_threshold_crossing_time/6 (the earliest time a noisy trajectory
 comes within a given distance of any obstacle -- the basis for the
 `collision` trigger and, now, the generic `obstacle_in_bound(Threshold)`
@@ -23,7 +24,7 @@ lateral-noise draw) is fixed -- it's a deterministic function of
 ProbLog's grounding materializes a full proof-tree node for every one of
 those bracket/bisection steps anyway, for every resolved Z, which is
 what made collision detection scale so badly with obstacle count/
-complexity (see moveto_continuous.pl's own note above dist/5). Moving it
+complexity (see basic_action_theory.pl's own note above dist/5). Moving it
 here collapses that whole grounding subtree into ONE black-box call per
 resolved world -- exactly the same "stateless computation, no frame
 problem, so no reason to pay Reiter's machinery's cost" argument already
@@ -31,18 +32,20 @@ used to justify planWith/plan_call being a Python black box instead of
 Prolog clauses.
 
 CORRECTNESS: the algorithm below is a LINE-FOR-LINE port of
-moveto_continuous.pl's former Prolog implementation (same bracket-scan
+basic_action_theory.pl's former Prolog implementation (same bracket-scan
 sample count, same bisection epsilon, same spline/noise formulas) --
 not a re-derivation. bracket_samples, crossing_eps, and position_sigma
-are read directly out of config/config.yaml at import time (the SAME
-file config/generate_prolog_config.py turns into
-config/config_generated.pl for the Prolog side, see that module's own
-header) rather than hardcoded a second time here, so config.yaml stays
-the single source of truth for both the Prolog and Python halves of the
-theory with no risk of the two drifting apart.
+are read directly out of the problem's own config.yaml at import time
+(the SAME file module/translators/config_to_prolog.py turns into
+config_generated.pl for the Prolog side, see that module's own header)
+rather than hardcoded a second time here, so config.yaml stays the
+single source of truth for both the Prolog and Python halves of the
+theory with no risk of the two drifting apart. Which problem's
+config.yaml is read is controlled by BT_PROBLEM_DIR, same as
+_OBSTACLES_PATH below (see this module's own _PROBLEM_DIR note).
 
 Exposes SEVEN predicates to ProbLog, all INSTANTANEOUS and stateless,
-exactly like moveto_planners.py's plan_astar/plan_straight:
+exactly like planners.py's plan_astar/plan_straight:
 
     first_threshold_crossing_time(+ControlPoints,+T0,+Duration,+Z,+Zt,
                                    +Threshold, -Tcross, -ObstacleId)
@@ -61,7 +64,7 @@ The last three back the Bug-algorithm boundary-LEAVE triggers/condition
 (line_of_sight_clear = Bug0's rule, crosses_segment/first_segment_
 crossing_time = Bug2's rule) -- see the "BUG-ALGORITHM BOUNDARY-LEAVE
 PRIMITIVES" section below for why these are TRIGGER-side machinery,
-not a new planner: the planner (moveto_planners.py's follow_boarder)
+not a new planner: the planner (planners.py's follow_boarder)
 just walks a full clockwise loop around an obstacle's offset boundary
 unconditionally now; WHICH bug variant a MoveTo leg implements is a
 matter of which of these two triggers its own Triggers list names,
@@ -83,12 +86,12 @@ first_threshold_crossing_time is the TRIGGER-side primitive: searches a
 whole future trajectory (bracket scan + bisection) for the earliest
 crossing. obstacle_within_threshold is the CONDITION-side primitive:
 checks ONE point (the current situation) directly, no search at all --
-it's what backs moveto_continuous.pl's holds(obstacle_in_bound(...),S),
+it's what backs basic_action_theory.pl's holds(obstacle_in_bound(...),S),
 the exact same underlying test (within_obstacle_threshold/
 _min_clearance_all) the trigger-side search calls repeatedly, called
 here just once. This is the "reuse the underlying machinery" the
 obstacle_in_bound(Threshold) trigger/condition pair was built around --
-see moveto_continuous.pl's own TRIGGERS section note.
+see basic_action_theory.pl's own TRIGGERS section note.
 
 first_on_path_crossing_time / obstacle_on_path_within_threshold are the
 SAME trigger/condition pair again, for obstacle_on_path(Threshold):
@@ -101,7 +104,7 @@ input list.
 ObstacleId is the SAME atom as the crossed obstacle's obstacle_polygon/2
 Id (e.g. obs7) -- whichever polygon achieves the minimum clearance at
 the exact (bisected) crossing point, i.e. an argmin over obstacles, not
-just the min distance. This is what lets moveto_continuous.pl's
+just the min distance. This is what lets basic_action_theory.pl's
 trigger_crossing_time/9 report crashed(ObstacleId)/
 obstacle_in_bound(Threshold,ObstacleId) instead of a bare atom -- see
 this module's own _min_clearance_all for where the argmin actually
@@ -115,23 +118,23 @@ represented by absence in both, not a sentinel value, same convention
 as every other exact-detection predicate in this theory.
 
 Obstacle polygons: loaded ONCE, at import time, directly from
-./environments/maps/obstacles_generated.pl -- the EXACT SAME file
-moveto_continuous.pl's own :- consult(...) directive loads (see that
-directive's own comment, a few lines above this module's use_module).
-By the time this module is imported, that consult has already either
+<problem>/obstacles_generated.pl (see _PROBLEM_DIR above) -- the EXACT
+SAME file basic_action_theory.pl's own problem_data.pl bootstrap
+consults (see Section 0's own comment, near the top of that file). By
+the time this module is imported, that consult has already either
 succeeded or already aborted the whole load with a clearer error, so
 there is no meaningful "obstacles file missing" case to handle
-gracefully here (unlike moveto_planners.py's map, which is genuinely
+gracefully here (unlike planners.py's map, which is genuinely
 optional). If you hand-add extra obstacle_polygon/2 facts somewhere
 else in the theory instead of through occgrid_to_problog.py's generated
 file, this black box will not see them -- keep obstacles_generated.pl
-the single source of truth, exactly as moveto_planners.py's own map
+the single source of truth, exactly as planners.py's own map
 loading already assumes for map.yaml.
 
 Everything below the constant/obstacle loading is PLAIN PYTHON, with no
 ProbLog types anywhere -- first_threshold_crossing_time_value is the
 testable core; the ProbLog import itself is wrapped in a try/except
-(_HAVE_PROBLOG), same pattern as actions/moveto_planners.py, purely so
+(_HAVE_PROBLOG), same pattern as planners.py, purely so
 this module can be exercised directly (e.g. to numerically compare
 against the old Prolog implementation) without needing a full ProbLog
 run.
@@ -142,19 +145,29 @@ import re
 import sys
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_OBSTACLES_PATH = os.path.join(_THIS_DIR, "environments", "maps", "obstacles_generated.pl")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
 
-_CONFIG_DIR = os.path.join(_THIS_DIR, "config")
-if _CONFIG_DIR not in sys.path:
-    sys.path.insert(0, _CONFIG_DIR)
-from generate_prolog_config import load_config  # noqa: E402
+# Which problem's own data (config.yaml, obstacles_generated.pl) to load
+# -- set by main.py via BT_PROBLEM_DIR before this module is imported;
+# defaults to problems/problem0/ so this module still works standalone
+# with no environment variable set (same convention as planners.py's
+# own _PROBLEM_DIR).
+_DEFAULT_PROBLEM_DIR = os.path.join(_PROJECT_ROOT, "problems", "problem0")
+_PROBLEM_DIR = os.environ.get("BT_PROBLEM_DIR", _DEFAULT_PROBLEM_DIR)
+
+_OBSTACLES_PATH = os.path.join(_PROBLEM_DIR, "obstacles_generated.pl")
+
+_TRANSLATORS_DIR = os.path.join(_PROJECT_ROOT, "module", "translators")
+if _TRANSLATORS_DIR not in sys.path:
+    sys.path.insert(0, _TRANSLATORS_DIR)
+from config_to_prolog import load_config  # noqa: E402
 
 POINT_RE = re.compile(r"point\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)")
 
 
 def _strip_prolog_comments(text):
     """Remove '%'-to-end-of-line comments before regex-parsing obstacle
-    facts -- same defensive technique run_plan_continuous_safety.py
+    facts -- same defensive technique main.py
     already uses for the same reason (a header comment showing example
     syntax could otherwise match before the real fact)."""
     return re.sub(r"%.*$", "", text, flags=re.MULTILINE)
@@ -173,7 +186,7 @@ def _parse_obstacle_polygons(text):
     return polys
 
 
-_config = load_config()
+_config = load_config(config_path=os.path.join(_PROBLEM_DIR, "config.yaml"))
 BRACKET_SAMPLES = int(_config["verification"]["bracket_samples"])
 CROSSING_EPS = float(_config["verification"]["crossing_eps"])
 SIGMA = float(_config["noise"]["position"]["sigma"])
@@ -184,16 +197,16 @@ try:
         OBSTACLE_POLYGONS = _parse_obstacle_polygons(_strip_prolog_comments(f.read()))
 except FileNotFoundError:
     # Only reachable if this module is imported standalone (e.g. for
-    # testing) before any map has been generated -- moveto_continuous.pl
+    # testing) before any map has been generated -- basic_action_theory.pl
     # itself would already have aborted loading earlier at its own
     # :- consult(...) of this same file. "No obstacles" is the correct
     # degrade here, matching obstacle_polygon/2's own Prolog fallback
-    # clause (see moveto_continuous.pl section 0).
+    # clause (see basic_action_theory.pl section 0).
     OBSTACLE_POLYGONS = []
 
 
 # =====================================================================
-# SPLINE + NOISE -- line-for-line port of moveto_continuous.pl's
+# SPLINE + NOISE -- line-for-line port of basic_action_theory.pl's
 # bezier_point/spline_point/spline_tangent/perp_unit/walk_noisy_point.
 # =====================================================================
 def _bezier_point(p0, p1, p2, p3, u):
@@ -252,10 +265,10 @@ def _walk_noisy_point(control_points, t0, duration, z, zt, t):
     (speed/timing-error style: further along or behind the nominal
     schedule, in a straight line at whatever direction the curve was
     pointing right there -- NOT a reparametrization of the curve, see
-    moveto_continuous.pl's own note on why that option was rejected).
+    basic_action_theory.pl's own note on why that option was rejected).
     Duration itself is UNAFFECTED by either noise source -- it stays a
     pure function of the nominal spline's own arc length (see
-    walk_duration/2 in moveto_continuous.pl); letting either noise draw
+    walk_duration/2 in basic_action_theory.pl); letting either noise draw
     feed back into Duration would make the sqrt(Duration) scaling above
     circular (Duration would depend on a deviation that itself depends
     on sqrt(Duration))."""
@@ -452,7 +465,7 @@ def _obstacle_on_path_within_threshold(control_points, t0, duration, z, zt, px, 
 
 # =====================================================================
 # BUG-ALGORITHM BOUNDARY-LEAVE PRIMITIVES -- the two rules that decide
-# WHEN a boundary-following MoveTo leg (moveto_planners.py's
+# WHEN a boundary-following MoveTo leg (planners.py's
 # follow_boarder(ObstacleId,Offset) planner -- a full clockwise loop
 # around the obstacle's offset boundary, no stopping logic of its own)
 # should stop circling and hand back off to a straight-line planner.
@@ -492,7 +505,7 @@ def _orient(ax, ay, bx, by, cx, cy):
 
 def _segments_intersect(p1, p2, p3, p4):
     """Standard orientation-based proper-crossing test -- same as
-    moveto_planners.py's own copy (kept separately per this module's
+    planners.py's own copy (kept separately per this module's
     own no-cross-import-between-black-boxes rule; see that file's
     header note by its own _OBSTACLE_POLYGONS load for why). Collinear
     /touching edge cases are treated as NOT intersecting."""
@@ -631,7 +644,7 @@ def obstacle_within_threshold_value(x, y, threshold):
     obstacle right now -- reusing _within_obstacle_threshold directly
     (the SAME primitive _first_unsafe_sample/_bisect_crossing call
     repeatedly above; this just calls it once). This is what backs the
-    obstacle_in_bound(Threshold) CONDITION in moveto_continuous.pl
+    obstacle_in_bound(Threshold) CONDITION in basic_action_theory.pl
     (holds(obstacle_in_bound(...),S)), as opposed to the
     obstacle_in_bound(Threshold) TRIGGER, which searches a whole future
     trajectory via first_threshold_crossing_time_value above. Takes no
@@ -695,7 +708,7 @@ def first_segment_crossing_time_value(control_points, t0, duration, z, zt, sx, s
 
 # =====================================================================
 # PROBLOG-FACING PREDICATE -- only registered if ProbLog is importable
-# (see actions/moveto_planners.py's header for why this is guarded
+# (see planners.py's header for why this is guarded
 # rather than a hard import).
 # =====================================================================
 try:
@@ -724,7 +737,7 @@ if _HAVE_PROBLOG:
 
     # obstacle_within_threshold(+X,+Y,+Threshold): a pure boolean check,
     # no output ports at all -- backs holds(obstacle_in_bound(...),S) in
-    # moveto_continuous.pl. A ProbLog nondet predicate with ZERO "-"
+    # basic_action_theory.pl. A ProbLog nondet predicate with ZERO "-"
     # specs succeeds (one solution) by returning [()] (a single empty
     # tuple -- "here is one solution binding zero extra outputs") or
     # fails (no solutions) by returning [].
@@ -762,7 +775,7 @@ if _HAVE_PROBLOG:
 
     # ObstacleId arrives as a bare Prolog ATOM Term (e.g. obs5) --
     # .functor is the plain Python string for a zero-arity atom Term
-    # (same pattern moveto_planners.py's follow_boarder already uses).
+    # (same pattern planners.py's follow_boarder already uses).
     #
     # first_line_of_sight_clear_time(+ControlPoints,+T0,+Duration,+Z,
     # +Zt,+ObstacleId,+GX,+GY,-Tcross): backs the line_of_sight_clear

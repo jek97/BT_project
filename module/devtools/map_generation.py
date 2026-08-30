@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """
-Generates a ROS map_server-compatible map (map.pgm + map.yaml) describing
-a 28 m x 17 m environment containing circular obstacles of 0.5 m diameter.
+module/devtools/map_generation.py
+
+Standalone dev tool, NOT part of the live main.py pipeline. Generates a
+ROS map_server-compatible map (map.pgm + map.yaml) describing a
+28 m x 17 m environment containing circular obstacles of 0.5 m diameter.
 The .pgm/.yaml pair is the standard on-disk representation that ROS's
 map_server / nav2 map_server loads and republishes as a nav_msgs/OccupancyGrid
 on the /map topic. Cell values follow the map_server convention:
     254 -> free      (occupancy 0)
     0   -> occupied   (occupancy 100)
     205 -> unknown    (occupancy -1)  [not used here, whole map is known]
+
+To use the result for a real problem, run this from (or copy its output
+into) that problem's own directory, e.g. problems/<name>/map.yaml +
+map.pgm -- main.py's own pre-flight translator
+(module/translators/occgrid_to_problog.py) reads map.yaml from there.
 """
 import os
 import numpy as np

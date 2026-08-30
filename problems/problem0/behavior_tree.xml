@@ -6,13 +6,14 @@
   path with A* to the mission goal, then walk it, halting on collision
   or battery depletion (no obstacle_sighted for now). This is the
   single source of truth for the POLICY'S SHAPE: change the tree by
-  editing this file, not moveto_continuous.pl (which now just
-  consults the translated result; see plan_generation/bt_to_prolog.py).
+  editing this file, not basic_action_theory.pl (which now just
+  consults the translated result; see module/translators/bt_to_prolog.py).
 
   goal="11.675;11.525" is a LITERAL. There is no global goal/2 fact any
   more: planWith always took an explicit Goal argument, and now so
-  does the AtGoal condition (goal="..." port, see actions/schema.yaml)
-  and goal_formula.pl (plan_generation/plan/goal_formula.pl), which is
+  does the AtGoal condition (goal="..." port, see
+  module/contracts/schema.yaml) and this same directory's own
+  goal_formula.pl, which is
   the single place mission-goal information lives. If the map or
   mission goal changes, update this value AND goal_formula.pl to match:
   there is no shared fact tying them together, so keeping them

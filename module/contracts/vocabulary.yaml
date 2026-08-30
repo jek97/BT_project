@@ -1,14 +1,14 @@
 # ============================================================
 # vocabulary.yaml
 #
-# The verification-level counterpart to actions/schema.yaml. Where
-# schema.yaml documents the BT.cpp-facing surface of moveto_continuous.pl
+# The verification-level counterpart to module/contracts/schema.yaml. Where
+# schema.yaml documents the BT.cpp-facing surface of basic_action_theory.pl
 # (do_node/4 actions, holds/2 conditions -- what a TREE LEAF can be),
 # this file documents the OUTER-QUERY-facing surface (fluents and
 # derived predicates over a whole SITUATION) -- what a
-# plan_generation/plan/goal_formula.pl file is allowed to be WRITTEN
+# the problem's own goal_formula.pl file is allowed to be WRITTEN
 # IN TERMS OF. Same relationship as schema.yaml has to bt_to_prolog.py:
-# plan_generation/goal_formula_check.py reads this file to validate
+# module/contracts/goal_formula_check.py reads this file to validate
 # goal_formula.pl BEFORE it's ever consulted/queried, exactly the same
 # "structural validation is a hard failure, not a warning" posture
 # bt_to_prolog.py already takes for behavior_tree.xml against
@@ -24,10 +24,10 @@
 # even though every predicate below now puts S LAST per Reiter's own
 # convention, no exceptions -- now/2 used to be the one holdout
 # (now(S,T), keeping S first, since it's called from ~15 places
-# throughout moveto_continuous.pl rather than just its own
+# throughout basic_action_theory.pl rather than just its own
 # definition); that's now fixed too, now(T,S).
 # `situation_arg: null` means this predicate has NO situation argument
-# at all -- a plain, situation-independent fact (goal/2, start/2)
+# at all -- a plain, situation-independent fact (start/2)
 # that's still fine to reference inside a goal formula (e.g. to bind a
 # coordinate), since it doesn't introduce a second situation term.
 #
@@ -68,7 +68,7 @@ predicates:
       situation, true for every situation built on top of it (a
       collision or battery depletion earlier in the SAME resolved
       world can instead make it FALSE by never reaching that far --
-      see moveto_continuous.pl's own note on why this needs to be a
+      see basic_action_theory.pl's own note on why this needs to be a
       genuine per-world probabilistic check, not a static plan-
       structure one). NOTE: for a plain linear Sequence of legs (no
       Fallback in between), checking only the LAST waypoint already

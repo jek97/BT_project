@@ -2,17 +2,20 @@
 """
 bt_actions.py
 
-Lives in ./actions/ alongside moveto_planners.py and schema.yaml.
+Lives in module/contracts/ alongside schema.yaml -- vocabulary.yaml and
+goal_formula_check.py are its siblings there too (see this project's
+top-level layout note for why these are grouped as "the schemas the
+translators/validators check against").
 
 Canonical action/condition implementations matching schema.yaml,
 written to be usable from TWO different callers:
 
-  1. Our own ProbLog-based verification pipeline. moveto_planners.py's
-     plan_astar_points/plan_straight_points ARE the shared plain-Python
-     planning core, imported and REUSED here unchanged, never
-     duplicated -- moveto_continuous.pl itself keeps calling the
-     SEPARATE ProbLog-facing plan_astar/plan_straight predicates
-     (also defined in moveto_planners.py, on top of the same core)
+  1. Our own ProbLog-based verification pipeline. planners.py's (in
+     module/theory/) plan_astar_points/plan_straight_points ARE the
+     shared plain-Python planning core, imported and REUSED here
+     unchanged, never duplicated -- basic_action_theory.pl itself
+     keeps calling the SEPARATE ProbLog-facing plan_astar/plan_straight
+     predicates (also defined in planners.py, on top of the same core)
      directly, unaffected by anything in this file.
 
   2. A future BehaviorTree.cpp integration. A pybind11 (or ctypes, or
@@ -22,15 +25,15 @@ written to be usable from TWO different callers:
      declarations exactly, using PLAIN Python types throughout
      (float / list of (x,y) tuples / str / bool / dict) -- never a
      ProbLog Term object. This file (and the plain-Python half of
-     moveto_planners.py it calls into) has NO ProbLog import anywhere,
-     so a BT.cpp bridge that never installs ProbLog can still import
-     and call bt_plan_astar/bt_plan_straight -- see moveto_planners.py's
-     own header for why its ProbLog-specific half is wrapped in a
+     planners.py it calls into) has NO ProbLog import anywhere, so a
+     BT.cpp bridge that never installs ProbLog can still import and
+     call bt_plan_astar/bt_plan_straight -- see planners.py's own
+     header for why its ProbLog-specific half is wrapped in a
      try/except instead of a hard import.
 
 MoveTo (and both conditions) are DELIBERATELY NOT given a directly
 -executable Python implementation here. MoveTo's real behaviour is
-the STOCHASTIC action theory in moveto_continuous.pl -- noisy
+the STOCHASTIC action theory in basic_action_theory.pl -- noisy
 position, noisy battery, exact trigger-crossing detection via
 closed-form algebra or bracket-scan+bisection. There is no correct
 way to "run" that in a plain Python function without reimplementing
@@ -43,22 +46,24 @@ Python has no situation to evaluate them against on its own.
 What IS provided for all three is their INTERFACE (matching
 schema.yaml's ports exactly) plus a TERM BUILDER -- a function
 translating bound port values into the corresponding
-moveto_continuous.pl term text. This is the piece a future
+basic_action_theory.pl term text. This is the piece a future
 BT-tree-to-Prolog translator needs: given a BT.cpp node's bound
 inputs, produce the Prolog subterm to splice into a
 seq_node(...)/fallback_node(...) list. Building that translator
 itself (parsing a whole BT.cpp XML tree) is a separate, larger step
--- not done here; this file only provides the per-node building
-blocks it will need.
+-- not done here (see module/translators/bt_to_prolog.py, which
+implements this translator directly rather than through this file);
+this file only provides the per-node building blocks it documents.
 """
 import os
 import sys
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-if _THIS_DIR not in sys.path:
-    sys.path.insert(0, _THIS_DIR)
+_THEORY_DIR = os.path.join(os.path.dirname(_THIS_DIR), "theory")
+if _THEORY_DIR not in sys.path:
+    sys.path.insert(0, _THEORY_DIR)
 
-from moveto_planners import (
+from planners import (
     plan_astar_points, plan_straight_points, plan_voronoi_points, follow_boarder_points,
 )
 
@@ -68,13 +73,13 @@ from moveto_planners import (
 # =====================================================================
 def bt_plan_astar(sx, sy, gx, gy):
     """
-    BT.cpp-compatible wrapper around moveto_planners.py's
+    BT.cpp-compatible wrapper around planners.py's
     plan_astar_points -- matches PlanAstar's three output ports in
     schema.yaml exactly, returned together as one dict:
         {control_points, reason, status}
     control_points is [] and reason is "no_path" if A* found no path
     (unreachable goal, or the map failed to load) -- see
-    moveto_planners.py's own _astar_control_points for exactly which
+    planners.py's own _astar_control_points for exactly which
     cases that covers.
     """
     control_points = plan_astar_points(sx, sy, gx, gy)
@@ -100,7 +105,7 @@ def bt_plan_straight(sx, sy, gx, gy):
 
 
 def bt_plan_voronoi(sx, sy, gx, gy):
-    """BT.cpp-compatible wrapper around moveto_planners.py's
+    """BT.cpp-compatible wrapper around planners.py's
     plan_voronoi_points -- same shape/rationale as bt_plan_astar above.
     control_points is [] and reason is "no_path" only if a roadmap
     exists but start/goal are genuinely disconnected within it;
@@ -117,7 +122,7 @@ def bt_plan_voronoi(sx, sy, gx, gy):
 
 
 def bt_follow_boarder(sx, sy, obstacle_id, offset):
-    """BT.cpp-compatible wrapper around moveto_planners.py's
+    """BT.cpp-compatible wrapper around planners.py's
     follow_boarder_points -- matches FollowBoarder's four input/output
     ports in schema.yaml exactly (no goal port -- this planner doesn't
     decide when to leave the boundary, see follow_boarder_points's own
@@ -138,9 +143,9 @@ def bt_follow_boarder(sx, sy, obstacle_id, offset):
 # =====================================================================
 def moveto_leg_term(control_points, triggers):
     """
-    Build the moveto_continuous.pl TERM TEXT for one MoveTo node's
+    Build the basic_action_theory.pl TERM TEXT for one MoveTo node's
     bound inputs -- moveto_leg(ControlPoints,Triggers). Triggers is
-    REQUIRED, matching moveto_continuous.pl's own moveto_leg/2 (there is
+    REQUIRED, matching basic_action_theory.pl's own moveto_leg/2 (there is
     deliberately no sugar/default form on either side -- every leg
     states its own protection level explicitly; pass [] for a
     genuinely unprotected leg).
@@ -162,18 +167,18 @@ def moveto_leg_term(control_points, triggers):
 # =====================================================================
 def plan_with_term(algorithm, goal, cp_var="CP"):
     """
-    Build the moveto_continuous.pl TERM TEXT for one PlanAstar/
+    Build the basic_action_theory.pl TERM TEXT for one PlanAstar/
     PlanStraight node's bound inputs -- planWith(Algorithm,
     point(GoalX,GoalY), CPVar) -- matching planWith's own 3-arg
-    signature (Algorithm, Goal, CP) in moveto_continuous.pl. CPVar is
+    signature (Algorithm, Goal, CP) in basic_action_theory.pl. CPVar is
     left as a FREE PROLOG VARIABLE NAME (default "CP"), not a value,
     since ControlPoints is this node's own OUTPUT, meant to be shared
     forward with a subsequent MoveTo node using the SAME variable name
-    -- see moveto_continuous.pl's own note on the "leave a variable
+    -- see basic_action_theory.pl's own note on the "leave a variable
     free, let a prior step bind it" pattern. Pass a distinct cp_var
     (e.g. "CP1", "CP2") when building more than one planning call in
     the same plan, per the fallback_node variable-sharing gotcha
-    documented in moveto_continuous.pl.
+    documented in basic_action_theory.pl.
 
     algorithm: "astar" or "straight" (a bare Prolog atom, unquoted).
     goal: an (x,y) pair.
@@ -186,12 +191,12 @@ def plan_with_term(algorithm, goal, cp_var="CP"):
 
 
 def follow_boarder_term(obstacle_id, offset, cp_var="CP"):
-    """Build the moveto_continuous.pl TERM TEXT for one FollowBoarder
+    """Build the basic_action_theory.pl TERM TEXT for one FollowBoarder
     node's bound inputs -- planWith(follow_boarder(ObstacleId,Offset),
     point(0.0,0.0), CPVar), same "leave CP free" convention as
     plan_with_term above. The point(0.0,0.0) is a PLACEHOLDER, not a
     real goal -- FollowBoarder takes no goal port at all (it doesn't
-    decide when to leave the boundary; see moveto_planners.py's
+    decide when to leave the boundary; see planners.py's
     follow_boarder_points docstring), but planWith/3's Goal slot is
     part of the shared template every planner sits inside, so
     something has to fill it; plan_call/8's own follow_boarder clauses

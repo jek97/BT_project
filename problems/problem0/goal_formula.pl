@@ -10,10 +10,10 @@
 % the ONLY free situation term in the body, and every fluent that
 % takes a situation argument is applied to exactly this S) -- it is
 % NOT hardwired to final_situation itself, so it can in principle be
-% checked at any situation; moveto_continuous.pl's own
+% checked at any situation; basic_action_theory.pl's own
 % verify_goal_formula wrapper is what actually applies it at
 % final_situation, matching every other top-level verification query
-% (goal_reached, any_collision, plan_outcome, ...).
+% (any_collision, plan_outcome, ...).
 %
 % Written directly in Prolog -- and(P,Q)/or(P,Q) (the mini-language
 % cond() leaves use inside a BT tree) is a SEPARATE vocabulary for a

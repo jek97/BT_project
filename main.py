@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-run_plan_continuous_safety.py
+main.py
 
 Runs the continuous-time / continuous-space single-moveto() ProbLog
-action theory (moveto_continuous.pl) and produces a full safety report,
-analogous in spirit to run_plan_weave_safety.py but re-indexed from
-"discrete grid step N" to "sampled instant I along the one continuous
-walk", and from "grid obstacle cells" to "obstacle polygons" (as
-produced by occgrid_to_problog.py).
+action theory (module/theory/basic_action_theory.pl) against one
+problem (problems/<name>/, default "problem0") and produces a full
+safety report, analogous in spirit to run_plan_weave_safety.py but
+re-indexed from "discrete grid step N" to "sampled instant I along the
+one continuous walk", and from "grid obstacle cells" to "obstacle
+polygons" (as produced by module/translators/occgrid_to_problog.py).
 
 Four safety features, same structure as before, ALL specifically about
 COLLISION (first_hit/hit_by are collision-only PMFs/CDFs -- see below
@@ -28,34 +29,44 @@ individually diagnosable):
     nominal spline at sample I) -- shows cumulative drift over time
 
 Usage:
-    python3 run_plan_continuous_safety.py moveto_continuous.pl
+    python3 main.py [--problem NAME]
+        (default NAME: problem0 -- see problems/problem0/ for its
+        config.yaml, behavior_tree.xml, goal_formula.pl, and map.yaml)
 
-Before running inference, this script:
-  1. regenerates environments/maps/obstacles_generated.pl from
-     environments/maps/map.yaml (see environments/occgrid_to_problog.py's
+Before running inference, this script, for the SELECTED problem:
+  1. regenerates <problem>/obstacles_generated.pl from
+     <problem>/map.yaml (see module/translators/occgrid_to_problog.py's
      own header) -- map.yaml is the single source of truth for the
      obstacle layout.
-  2. regenerates config/config_generated.pl from config/config.yaml
-     (see that module's own header) -- config.yaml is the single
-     source of truth for every tunable constant in the theory (noise
-     sigmas, the Z discretization tables, battery drain rates,
-     robot/safety thresholds, tolerances, verification resolution, and
-     the robot's own starting position).
-  3. translates plan_generation/plan/behavior_tree.xml -- a real
-     BT.cpp v4 tree, the single source of truth for the POLICY'S
-     SHAPE -- into plan_generation/plan/plan_generated.pl, validating
-     it against actions/schema.yaml on the way (see
-     plan_generation/bt_to_prolog.py's own header).
-  4. validates plan_generation/plan/goal_formula.pl -- the hand-
-     authored verification goal for THIS particular plan, and the
-     ONLY place goal information lives in this theory -- against
-     plan_generation/vocabulary.yaml (see
-     plan_generation/goal_formula_check.py's own header): every
-     predicate it calls must be a known fluent, and the whole formula
-     must be uniform in one situation (Reiter's own sense).
-All four steps mean a normal run always reflects whatever is currently
-in map.yaml / config.yaml / behavior_tree.xml / goal_formula.pl, with
-no separate regeneration step needed.
+  2. regenerates <problem>/config_generated.pl from <problem>/config.yaml
+     (see module/translators/config_to_prolog.py's own header) --
+     config.yaml is the single source of truth for every tunable
+     constant in the theory (noise sigmas, the Z discretization
+     tables, battery drain rates, robot/safety thresholds, tolerances,
+     verification resolution, and the robot's own starting position).
+  3. translates <problem>/behavior_tree.xml -- a real BT.cpp v4 tree,
+     the single source of truth for the POLICY'S SHAPE -- into
+     <problem>/plan_generated.pl, validating it against
+     module/contracts/schema.yaml on the way (see module/translators/
+     bt_to_prolog.py's own header).
+  4. validates <problem>/goal_formula.pl -- the hand-authored
+     verification goal for THIS particular plan, and the ONLY place
+     goal information lives in this theory -- against module/contracts/
+     vocabulary.yaml (see module/contracts/goal_formula_check.py's own
+     header): every predicate it calls must be a known fluent, and the
+     whole formula must be uniform in one situation (Reiter's own
+     sense).
+  5. (re)writes module/theory/problem_data.pl, a small bootstrap file
+     basic_action_theory.pl itself consults (see that file's Section 0)
+     that points -- via absolute paths -- at the four files above, so
+     the SAME theory file serves whichever problem was selected. Also
+     sets the BT_PROBLEM_DIR environment variable to the selected
+     problem's own directory, which module/theory/planners.py and
+     module/theory/collision_geometry.py (Python black boxes ProbLog
+     loads directly) read at import time for the same reason.
+All five steps mean a normal run always reflects whatever is currently
+in the selected problem's own map.yaml / config.yaml / behavior_tree.xml
+/ goal_formula.pl, with no separate regeneration step needed.
 
 Requires: `problog` importable/runnable on PATH.
 
@@ -84,11 +95,19 @@ from matplotlib.lines import Line2D
 
 W = 68
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+MODULE_DIR = os.path.join(_THIS_DIR, "module")
+THEORY_DIR = os.path.join(MODULE_DIR, "theory")
+TRANSLATORS_DIR = os.path.join(MODULE_DIR, "translators")
+CONTRACTS_DIR = os.path.join(MODULE_DIR, "contracts")
+PROBLEMS_DIR = os.path.join(_THIS_DIR, "problems")
+THEORY_PATH = os.path.join(THEORY_DIR, "basic_action_theory.pl")
+
 
 # -----------------------------------------------------------------------
 # Parsing the .pl files (regex-based -- we control the fact format that
-# moveto_continuous.pl / occgrid_to_problog.py emit, so this is safe and
-# avoids needing a Prolog engine just to read back ground facts)
+# basic_action_theory.pl / occgrid_to_problog.py emit, so this is safe
+# and avoids needing a Prolog engine just to read back ground facts)
 # -----------------------------------------------------------------------
 POINT_RE = re.compile(r"point\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)")
 
@@ -98,7 +117,7 @@ CONSULT_RE = re.compile(r":-\s*consult\(\s*'([^']+)'\s*\)\s*\.")
 
 def strip_prolog_comments(text):
     """Remove '%'-to-end-of-line comments before regex-parsing facts. This
-    matters specifically because moveto_continuous.pl's own documentation
+    matters specifically because basic_action_theory.pl's own documentation
     comments include example/placeholder syntax like
     'control_points([point(...),...]).' to illustrate the expected shape
     -- which otherwise matches parse_control_points' regex BEFORE the real
@@ -113,11 +132,12 @@ def resolve_consulted_text(theory_path, _seen=None):
     Read theory_path's text, AND the text of every file it :- consult()s
     (resolved relative to theory_path's own directory), recursively, and
     return it all concatenated. This mirrors what ProbLog itself does at
-    load time -- moveto_continuous.pl no longer contains start/1 or
-    obstacle_polygon/2 directly; they live in files it consults
-    (config_generated.pl, obstacles_generated.pl), so parsing only
-    theory_path's own text (as earlier versions of this script did) finds
-    nothing. _seen guards against accidental consult cycles.
+    load time -- basic_action_theory.pl no longer contains start/1 or
+    obstacle_polygon/2 directly; they live in files it consults (via its
+    own problem_data.pl bootstrap -- see that file's Section 0), so
+    parsing only theory_path's own text (as earlier versions of this
+    script did) finds nothing. _seen guards against accidental consult
+    cycles.
     """
     theory_path = os.path.abspath(theory_path)
     if _seen is None:
@@ -166,15 +186,15 @@ def parse_last_plan_goal(theory_text):
     """The LAST planWith(...,point(GX,GY),...) literal appearing in the
     (fully resolved) theory text -- used as a plottable "goal" marker
     now that there is no longer a single global goal/2 fact (goal
-    information lives entirely in plan_generation/plan/goal_formula.pl,
+    information lives entirely in the problem's own goal_formula.pl,
     which has no fixed shape a plotting script could reliably parse
     instead). The LAST occurrence, not the first, since a multi-leg
     plan's own final target is the more representative "where the
     mission is headed" point. KNOWN LIMITATION: a plan ending on a
     follow_boarder(...) leaf would mark the wrong point, since that
     planner's own goal argument is a meaningless point(0.0,0.0)
-    placeholder (see moveto_continuous.pl's own note on why) -- not hit
-    by the shipped plan."""
+    placeholder (see basic_action_theory.pl's own note on why) -- not
+    hit by the shipped plan."""
     matches = PLANWITH_GOAL_RE.findall(theory_text)
     if not matches:
         raise ValueError(
@@ -437,25 +457,23 @@ def print_safety_results(tee, results, num_samples):
             tee(f"  {i:<4} {p:>10.4f}  {bar(p,20)}{marker}")
 
 
-def control_points_via_planner(theory_dir, algorithm, start, goal):
+def control_points_via_planner(algorithm, start, goal):
     """Fallback for when control_points/1 can't be found by static
     parsing -- e.g. the plan uses planAstar/planStraight (see
-    moveto_continuous.pl's plan/1 documentation) instead of a static
+    basic_action_theory.pl's plan/1 documentation) instead of a static
     fact, so there's nothing for parse_control_points' regex to find.
-    Calls the SAME black-box predicate directly (importing
-    moveto_planners.py from the theory file's own ./actions/
-    subdirectory, exactly where moveto_continuous.pl's own
+    Calls the SAME black-box predicate directly (importing planners.py
+    from module/theory/, exactly where basic_action_theory.pl's own
     :- use_module(...) directive expects it to live) to get a plottable
     nominal path. Uses the plain-Python plan_*_points functions (no
-    ProbLog Term objects involved) -- see moveto_planners.py's own
-    header. Returns None if the import or the planner call itself fails
-    (e.g. no map, or A* finds no path) -- the caller decides what to do
+    ProbLog Term objects involved) -- see planners.py's own header.
+    Returns None if the import or the planner call itself fails (e.g.
+    no map, or A* finds no path) -- the caller decides what to do
     next."""
-    actions_dir = os.path.join(theory_dir, "actions")
-    if actions_dir not in sys.path:
-        sys.path.insert(0, actions_dir)
+    if THEORY_DIR not in sys.path:
+        sys.path.insert(0, THEORY_DIR)
     try:
-        import moveto_planners as mp
+        import planners as mp
     except ImportError:
         return None
     func = mp.plan_astar_points if algorithm == "astar" else mp.plan_straight_points
@@ -474,12 +492,15 @@ def control_points_via_planner(theory_dir, algorithm, start, goal):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("plan_file", nargs="?", default="moveto_continuous.pl",
-                     help="Path to the ProbLog action-theory file "
-                          "(default: moveto_continuous.pl)")
+    ap.add_argument("--problem", default="problem0",
+                     help="Name of the problem to run -- a subdirectory "
+                          "of problems/ holding this problem's own "
+                          "config.yaml, behavior_tree.xml, "
+                          "goal_formula.pl, and map.yaml (default: "
+                          "problem0).")
     ap.add_argument("--obstacles", default=None,
                      help="Optional EXTRA obstacle facts file to also parse, "
-                          "on top of whatever moveto_continuous.pl itself "
+                          "on top of whatever basic_action_theory.pl itself "
                           "already :- consult()s (normally you don't need "
                           "this -- obstacle_polygon/2 facts are found "
                           "automatically by following the theory file's own "
@@ -487,91 +508,90 @@ def main():
                           "time).")
     args = ap.parse_args()
 
-    script_dir = os.path.dirname(os.path.abspath(args.plan_file)) or "."
-    plan_path = os.path.abspath(args.plan_file)
+    problem_dir = os.path.join(PROBLEMS_DIR, args.problem)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = os.path.join(script_dir, f"run_plan_continuous_safety_{ts}.log")
-    img_path = os.path.join(script_dir, f"run_plan_continuous_safety_{ts}.png")
+    log_path = os.path.join(_THIS_DIR, f"{args.problem}_{ts}.log")
+    img_path = os.path.join(_THIS_DIR, f"{args.problem}_{ts}.png")
 
     with open(log_path, "w", encoding="utf-8") as fh:
         tee = Tee(fh)
         banner(tee, f"ProbLog Continuous-Space Safety Verification - {datetime.now():%Y-%m-%d %H:%M:%S}")
         tee(f"  Log file    : {log_path}")
         tee(f"  Image       : {img_path}")
-        tee(f"  Plan file   : {plan_path}")
+        tee(f"  Problem     : {args.problem} ({problem_dir})")
+        tee(f"  Theory file : {THEORY_PATH}")
 
-        if not os.path.isfile(plan_path):
-            tee(f"\n  [ERROR] File not found: {plan_path}")
+        if not os.path.isdir(problem_dir):
+            tee(f"\n  [ERROR] No such problem directory: {problem_dir}")
+            sys.exit(1)
+        if not os.path.isfile(THEORY_PATH):
+            tee(f"\n  [ERROR] File not found: {THEORY_PATH}")
             sys.exit(1)
 
-        # Regenerate environments/maps/obstacles_generated.pl from
-        # environments/maps/map.yaml BEFORE anything reads the theory --
+        # Every Python black box basic_action_theory.pl :- use_module()s
+        # (planners.py, collision_geometry.py) reads BT_PROBLEM_DIR at
+        # IMPORT time to find this problem's own map.yaml/config.yaml/
+        # obstacles_generated.pl -- must be set before ProbLog ever
+        # loads the theory (see run_problog_api below, and
+        # control_points_via_planner's own import further up).
+        os.environ["BT_PROBLEM_DIR"] = problem_dir
+
+        # Regenerate <problem>/obstacles_generated.pl from
+        # <problem>/map.yaml BEFORE anything reads the theory --
         # map.yaml is the single source of truth for the obstacle
-        # layout (see environments/occgrid_to_problog.py), same
+        # layout (see module/translators/occgrid_to_problog.py), same
         # automatic-every-run treatment config.yaml/behavior_tree.xml
-        # already get, rather than the separate manual step this used
-        # to be. Must happen before resolve_consulted_text() below, for
-        # the same staleness reason as config_generated.pl.
-        env_dir = os.path.join(script_dir, "environments")
-        if env_dir not in sys.path:
-            sys.path.insert(0, env_dir)
+        # already get. Must happen before resolve_consulted_text()
+        # below, for the same staleness reason as config_generated.pl.
+        if TRANSLATORS_DIR not in sys.path:
+            sys.path.insert(0, TRANSLATORS_DIR)
         try:
             from occgrid_to_problog import generate as generate_obstacles
             generated_obstacles_path = generate_obstacles(
-                yaml_path=os.path.join(env_dir, "maps", "map.yaml"),
-                output_path=os.path.join(env_dir, "maps", "obstacles_generated.pl"))
+                yaml_path=os.path.join(problem_dir, "map.yaml"),
+                output_path=os.path.join(problem_dir, "obstacles_generated.pl"))
             tee(f"  Obstacles   : {generated_obstacles_path} (regenerated from "
-                f"{os.path.join(env_dir, 'maps', 'map.yaml')})")
+                f"{os.path.join(problem_dir, 'map.yaml')})")
         except Exception as e:
             tee(f"\n  [ERROR] Could not regenerate obstacles_generated.pl: {e}")
             sys.exit(1)
 
-        # Regenerate config/config_generated.pl from config/config.yaml
-        # BEFORE anything reads the theory -- config.yaml is the single
-        # source of truth for every tunable constant (see config/
-        # generate_prolog_config.py), so every run picks up whatever is
-        # currently there with no separate step. Must happen before the
-        # resolve_consulted_text() call below, since that follows
-        # moveto_continuous.pl's own :- consult('./config/config_generated.pl')
-        # directive and would otherwise read a stale or missing file.
-        config_dir = os.path.join(script_dir, "config")
-        if config_dir not in sys.path:
-            sys.path.insert(0, config_dir)
+        # Regenerate <problem>/config_generated.pl from
+        # <problem>/config.yaml BEFORE anything reads the theory --
+        # config.yaml is the single source of truth for every tunable
+        # constant (see module/translators/config_to_prolog.py), so
+        # every run picks up whatever is currently there with no
+        # separate step.
         try:
-            from generate_prolog_config import generate as generate_prolog_config
-            generated_path = generate_prolog_config(
-                config_path=os.path.join(config_dir, "config.yaml"),
-                output_path=os.path.join(config_dir, "config_generated.pl"))
-            tee(f"  Config      : {generated_path} (regenerated from "
-                f"{os.path.join(config_dir, 'config.yaml')})")
+            from config_to_prolog import generate as generate_config
+            generated_config_path = generate_config(
+                config_path=os.path.join(problem_dir, "config.yaml"),
+                output_path=os.path.join(problem_dir, "config_generated.pl"))
+            tee(f"  Config      : {generated_config_path} (regenerated from "
+                f"{os.path.join(problem_dir, 'config.yaml')})")
         except Exception as e:
             tee(f"\n  [ERROR] Could not regenerate config_generated.pl: {e}")
             sys.exit(1)
 
-        # Translate plan_generation/plan/behavior_tree.xml (the real
-        # BT.cpp v4 tree that is now the single source of truth for the
-        # POLICY'S SHAPE) into plan_generation/plan/plan_generated.pl,
-        # validating it against actions/schema.yaml on the way -- see
-        # plan_generation/bt_to_prolog.py's own header. Any structural
-        # problem (unknown node, missing/unrecognized port, a
-        # control_points blackboard key with no producer) is a hard
-        # failure here, same as a missing config fact above; there is no
-        # sensible way to run inference against a tree that doesn't
-        # actually match its own schema. Must also happen before
-        # resolve_consulted_text() below, for the same staleness reason
-        # as config_generated.pl.
-        plan_gen_dir = os.path.join(script_dir, "plan_generation")
-        if plan_gen_dir not in sys.path:
-            sys.path.insert(0, plan_gen_dir)
+        # Translate <problem>/behavior_tree.xml (the real BT.cpp v4
+        # tree that is now the single source of truth for the POLICY'S
+        # SHAPE) into <problem>/plan_generated.pl, validating it
+        # against module/contracts/schema.yaml on the way -- see
+        # module/translators/bt_to_prolog.py's own header. Any
+        # structural problem (unknown node, missing/unrecognized port,
+        # a control_points blackboard key with no producer) is a hard
+        # failure here, same as a missing config fact above; there is
+        # no sensible way to run inference against a tree that doesn't
+        # actually match its own schema.
         try:
             from bt_to_prolog import generate_plan_pl, BTValidationError
             generated_plan_path = generate_plan_pl(
-                xml_path=os.path.join(plan_gen_dir, "plan", "behavior_tree.xml"),
-                schema_path=os.path.join(script_dir, "actions", "schema.yaml"),
-                output_path=os.path.join(plan_gen_dir, "plan", "plan_generated.pl"))
+                xml_path=os.path.join(problem_dir, "behavior_tree.xml"),
+                schema_path=os.path.join(CONTRACTS_DIR, "schema.yaml"),
+                output_path=os.path.join(problem_dir, "plan_generated.pl"))
             tee(f"  Plan (BT)   : {generated_plan_path} (translated + validated "
-                f"from {os.path.join(plan_gen_dir, 'plan', 'behavior_tree.xml')})")
+                f"from {os.path.join(problem_dir, 'behavior_tree.xml')})")
         except BTValidationError as e:
             tee(f"\n  [ERROR] behavior_tree.xml failed validation: {e}")
             sys.exit(1)
@@ -579,21 +599,21 @@ def main():
             tee(f"\n  [ERROR] Could not translate behavior_tree.xml: {e}")
             sys.exit(1)
 
-        # Validate plan_generation/plan/goal_formula.pl against
-        # plan_generation/vocabulary.yaml -- same "structural
+        # Validate <problem>/goal_formula.pl against
+        # module/contracts/vocabulary.yaml -- same "structural
         # validation is a hard failure, not a warning" posture as
         # behavior_tree.xml's own validation just above; see
-        # plan_generation/goal_formula_check.py's own header. Must
-        # also happen before resolve_consulted_text() below, for the
-        # same staleness reason as config_generated.pl/plan_generated.pl.
+        # module/contracts/goal_formula_check.py's own header.
+        if CONTRACTS_DIR not in sys.path:
+            sys.path.insert(0, CONTRACTS_DIR)
         try:
             from goal_formula_check import validate_goal_formula, GoalFormulaValidationError
-            goal_formula_path = os.path.join(plan_gen_dir, "plan", "goal_formula.pl")
+            goal_formula_path = os.path.join(problem_dir, "goal_formula.pl")
             validate_goal_formula(
                 goal_formula_path=goal_formula_path,
-                vocab_path=os.path.join(plan_gen_dir, "vocabulary.yaml"))
+                vocab_path=os.path.join(CONTRACTS_DIR, "vocabulary.yaml"))
             tee(f"  Goal formula: {goal_formula_path} (validated against "
-                f"{os.path.join(plan_gen_dir, 'vocabulary.yaml')})")
+                f"{os.path.join(CONTRACTS_DIR, 'vocabulary.yaml')})")
         except GoalFormulaValidationError as e:
             tee(f"\n  [ERROR] goal_formula.pl failed validation: {e}")
             sys.exit(1)
@@ -601,13 +621,37 @@ def main():
             tee(f"\n  [ERROR] Could not validate goal_formula.pl: {e}")
             sys.exit(1)
 
-        # Follow moveto_continuous.pl's own :- consult(...) directives --
-        # start/1 now lives in config_generated.pl, obstacle_polygon/2
-        # in obstacles_generated.pl -- not in the theory file's own
-        # text. There is no goal/2 fact anywhere anymore (see
+        # Rewrite module/theory/problem_data.pl -- the small bootstrap
+        # file basic_action_theory.pl itself :- consult()s (see that
+        # file's Section 0) to find the four problem-specific files
+        # above. Written with ABSOLUTE paths since problems/<name>/ is
+        # nowhere near module/theory/ on disk, and regenerated fresh
+        # every run so basic_action_theory.pl never has to change to
+        # serve a different --problem.
+        problem_data_path = os.path.join(THEORY_DIR, "problem_data.pl")
+        with open(problem_data_path, "w") as f:
+            f.write(
+                "% AUTO-GENERATED by main.py -- do not hand-edit. Points, via\n"
+                "% absolute paths, at whichever problem was last selected\n"
+                f"% (--problem {args.problem}, run {ts}) -- see\n"
+                "% basic_action_theory.pl's own Section 0 for how this file\n"
+                "% is used and regenerated.\n\n"
+                f":- consult('{os.path.join(problem_dir, 'obstacles_generated.pl')}').\n"
+                f":- consult('{os.path.join(problem_dir, 'config_generated.pl')}').\n"
+                f":- consult('{os.path.join(problem_dir, 'plan_generated.pl')}').\n"
+                f":- consult('{goal_formula_path}').\n"
+            )
+        tee(f"  Bootstrap   : {problem_data_path} (points basic_action_theory.pl "
+            f"at {problem_dir})")
+
+        # Follow basic_action_theory.pl's own :- consult(...) directives
+        # (via problem_data.pl) -- start/1 now lives in
+        # config_generated.pl, obstacle_polygon/2 in
+        # obstacles_generated.pl -- not in the theory file's own text.
+        # There is no goal/2 fact anywhere anymore (see
         # parse_last_plan_goal's own note on where "the goal" is read
         # from instead, for plotting purposes).
-        theory_text = resolve_consulted_text(plan_path)
+        theory_text = resolve_consulted_text(THEORY_PATH)
 
         try:
             start = parse_scalar_fact(theory_text, "start")
@@ -621,13 +665,12 @@ def main():
             control_points = parse_control_points(theory_text)
         except ValueError:
             tee("  [info] No static control_points/1 found -- plan likely "
-                "uses planAstar/planStraight (see moveto_continuous.pl's "
+                "uses planAstar/planStraight (see basic_action_theory.pl's "
                 "plan/1 docs) instead of a static fact. Calling the SAME "
                 "black-box predicate directly for a plottable nominal path.")
             control_points = None
             for algorithm in ("astar", "straight"):
-                control_points = control_points_via_planner(
-                    script_dir, algorithm, start, goal)
+                control_points = control_points_via_planner(algorithm, start, goal)
                 if control_points is not None:
                     tee(f"  [info] Got a nominal path via plan_{algorithm}.")
                     break
@@ -646,7 +689,7 @@ def main():
 
         tee(f"\n  Started : {datetime.now():%H:%M:%S}")
         try:
-            results, elapsed = run_problog_api(plan_path)
+            results, elapsed = run_problog_api(THEORY_PATH)
         except ProbLogError as e:
             tee(f"\n  [ERROR] ProbLog error: {e}")
             sys.exit(1)

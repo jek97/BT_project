@@ -59,67 +59,70 @@
 % ============================================================
 
 % ---------------------------------------------------------------
-% 0. OBSTACLES (polygons) -- auto-generated file, see
-%    occgrid_to_problog.py. Falls back to a tiny built-in example
-%    so this file is runnable stand-alone before you've generated
-%    a real map.
+% 0. PROBLEM-SPECIFIC DATA -- obstacles, tunable config, the BT policy,
+%    and the goal formula ALL come from problem_data.pl, a small
+%    AUTO-GENERATED bootstrap file living next to this one
+%    (module/theory/problem_data.pl), rewritten by main.py on every
+%    run to point (via absolute paths) at whichever problem was
+%    selected (--problem NAME, default problem0; see
+%    problems/<NAME>/ for that problem's own config.yaml,
+%    behavior_tree.xml, goal_formula.pl, and map.yaml). Consulting ONE
+%    fixed file here -- rather than hardcoding four problem-specific
+%    paths into THIS file -- is what lets the same theory serve any
+%    problem folder without ever being hand-edited itself.
+%
+%    problem_data.pl provides:
+%      - obstacle_polygon/2   from obstacles_generated.pl, itself
+%                              generated from map.yaml by
+%                              module/translators/occgrid_to_problog.py.
+%      - start/1, robot_radius/1, safety_buffer/1, speed/1, sigma/1,
+%        sigma_tangential/1, sigma_battery/1, battery_start/1,
+%        idle_drain_rate/1, moving_drain_rate/1, goal_tolerance/1,
+%        tolerance/1, num_samples/1, bracket_samples/1, crossing_eps/1,
+%        z/2, zt/2, zbatt/1
+%                              from config_generated.pl, itself
+%                              generated from config.yaml by
+%                              module/translators/config_to_prolog.py.
+%      - plan/1                from plan_generated.pl, itself
+%                              translated + validated from
+%                              behavior_tree.xml against
+%                              module/contracts/schema.yaml by
+%                              module/translators/bt_to_prolog.py.
+%      - goal_formula/1        the problem's own hand-authored
+%                              goal_formula.pl, validated against
+%                              module/contracts/vocabulary.yaml by
+%                              module/contracts/goal_formula_check.py.
+%    main.py regenerates/validates all four automatically before every
+%    run -- you never need to run a generator by hand for a normal run.
 % ---------------------------------------------------------------
 % Fallback clause so obstacle_polygon/2 is always a KNOWN predicate to
-% ProbLog even if obstacles_generated.pl defines zero real obstacles
-% (its body always fails, so it never contributes an actual obstacle).
+% ProbLog even if problem_data.pl's own obstacles_generated.pl defines
+% zero real obstacles (its body always fails, so it never contributes
+% an actual obstacle).
 obstacle_polygon(no_obstacles_placeholder, []) :- fail.
 
-% Expected project layout (paths below are relative to THIS file):
-%   ./environments/maps/map.yaml (+ .pgm)       -- the source map
-%   ./environments/maps/obstacles_generated.pl  -- consulted here
-%   ./environments/occgrid_to_problog.py
-% run_plan_continuous_safety.py regenerates obstacles_generated.pl from
-% map.yaml automatically before every run (occgrid_to_problog.py's own
-% generate()), same as it already does for config_generated.pl/
-% plan_generated.pl -- you don't need to run the generator by hand for
-% a normal run. To do it manually anyway (no --out override needed --
-% this is occgrid_to_problog.py's own actual default filename):
-%   python3 environments/occgrid_to_problog.py environments/maps/map.yaml \
-%       --out environments/maps/obstacles_generated.pl
-:- consult('./environments/maps/obstacles_generated.pl').
-% Must exist relative to wherever ProbLog is invoked FROM (typically the
-% directory containing this file). Expected fact shape:
-%   obstacle_polygon(Id, [point(X1,Y1), point(X2,Y2), ...]).
-% If you don't have a map yet, create a stub file containing at least
-% one such fact (or an empty file) so this program still loads.
+:- consult('./problem_data.pl').
+% Must exist relative to wherever this file itself lives (module/theory/),
+% not CWD -- same resolution rule every consult/use_module directive in
+% this file follows.
 
-% config/config_generated.pl provides EVERY tunable constant in this
-% theory -- robot_radius/1, safety_buffer/1,
-% speed/1, sigma/1, sigma_battery/1, battery_start/1,
-% idle_drain_rate/1, moving_drain_rate/1, goal_tolerance/1, tolerance/1,
-% num_samples/1, bracket_samples/1, crossing_eps/1, and the z/2 and
-% zbatt/1 annotated disjunctions -- generated from config/config.yaml by
-% config/generate_prolog_config.py (run_plan_continuous_safety.py does
-% this automatically before every run). config.yaml is the single
-% source of truth; edit IT, not this generated file, to retune the
-% system. See config.yaml's own header for the full rationale.
-:- consult('./config/config_generated.pl').
-
-% actions/moveto_planners.py provides plan_astar/5, plan_straight/5,
-% plan_voronoi/5, and follow_boarder/5 as BLACK-BOX (Python-
-% implemented) predicates -- see that file's own header for the full
-% explanation. ProbLog imports and executes it
-% directly the moment this directive loads (problog.clausedb's
-% load_external_module), registering both predicates before anything
-% below that calls them is ever evaluated. Path is resolved relative to
-% THIS file's own directory (not CWD) -- moveto_planners.py lives in
-% ./actions/ alongside bt_actions.py and schema.yaml (the BT.cpp-facing
-% side of the same node set).
-:- use_module('./actions/moveto_planners.py').
+% planners.py provides plan_astar/5, plan_straight/5, plan_voronoi/5,
+% and follow_boarder/5 as BLACK-BOX (Python-implemented) predicates --
+% see that file's own header for the full explanation. ProbLog imports
+% and executes it directly the moment this directive loads
+% (problog.clausedb's load_external_module), registering both
+% predicates before anything below that calls them is ever evaluated.
+% Path is resolved relative to THIS file's own directory (not CWD) --
+% planners.py lives right next to this file, in module/theory/.
+:- use_module('./planners.py').
 
 % collision_geometry.py provides first_threshold_crossing_time/8 as a
 % BLACK-BOX (Python-implemented) predicate -- the obstacle-clearance
 % geometry and bracket-scan/bisection crossing-time search that used to
 % be plain Prolog in sections 1 and the TRIGGERS section below (see
-% their own notes for why this moved). Lives NEXT TO this file (not in
-% ./actions/ -- it isn't a BT.cpp-facing node, just an internal
-% performance black box for the action theory itself), resolved
-% relative to THIS file's own directory, same as moveto_planners.py.
+% their own notes for why this moved). Lives right next to this file
+% too, resolved relative to THIS file's own directory, same as
+% planners.py.
 :- use_module('./collision_geometry.py').
 
 % ---------------------------------------------------------------
@@ -128,7 +131,7 @@ obstacle_polygon(no_obstacles_placeholder, []) :- fail.
 %    geometry that used to live here (point/segment/polygon distance,
 %    ray-casting point-in-polygon, signed clearance, min-clearance-to-
 %    any-obstacle) has been MOVED to collision_geometry.py, a Python
-%    black box exactly like moveto_planners.py's planners -- see the
+%    black box exactly like planners.py's planners -- see the
 %    TRIGGERS section further down (first_threshold_crossing_time/8)
 %    for why: that geometry is pure deterministic arithmetic once Z is
 %    resolved, with no probabilistic content of its own, so ProbLog was
@@ -151,7 +154,7 @@ sum_list([H|T], Sum) :- sum_list(T, SumT), Sum is H + SumT.
 % 2. ROBOT / SAFETY PARAMETERS
 % ---------------------------------------------------------------
 % robot_radius/1 and safety_buffer/1 are now config facts
-% (config/config.yaml -> config/config_generated.pl, consulted above)
+% (the problem's own config.yaml -> config_generated.pl, consulted above)
 % -- see that file for the tunable values themselves. safety_margin/1
 % below is a DERIVED value, not a raw constant -- always recomputed
 % from the two config facts, never itself config data.
@@ -162,7 +165,7 @@ sum_list([H|T], Sum) :- sum_list(T, SumT), Sum is H + SumT.
 % obstacle_in_bound(Threshold), a genuinely per-call parameter (see the
 % TRIGGERS section and holds(obstacle_in_bound(...)) below) -- there is
 % no longer one global value to validate against safety_margin. NOT YET
-% BUILT: a per-instance check (e.g. in plan_generation/bt_to_prolog.py)
+% BUILT: a per-instance check (e.g. in module/translators/bt_to_prolog.py)
 % that a given obstacle_in_bound(Threshold)'s Threshold is itself
 % sensible (> safety_margin) -- currently unchecked, same as any other
 % trigger-list entry's argument.
@@ -251,7 +254,7 @@ arc_length(ControlPoints, Length) :-
         ), Ds),
     sum_list(Ds, Length).
 
-% speed/1 is now a config fact -- see config/config.yaml's motion.speed.
+% speed/1 is now a config fact -- see the problem's own config.yaml's motion.speed.
 
 walk_duration(ControlPoints, Duration) :-
     arc_length(ControlPoints, Length),
@@ -270,10 +273,10 @@ walk_duration(ControlPoints, Duration) :-
 %    it does not "reset" or get resampled.
 % ---------------------------------------------------------------
 % z/2's annotated-disjunction table and sigma/1 (its scale) are now
-% config facts -- see config/config.yaml's noise.discretized_gaussian
-% and noise.position_sigma, generated into config/config_generated.pl
+% config facts -- see the problem's own config.yaml's noise.discretized_gaussian
+% and noise.position_sigma, generated into config_generated.pl
 % (consulted at the top of this file) by
-% config/generate_prolog_config.py. NOTE kept here as a standing
+% module/translators/config_to_prolog.py. NOTE kept here as a standing
 % reminder even though the table itself moved: these five weights must
 % sum to EXACTLY 1.0 (0.0606*2 + 0.2417*2 + 0.3954 = 1.0000) -- an
 % earlier version of this table used 0.3854 for the centre weight,
@@ -352,7 +355,7 @@ current_walk(do(A,S), CP, Triggers, T0, SPrev) :-
 % battery_start/1, idle_drain_rate/1, moving_drain_rate/1, and
 % sigma_battery/1 (the SAME value used in every phase -- moving, idle,
 % and s0 -- see zbatt/1 below) are now config facts -- see
-% config/config.yaml's battery.* and noise.battery_sigma.
+% the problem's own config.yaml's battery.* and noise.battery_sigma.
 
 % zbatt/1: ONE noise draw for the WHOLE MISSION -- deliberately
 % decoupled from any specific startMoveto occurrence. This is an
@@ -365,7 +368,7 @@ current_walk(do(A,S), CP, Triggers, T0, SPrev) :-
 % draw manufactured at each walk. Its annotated-disjunction table is
 % now ALSO a config fact -- the SAME noise.discretized_gaussian entries
 % as z/2 (see config.yaml), instantiated a second time with zbatt/1's
-% own zero-argument functor by config/generate_prolog_config.py, so the
+% own zero-argument functor by module/translators/config_to_prolog.py, so the
 % two tables can never drift apart.
 
 % s0's idle phase now ALSO carries genuine stochasticity, using the
@@ -692,7 +695,7 @@ first_battery_over_time(CP,T0,Duration,B0,Zb,Threshold,T0) :-
 %
 % line_of_sight_clear(ObstacleId,GX,GY) and crosses_segment(SX,SY,GX,GY)
 % are the Bug-algorithm boundary-LEAVE triggers, for use on a MoveTo leg
-% whose ControlPoints came from moveto_planners.py's follow_boarder
+% whose ControlPoints came from planners.py's follow_boarder
 % (ObstacleId,Offset) planner (a full clockwise loop around the
 % obstacle's offset boundary, no stopping logic of its own -- see that
 % predicate's own header). Which bug variant a leg implements is
@@ -823,9 +826,9 @@ walk_noisy_point(ControlPoints, T0, Duration, Z, Zt, T, X, Y) :-
 % Id (an argmin over obstacles at the exact crossing point, not just
 % the crossing time itself). bracket_samples/1 and crossing_eps/1 --
 % the bracket-scan count and bisection tolerance -- are now config
-% facts too (see config/config.yaml's
+% facts too (see the problem's own config.yaml's
 % verification.bracket_samples/crossing_eps). collision_geometry.py
-% reads them (and sigma/1's value) directly out of config/config.yaml
+% reads them (and sigma/1's value) directly out of the problem's own config.yaml
 % itself, not out of this generated fact, since config.yaml is the
 % actual single source of truth both sides are driven from -- see
 % collision_geometry.py's own header. FAILS (0 ProbLog solutions) if
@@ -867,7 +870,7 @@ poss(startMoveto(_,_Triggers,T0), S) :-
 % now(-T,+S): current wall-clock time -- needed above only to know
 % WHEN to check the battery level (battery/3 needs a query time).
 % Situation argument S is LAST, per Reiter's own convention (see
-% plan_generation/vocabulary.yaml's own note -- this used to be
+% module/contracts/vocabulary.yaml's own note -- this used to be
 % now(S,T), the one remaining exception flagged when the other six
 % out-of-convention accessors were fixed; fixed here too, along with
 % every one of its own call sites throughout this file).
@@ -1088,7 +1091,7 @@ nominal_at(X,Y,Frac,ControlPoints) :- spline_point(ControlPoints, Frac, X, Y).
 %                                  Algorithm) -- not a separate do_node
 %                                  clause per planner. A stateless
 %                                  black-box call into
-%                                  actions/moveto_planners.py, binding CP for a
+%                                  planners.py, binding CP for a
 %                                  subsequent moveto_leg(CP,...) to
 %                                  use. Goal is EXPLICIT (point(GX,GY)),
 %                                  an argument of planWith itself, not
@@ -1139,7 +1142,7 @@ do_node(moveto_leg(CP,Triggers), S, S1, Status) :-
 % -- PLANNING actions: deliberately NOT part of the full action theory
 %    -- no primitive_action/1 entry, no Poss axiom, no do_action call
 %    with its precondition check (these are stateless, purely-
-%    computational black-box calls into actions/moveto_planners.py, not
+%    computational black-box calls into planners.py, not
 %    physical processes -- Reiter's machinery exists to solve the
 %    frame problem for things that CHANGE THE WORLD over time; a
 %    lookup that returns instantly has no frame problem to solve, so
@@ -1165,7 +1168,7 @@ do_node(moveto_leg(CP,Triggers), S, S1, Status) :-
 %    SAME predicate, dispatched by ordinary clause selection. Adding a
 %    future THIRD planner (e.g. an RRT, or a different black-box
 %    module entirely) means adding one more plan_astar-style function
-%    to actions/moveto_planners.py plus one more pair of plan_call/8 clauses
+%    to planners.py plus one more pair of plan_call/8 clauses
 %    here; nothing about do_node, planned_with/3, or anything
 %    downstream needs to change. Because Reason/Status are bound
 %    DIRECTLY per clause rather than through a shared central lookup
@@ -1198,7 +1201,7 @@ plan_call(straight, SX,SY,GX,GY, [], no_path, false) :-
 % anywhere downstream (do_node/4, schema.yaml, bt_to_prolog.py, and
 % bt_actions.py all reuse their EXISTING astar/straight branches
 % verbatim for this one). Builds a roadmap from a generalized Voronoi
-% diagram of the obstacle map (moveto_planners.py's plan_voronoi/5),
+% diagram of the obstacle map (planners.py's plan_voronoi/5),
 % connecting SX,SY and GX,GY to the closest POINT on the closest EDGE
 % of that roadmap -- see that predicate's own header for the geometry.
 % Degrades to a straight line (never fails) when there are no
@@ -1223,7 +1226,7 @@ plan_call(voronoi, SX,SY,GX,GY, [], no_path, false) :-
 %
 % UNLIKE an earlier version of this planner, follow_boarder does NOT
 % decide when to stop circling -- it plans a FULL clockwise loop around
-% ObstacleId's offset boundary (moveto_planners.py's follow_boarder/5),
+% ObstacleId's offset boundary (planners.py's follow_boarder/5),
 % always succeeding for a known obstacle (Reason=completed regardless
 % of Goal, since there is no Goal-relative stopping decision to make
 % here at all -- notice the /5 arity below has no GX,GY). WHEN to
@@ -1364,7 +1367,7 @@ holds(neg(P),   S) :- \+ holds(P,S).
 % threshold/obstacle". To match SPECIFIC values, write e.g.
 % cond(halted_with_cond(crashed(obs5))) or
 % cond(halted_with_cond(battery_under(20))). In a BT.cpp XML tree (see
-% plan_generation/bt_to_prolog.py), this is HaltedWith's reason port,
+% module/translators/bt_to_prolog.py), this is HaltedWith's reason port,
 % written the same way: reason="crashed(_)" or reason="crashed(obs5)".
 holds(halted_with_cond(Reason), S) :- halted_with(Reason, S).
 
@@ -1372,7 +1375,7 @@ holds(halted_with_cond(Reason), S) :- halted_with(Reason, S).
 % time, via now/2) is within Tol of the EXPLICIT point (GX,GY) --
 % PARAMETRIZED, same as obstacle_in_bound(Threshold)/battery_below
 % (Threshold)/etc., not a lookup against any global "the goal" fact
-% (there is no such fact anymore -- see plan_generation/plan/
+% (there is no such fact anymore -- see the problem's own
 % goal_formula.pl for where a plan's own goal information now lives
 % entirely; at_goal is a DIFFERENT, complementary thing: a REACTIVE
 % in-tree check, evaluated possibly many times at different situations
@@ -1469,7 +1472,7 @@ holds(battery_over(Threshold), S) :-
 %    resolution used for plotting and for on_track's drift reporting,
 %    it no longer determines whether a collision is found at all.
 %    num_samples/1 is now a config fact -- see
-%    config/config.yaml's verification.num_samples.
+%    the problem's own config.yaml's verification.num_samples.
 % ---------------------------------------------------------------
 
 sample_frac(I, Frac) :- num_samples(N), Frac is I / N.
@@ -1608,7 +1611,7 @@ battery_over_in(S) :- halted_with(battery_over(_), S).
 %    solution) if S didn't halt for that reason, same "absence, not
 %    sentinel" convention as everywhere else. Situation argument S is
 %    LAST in every one of these, per Reiter's own convention (see
-%    plan_generation/vocabulary.yaml's own note on this -- these six
+%    module/contracts/vocabulary.yaml's own note on this -- these six
 %    used to put S FIRST, an inconsistency with visited/2, halted_with
 %    /2, at/4, and battery/3 above, all of which already had S last;
 %    fixed here since nothing outside this file's own definitions
@@ -1714,7 +1717,7 @@ plan_route_blocked :- \+ verify_safe.
 %    is a REPORTING diagnostic about drift magnitude, not a safety
 %    detector, so fixed-resolution sampling remains appropriate here)
 %    tolerance/1 is now a config fact -- see
-%    config/config.yaml's tolerances.on_track.
+%    the problem's own config.yaml's tolerances.on_track.
 
 on_track(I) :-
     final_situation(S),
@@ -1732,9 +1735,9 @@ on_track(I) :-
 % superseded by goal_formula.pl's own goal_formula/1 (verified,
 % earlier, to compute the EXACT SAME probability as goal_reached did
 % for a single-leg plan), and by visited/2's own more general history
-% search for anything beyond that. See moveto_continuous.pl's own
+% search for anything beyond that. See this file's own
 % verify_goal_formula wrapper further down, and
-% plan_generation/plan/goal_formula.pl for where "did the plan
+% the problem's own goal_formula.pl for where "did the plan
 % succeed" is now formalized -- there is no longer a global goal/2
 % fact anywhere in this theory for a query like this to read.
 
@@ -1771,25 +1774,25 @@ on_track(I) :-
 %    same pattern as interrupt/1 above.
 % ============================================================
 
-% start/1 is now a config.yaml fact (config/config.yaml's own
-% initial_situation.start_x/start_y, via config/config_generated.pl,
-% already consulted near the top of this file) -- it used to live in
+% start/1 is now a config.yaml fact (the problem's own
+% initial_situation.start_x/start_y, via config_generated.pl,
+% consulted via problem_data.pl near the top of this file) -- it used to live in
 % plan_generation/plan/current_plan.pl, alongside a global goal/2 fact
 % and a control_points/1 static fallback, both now GONE: goal
-% information lives entirely in plan_generation/plan/goal_formula.pl
+% information lives entirely in the problem's own goal_formula.pl
 % (see verify_goal_formula further down), and control_points/1 has had
 % no consumer since planWith started computing ControlPoints at
 % runtime.
 
-% plan/1 is no longer hand-written here -- it comes from
-% plan_generation/plan/plan_generated.pl, generated by
-% plan_generation/bt_to_prolog.py translating the REAL BT.cpp v4 XML
-% tree at plan_generation/plan/behavior_tree.xml against
-% actions/schema.yaml (run_plan_continuous_safety.py does this
-% automatically before every run, exactly like it already does for
-% config/config_generated.pl). This is now the single source of truth
-% for the POLICY'S SHAPE: to change the tree, edit behavior_tree.xml
-% and re-run, don't hand-edit a plan/1 clause here.
+% plan/1 is no longer hand-written here -- it comes from the problem's
+% own plan_generated.pl (consulted via problem_data.pl, see Section 0
+% above), generated by module/translators/bt_to_prolog.py translating
+% the REAL BT.cpp v4 XML tree at the problem's own behavior_tree.xml
+% against module/contracts/schema.yaml (main.py does this automatically
+% before every run, exactly like it already does for config_generated.pl).
+% This is now the single source of truth for the POLICY'S SHAPE: to
+% change the tree, edit behavior_tree.xml and re-run, don't hand-edit a
+% plan/1 clause here.
 %
 % Every moveto_leg node in the XML states its Triggers EXPLICITLY, in
 % place -- there is no default_triggers/1 fact and no sugar moveto_leg/1
@@ -1818,25 +1821,23 @@ on_track(I) :-
 % translation this relies on (e.g. giving two different PlanAstar/
 % PlanStraight nodes distinct blackboard keys, same as the CP1/CP2
 % convention this file already documents for hand-written multi-leg
-% plans). Only the AUTOMATIC generation of multi-leg XML trees (from
-% occupancy_grid_planner.py, which still emits one spline) and reacting
-% to a planWith/moveto_leg FAILURE by re-planning are future work; the
-% theory and the translator both already support authoring either by
-% hand in the XML.
-:- consult('./plan_generation/plan/plan_generated.pl').
+% plans). Only the AUTOMATIC generation of multi-leg XML trees and
+% reacting to a planWith/moveto_leg FAILURE by re-planning are future
+% work; the theory and the translator both already support authoring
+% either by hand in the XML.
 
 % goal_formula/1 is hand-authored, tied to THIS PARTICULAR plan's own
-% waypoints -- see plan_generation/plan/goal_formula.pl's own header
-% for the full rationale and the "must be kept in sync with
-% behavior_tree.xml" caveat. This is now the ONLY place a plan's own
-% goal information lives -- there is no separate global goal/2 fact
-% anywhere in this theory anymore (see at_goal/3's own note). It is a
-% UNIFORM formula (Reiter's sense -- one free situation argument,
-% every fluent inside applied to exactly it); verify_goal_formula
-% below is what actually applies it AT final_situation, same "zero-arg
-% convenience wrapper hardwired to final_situation" shape as
-% any_collision/plan_outcome below.
-:- consult('./plan_generation/plan/goal_formula.pl').
+% waypoints -- see the problem's own goal_formula.pl header for the
+% full rationale and the "must be kept in sync with behavior_tree.xml"
+% caveat. This is the ONLY place a plan's own goal information lives --
+% there is no separate global goal/2 fact anywhere in this theory (see
+% at_goal/3's own note). It is a UNIFORM formula (Reiter's sense -- one
+% free situation argument, every fluent inside applied to exactly it);
+% verify_goal_formula below is what actually applies it AT
+% final_situation, same "zero-arg convenience wrapper hardwired to
+% final_situation" shape as any_collision/plan_outcome below.
+% Both plan/1 and goal_formula/1 are consulted via problem_data.pl --
+% see Section 0 above, near the top of this file.
 
 verify_goal_formula :- final_situation(S), goal_formula(S).
 

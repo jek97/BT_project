@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 """
-moveto_planners.py
+planners.py
 
-Lives in ./actions/ alongside bt_actions.py and schema.yaml -- see this
-project's top-level layout note (moveto_continuous.pl's own header
-comment) for why these three files were grouped together: they are the
-three faces of the same node set (Prolog action theory, BT.cpp-facing
-Python callables, BT.cpp node-model schema) and are meant to be read/kept
-in sync together.
+Lives in module/theory/ alongside basic_action_theory.pl and
+collision_geometry.py -- see this project's top-level layout note
+(basic_action_theory.pl's own header comment) for why these are grouped
+together. module/contracts/bt_actions.py (the BT.cpp-facing side of the
+same node set) imports the plain-Python API below from here.
 
 TWO independent roles, kept in ONE file because they share the exact
 same underlying A*/spline computation and neither should reimplement it:
 
   1. PROBLOG EXTERNAL-PREDICATE MODULE -- imported by ProbLog's own
-     :- use_module('./actions/moveto_planners.py'). directive inside
-     moveto_continuous.pl (see problog.clausedb.ClauseDB.load_external_
+     :- use_module('./planners.py'). directive inside
+     basic_action_theory.pl (see problog.clausedb.ClauseDB.load_external_
      module, which execs this file as a plain Python module the moment
      that directive is loaded, triggering the
      @problog_export_nondet(...)-decorated functions below to register
@@ -24,7 +23,7 @@ same underlying A*/spline computation and neither should reimplement it:
          plan_voronoi(+SX,+SY,+GX,+GY, -ControlPoints)
          follow_boarder(+SX,+SY,+ObstacleId,+Offset, -ControlPoints)
      ControlPoints = [point(X0,Y0), ...] ProbLog terms, length 3k+1, in
-     EXACTLY the format moveto_continuous.pl's spline_point/4 expects.
+     EXACTLY the format basic_action_theory.pl's spline_point/4 expects.
      plan_voronoi is a generalized-Voronoi-diagram planner, SAME
      interface as plan_astar/plan_straight -- see
      _voronoi_control_points' own header for the full geometry.
@@ -65,47 +64,310 @@ fail on degenerate (non-finite) input; a straight line between two
 ordinary points always exists.
 
 Map location: loaded ONCE, at import time (i.e. once per process), from
-../environments/maps/map.yaml relative to THIS FILE's own directory
-(./actions/), i.e. environments/maps/map.yaml at the project root --
-not the CWD. See MAP_YAML_PATH below. If it can't be loaded, both the
-ProbLog predicate and the plain-Python function still work, but
-astar-based planning will always fail (no map to plan against) rather
-than crashing at import time.
+<problem>/map.yaml, where <problem> is problems/problem0/ by default or
+whichever directory the BT_PROBLEM_DIR environment variable names --
+main.py sets BT_PROBLEM_DIR before ProbLog loads this module, so a run
+against a different --problem picks up that problem's own map without
+this file ever changing. See MAP_YAML_PATH below. If the map can't be
+loaded, both the ProbLog predicate and the plain-Python function still
+work, but astar-based planning will always fail (no map to plan
+against) rather than crashing at import time.
+
+MAP/A*/SPLINE LIBRARY CODE below (OccupancyGridMap, load_map_yaml,
+inflate_obstacles, astar, fit_spline, bspline_to_bezier_chain) used to
+live in a separate standalone interactive click-planner tool
+(occupancy_grid_planner.py, now removed -- its own GUI/CLI were never
+part of the live pipeline, only these library functions were still in
+use, imported from here); merged directly into this file since this
+module is now their only caller.
 """
 import heapq
 import math
 import os
 import re
-import sys
 
+import numpy as np
+from scipy.interpolate import splprep, insert
+from scipy.ndimage import binary_dilation
 from scipy.spatial import Voronoi
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.dirname(_THIS_DIR)
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
 
-# occupancy_grid_planner.py lives in ./plan_generation/ at the PROJECT
-# ROOT (a sibling of ./actions/, not a child of it), per the established
-# project layout (see the header comment above moveto_continuous.pl's
-# own obstacle-file consult directive).
-_PLAN_GENERATION_DIR = os.path.join(_PROJECT_ROOT, "plan_generation")
-if _PLAN_GENERATION_DIR not in sys.path:
-    sys.path.insert(0, _PLAN_GENERATION_DIR)
+# Which problem's own data (map.yaml, obstacles_generated.pl) to load --
+# set by main.py via BT_PROBLEM_DIR before this module is imported;
+# defaults to problems/problem0/ so this module still works standalone
+# (e.g. `problog basic_action_theory.pl` run directly, or this file
+# imported directly for testing) with no environment variable set.
+_DEFAULT_PROBLEM_DIR = os.path.join(_PROJECT_ROOT, "problems", "problem0")
+_PROBLEM_DIR = os.environ.get("BT_PROBLEM_DIR", _DEFAULT_PROBLEM_DIR)
 
-# Reuse the EXACT SAME map-loading / A* / spline pipeline
-# occupancy_grid_planner.py already implements -- no duplication.
-from occupancy_grid_planner import (
-    OccupancyGridMap,
-    load_map_yaml,
-    inflate_obstacles,
-    astar,
-    fit_spline,
-    bspline_to_bezier_chain,
-)
 
-MAP_YAML_PATH = os.path.join(_PROJECT_ROOT, "environments", "maps", "map.yaml")
-_OBSTACLES_PATH = os.path.join(_PROJECT_ROOT, "environments", "maps", "obstacles_generated.pl")
+# --------------------------------------------------------------------------
+# Map representation + loading (formerly occupancy_grid_planner.py)
+# --------------------------------------------------------------------------
+class OccupancyGridMap:
+    """
+    Minimal stand-in for the information carried by a nav_msgs/OccupancyGrid
+    message.
 
-# Same default inflation as occupancy_grid_planner.py's own --inflate default.
+    data       : 2D int array, shape (height, width). data[row, col] is the
+                 occupancy of the cell whose world position is
+                 (origin_x + col*resolution, origin_y + row*resolution).
+                 Values: 0..100 = occupancy probability, -1 = unknown.
+                 (This is exactly msg.data reshaped to (msg.info.height,
+                 msg.info.width), i.e. row-major with row 0 = min y.)
+    resolution : meters per cell (msg.info.resolution)
+    origin     : [x, y, yaw] world pose of cell (0,0)'s corner (msg.info.origin)
+    width      : number of columns  (msg.info.width)
+    height     : number of rows     (msg.info.height)
+    """
+
+    def __init__(self, data, resolution, origin, width, height):
+        self.data = data
+        self.resolution = float(resolution)
+        self.origin = list(origin)
+        self.width = int(width)
+        self.height = int(height)
+
+    def world_to_grid(self, x, y):
+        col = int(math.floor((x - self.origin[0]) / self.resolution))
+        row = int(math.floor((y - self.origin[1]) / self.resolution))
+        return row, col
+
+    def grid_to_world(self, row, col):
+        x = self.origin[0] + (col + 0.5) * self.resolution
+        y = self.origin[1] + (row + 0.5) * self.resolution
+        return x, y
+
+    def in_bounds(self, row, col):
+        return 0 <= row < self.height and 0 <= col < self.width
+
+    def is_free(self, row, col, occ_thresh=50, unknown_is_occupied=True):
+        if not self.in_bounds(row, col):
+            return False
+        v = self.data[row, col]
+        if v == -1:
+            return not unknown_is_occupied
+        return v < occ_thresh
+
+    def copy_with_data(self, new_data):
+        return OccupancyGridMap(new_data, self.resolution, self.origin,
+                                 self.width, self.height)
+
+
+def load_map_yaml(yaml_path):
+    """Load a standard ROS map_server yaml + image pair."""
+    import yaml
+    from PIL import Image
+
+    with open(yaml_path, "r") as f:
+        meta = yaml.safe_load(f)
+
+    image_path = meta["image"]
+    if not os.path.isabs(image_path):
+        image_path = os.path.join(os.path.dirname(yaml_path), image_path)
+
+    resolution = float(meta["resolution"])
+    origin = meta.get("origin", [0.0, 0.0, 0.0])
+    negate = int(meta.get("negate", 0))
+    occupied_thresh = float(meta.get("occupied_thresh", 0.65))
+    free_thresh = float(meta.get("free_thresh", 0.196))
+
+    img = Image.open(image_path)
+    if img.mode != "L":
+        img = img.convert("L")
+    img_arr = np.array(img, dtype=np.float64)  # row 0 = top of image
+
+    if negate:
+        occ = img_arr / 255.0
+    else:
+        occ = (255.0 - img_arr) / 255.0
+
+    grid = np.full(occ.shape, -1, dtype=np.int8)
+    grid[occ > occupied_thresh] = 100
+    grid[occ < free_thresh] = 0
+    # cells in between stay -1 (unknown)
+
+    # Image row 0 is the top of the picture (max y). OccupancyGrid row 0 is
+    # y = origin_y (min y). Flip vertically to match the OccupancyGrid convention.
+    grid = np.flipud(grid).copy()
+
+    height, width = grid.shape
+    return OccupancyGridMap(grid, resolution, origin, width, height)
+
+
+def inflate_obstacles(grid_map, radius_m):
+    """Return a copy of grid_map where obstacles (and unknown cells) have
+    been grown by radius_m (a simple circular Minkowski dilation), useful
+    for keeping a finite-size robot away from walls."""
+    if radius_m <= 0:
+        return grid_map
+    radius_cells = max(1, int(round(radius_m / grid_map.resolution)))
+    occ_mask = (grid_map.data == 100) | (grid_map.data == -1)
+
+    yy, xx = np.ogrid[-radius_cells:radius_cells + 1, -radius_cells:radius_cells + 1]
+    disk = (xx ** 2 + yy ** 2) <= radius_cells ** 2
+
+    inflated_mask = binary_dilation(occ_mask, structure=disk)
+    new_data = grid_map.data.copy()
+    new_data[inflated_mask] = 100
+    return grid_map.copy_with_data(new_data)
+
+
+# --------------------------------------------------------------------------
+# A* (formerly occupancy_grid_planner.py)
+# --------------------------------------------------------------------------
+def astar(grid_map, start_rc, goal_rc, occ_thresh=50, connectivity=8,
+          unknown_is_occupied=True):
+    """8- or 4-connected A* over grid_map. Returns a list of (row, col)
+    cells from start to goal (inclusive), or None if no path exists."""
+
+    if not grid_map.is_free(*start_rc, occ_thresh, unknown_is_occupied):
+        return None
+    if not grid_map.is_free(*goal_rc, occ_thresh, unknown_is_occupied):
+        return None
+
+    if connectivity == 8:
+        steps = [(-1, -1, math.sqrt(2)), (-1, 0, 1.0), (-1, 1, math.sqrt(2)),
+                 (0, -1, 1.0), (0, 1, 1.0),
+                 (1, -1, math.sqrt(2)), (1, 0, 1.0), (1, 1, math.sqrt(2))]
+    else:
+        steps = [(-1, 0, 1.0), (1, 0, 1.0), (0, -1, 1.0), (0, 1, 1.0)]
+
+    def heuristic(rc):
+        return math.hypot(rc[0] - goal_rc[0], rc[1] - goal_rc[1])
+
+    open_heap = [(heuristic(start_rc), 0.0, start_rc)]
+    came_from = {}
+    g_score = {start_rc: 0.0}
+    closed = set()
+
+    while open_heap:
+        _, g, current = heapq.heappop(open_heap)
+        if current in closed:
+            continue
+        if current == goal_rc:
+            return _reconstruct_path(came_from, current)
+        closed.add(current)
+
+        for dr, dc, step_cost in steps:
+            nr, nc = current[0] + dr, current[1] + dc
+            neighbor = (nr, nc)
+            if not grid_map.is_free(nr, nc, occ_thresh, unknown_is_occupied):
+                continue
+            # don't let the path cut diagonally through a corner of two obstacles
+            if dr != 0 and dc != 0:
+                if not grid_map.is_free(current[0] + dr, current[1], occ_thresh, unknown_is_occupied):
+                    continue
+                if not grid_map.is_free(current[0], current[1] + dc, occ_thresh, unknown_is_occupied):
+                    continue
+
+            tentative_g = g + step_cost
+            if tentative_g < g_score.get(neighbor, float("inf")):
+                g_score[neighbor] = tentative_g
+                came_from[neighbor] = current
+                f_score = tentative_g + heuristic(neighbor)
+                heapq.heappush(open_heap, (f_score, tentative_g, neighbor))
+
+    return None
+
+
+def _reconstruct_path(came_from, current):
+    path = [current]
+    while current in came_from:
+        current = came_from[current]
+        path.append(current)
+    path.reverse()
+    return path
+
+
+# --------------------------------------------------------------------------
+# Spline fitting (formerly occupancy_grid_planner.py)
+# --------------------------------------------------------------------------
+def fit_spline(path_xy, degree=3, smoothing=0.0):
+    """Fit a parametric B-spline through the (x, y) waypoints.
+    Returns (tck, u) as produced by scipy.interpolate.splprep, where
+    tck = (knots t, coefficients c=[cx, cy], degree k)."""
+    path_xy = np.asarray(path_xy, dtype=float)
+    x, y = path_xy[:, 0], path_xy[:, 1]
+    n = len(x)
+    if n < 2:
+        raise ValueError("Need at least 2 waypoints to fit a spline")
+    k = max(1, min(degree, n - 1))
+    tck, u = splprep([x, y], k=k, s=smoothing)
+    return tck, u
+
+
+def bspline_to_bezier_chain(tck):
+    """
+    Convert a scipy parametric B-spline tck=(t,c,k) into an EXACT chain of
+    degree-k Bezier segments, via full knot insertion: every interior knot
+    is raised to multiplicity == k (the degree), at which point consecutive
+    groups of (k+1) control points ARE the Bezier control points of one
+    segment, with consecutive segments sharing their boundary point --
+    i.e. exactly the "length 3k+1 for k cubic segments" format
+    basic_action_theory.pl expects (for the standard, and only currently
+    supported, case k=3).
+
+    This is a LOSSLESS conversion, not a resampling/approximation -- the
+    resulting Bezier chain reproduces the original B-spline curve exactly
+    (verified numerically to floating-point precision). It says nothing
+    about the ORIGINAL knot vector's spacing being preserved as segment
+    boundaries in basic_action_theory.pl's own u-parametrization: that
+    file always treats each segment as an equal 1/k share of its own u in
+    [0,1] (see its spline_point/4), using arc-length integration -- NOT
+    this B-spline's own (possibly non-uniform) knot spacing -- to
+    determine timing. That's fine: only the CURVE SHAPE needs to transfer
+    exactly, which it does; timing/speed along it is independently
+    handled by basic_action_theory.pl's own arc-length machinery either
+    way.
+
+    Returns (control_points, degree) where control_points is a list of
+    (x,y) tuples of length 3*num_segments + 1 for degree k=3.
+    Raises ValueError if the fitted spline's degree isn't 3, since that's
+    the only degree basic_action_theory.pl's Bezier evaluator supports.
+    """
+    t, c, k = tck
+    if k != 3:
+        raise ValueError(
+            f"bspline_to_bezier_chain: got degree k={k}, but "
+            f"basic_action_theory.pl only supports CUBIC (k=3) Bezier "
+            f"segments.")
+
+    t = list(t)
+    c = [list(comp) for comp in c]
+    tck2 = (t, c, k)
+
+    # interior knots = all knots strictly between the (k+1)-fold repeated
+    # boundary knots at each end
+    interior_knots = sorted(set(t[k + 1: len(t) - (k + 1)]))
+    for knot in interior_knots:
+        current_mult = t.count(knot)
+        needed = k - current_mult
+        if needed > 0:
+            tck2 = insert(knot, tck2, m=needed, per=0)
+            t = list(tck2[0])
+
+    t_final, c_final, k_final = tck2
+    n_ctrl = len(t_final) - k_final - 1
+    cx, cy = c_final[0][:n_ctrl], c_final[1][:n_ctrl]
+    control_points = list(zip(cx, cy))
+
+    if (len(control_points) - 1) % k_final != 0:
+        raise ValueError(
+            "bspline_to_bezier_chain: extraction did not yield a clean "
+            "3k+1-length control point list -- this shouldn't happen for "
+            "a clamped cubic B-spline; check the input spline's knot "
+            "vector.")
+
+    return control_points, k_final
+
+
+MAP_YAML_PATH = os.path.join(_PROBLEM_DIR, "map.yaml")
+_OBSTACLES_PATH = os.path.join(_PROBLEM_DIR, "obstacles_generated.pl")
+
+# Same default inflation as this project's own former --inflate default.
 PLANNING_INFLATE_M = 0.5
 OCC_THRESH = 50
 CONNECTIVITY = 8
@@ -135,7 +397,7 @@ except Exception as exc:  # noqa: BLE001 -- deliberately broad: ANY load
 # predicates a second time under an unverified context -- not a risk
 # worth taking for ~15 lines of stable parsing code. Every other black
 # box in this project already owns its own data loading independently
-# (moveto_planners.py's own map.yaml load above, collision_geometry.py's
+# (this file's own map.yaml load above, collision_geometry.py's
 # obstacles_generated.pl load) -- this follows the same convention.
 _POINT_RE = re.compile(r"point\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)")
 
@@ -235,7 +497,7 @@ def _astar_control_points(sx, sy, gx, gy):
 # to goal than where it left it") is entirely a matter of which
 # TRIGGER halts the subsequent moveto_leg(CP,[...]) that walks this
 # planner's own output -- see collision_geometry.py's "BUG-ALGORITHM
-# BOUNDARY-LEAVE PRIMITIVES" section and moveto_continuous.pl's
+# BOUNDARY-LEAVE PRIMITIVES" section and basic_action_theory.pl's
 # trigger_crossing_time/10 clauses for line_of_sight_clear/
 # crosses_segment. Reuses the SAME fit_spline/bspline_to_bezier_chain
 # fitting step _astar_control_points uses above, so its own output is a
@@ -384,7 +646,7 @@ def _follow_boarder_control_points(sx, sy, obstacle_id, offset):
 # partway along it, found by splitting that edge at the projection.
 # Shortest path through the resulting graph is a plain Dijkstra (no
 # networkx dependency -- a small hand-rolled search, same spirit as
-# occupancy_grid_planner.py's own astar()).
+# this file's own astar()).
 # =====================================================================
 _VORONOI_SAMPLES_PER_EDGE = 6
 _VORONOI_EDGE_CHECK_SAMPLES = 6
@@ -609,7 +871,7 @@ def follow_boarder_points(sx, sy, obstacle_id, offset):
 
 # =====================================================================
 # PROBLOG-FACING PREDICATES -- only registered if ProbLog is actually
-# importable. moveto_continuous.pl's :- use_module(...) directive always
+# importable. basic_action_theory.pl's :- use_module(...) directive always
 # has ProbLog present (ProbLog itself is doing the loading), so this is
 # never a problem for the ProbLog side; it only matters for a pure
 # BT.cpp/Python caller that imports this module directly without ever

@@ -2,7 +2,7 @@
 # schema.yaml
 #
 # Node model for the BehaviorTree.cpp library, describing every
-# ACTION and CONDITION currently encoded in moveto_continuous.pl's
+# ACTION and CONDITION currently encoded in basic_action_theory.pl's
 # do_node/4 / holds/2 clauses. This is the YAML analogue of what
 # BT.cpp's own <TreeNodesModel> XML section captures (ID, port
 # direction, port type) -- one entry per node here corresponds to
@@ -13,7 +13,7 @@
 # NOT included here, and why:
 #   - Sequence / Fallback: these map DIRECTLY to BT.cpp's own
 #     BUILT-IN control nodes (<Sequence>, <Fallback>) -- exactly
-#     seq_node/1 and fallback_node/1 in moveto_continuous.pl. BT.cpp
+#     seq_node/1 and fallback_node/1 in basic_action_theory.pl. BT.cpp
 #     doesn't require (or allow) declaring built-in node types in a
 #     TreeNodesModel, so there is nothing to add here for them.
 #   - and(P,Q) / or(P,Q): NOT modeled as condition nodes. BT.cpp's
@@ -34,8 +34,8 @@
 # than an executable stand-in -- explained there).
 #
 # An actual BT.cpp XML tree validated/translated against this schema
-# lives at plan_generation/plan/behavior_tree.xml -- see
-# plan_generation/bt_to_prolog.py for the concrete XML attribute
+# lives at the problem's own behavior_tree.xml (problems/<name>/behavior_tree.xml) -- see
+# module/translators/bt_to_prolog.py for the concrete XML attribute
 # encoding this project uses for each port TYPE below (Point as
 # "X;Y", std::vector<std::string> as ";"-separated, and the
 # {blackboard_key} convention every BT.cpp port already uses for
@@ -52,7 +52,7 @@ actions:
 
   # ----------------------------------------------------------------
   # MoveTo -- corresponds to moveto_leg(ControlPoints,Triggers) in
-  # moveto_continuous.pl, i.e. one startMoveto/haltMoveto pair run to
+  # basic_action_theory.pl, i.e. one startMoveto/haltMoveto pair run to
   # its halt.
   # ----------------------------------------------------------------
   - id: MoveTo
@@ -61,7 +61,7 @@ actions:
       Runs one durative moveto leg along ControlPoints, halting on
       whichever of Triggers occurs earliest (or on natural
       completion if none do). Reason/Status are haltMoveto's own two
-      outputs -- see moveto_continuous.pl's own header comment on why
+      outputs -- see basic_action_theory.pl's own header comment on why
       they are kept distinct (Reason=completed only means the walk
       wasn't cut short; Status additionally requires landing within
       goal_tolerance of THIS LEG'S OWN endpoint).
@@ -74,7 +74,7 @@ actions:
           Chained cubic Bezier control points, length 3k+1. Typically
           bound by a preceding PlanAstar/PlanStraight node sharing
           the same port/blackboard entry -- see
-          moveto_continuous.pl's own note on the "leave a variable
+          basic_action_theory.pl's own note on the "leave a variable
           free, let a prior step bind it" pattern.
       - name: triggers
         direction: input
@@ -82,7 +82,7 @@ actions:
         required: true
         description: >
           Which halting conditions this leg reacts to. REQUIRED, with
-          NO default -- moveto_continuous.pl deliberately has no
+          NO default -- basic_action_theory.pl deliberately has no
           sugar/default-triggers form, so every MoveTo node instance
           must state its own protection level explicitly at the tree
           level. Valid entries: collision (fixed threshold, the
@@ -97,7 +97,7 @@ actions:
           genuinely different, stricter geometric test, not another
           threshold for obstacle_in_bound; see
           first_on_path_crossing_time's own note in
-          moveto_continuous.pl), battery_below(Threshold) /
+          basic_action_theory.pl), battery_below(Threshold) /
           battery_equal(Threshold) / battery_over(Threshold) (the same
           per-call idea for battery level, at <, =, and > respectively
           -- all THREE are SEPARATE, additional triggers from the
@@ -106,7 +106,7 @@ actions:
           battery never rises within a walk today, but is structured
           for a genuine future-crossing search once recharging is
           modeled -- see first_battery_over_time's own note in
-          moveto_continuous.pl), line_of_sight_clear(ObstacleId,GX,GY)
+          basic_action_theory.pl), line_of_sight_clear(ObstacleId,GX,GY)
           / crosses_segment(SX,SY,GX,GY) (the Bug0/Bug2 boundary-LEAVE
           triggers for a leg whose ControlPoints came from a preceding
           FollowBoarder node -- fires respectively as soon as
@@ -115,11 +115,11 @@ actions:
           closer to (GX,GY) than (SX,SY) was; see collision_geometry.py's
           "BUG-ALGORITHM BOUNDARY-LEAVE PRIMITIVES" section for the
           full geometry) (see trigger_crossing_time/10 in
-          moveto_continuous.pl for the complete, current list -- a
+          basic_action_theory.pl for the complete, current list -- a
           future trigger added there needs no schema change beyond
           documenting its name here). An empty list means the leg
           completes even through an obstacle's margin or an empty
-          battery -- see moveto_continuous.pl's TRIGGERS section for
+          battery -- see basic_action_theory.pl's TRIGGERS section for
           why nothing is hardcoded as always-on. Written in a BT.cpp
           XML tree as a semicolon-separated string, e.g.
           triggers="collision;battery;obstacle_in_bound(0.6);battery_below(20)".
@@ -150,7 +150,7 @@ actions:
           true iff reason=completed AND the final position landed
           within goal_tolerance of this leg's own endpoint (the last
           point of control_points, NOT necessarily the global goal --
-          see leg_target/3's own comment in moveto_continuous.pl).
+          see leg_target/3's own comment in basic_action_theory.pl).
 
   # ----------------------------------------------------------------
   # The two planners. Both are dispatched, underneath, through the
@@ -167,7 +167,7 @@ actions:
     prolog_action: planWith
     prolog_algorithm: astar
     description: >
-      Black-box A* planner (moveto_planners.py's plan_astar/5) from
+      Black-box A* planner (planners.py's plan_astar/5) from
       the CURRENT position (now/2 + at/4) to an EXPLICIT goal port
       (NOT the global goal/2 fact -- this is what lets two planning
       calls in the same tree target genuinely different destinations,
@@ -186,7 +186,7 @@ actions:
         required: true
         description: >
           Target position for this planning call. Maps directly to
-          planWith's own point(GX,GY) argument in moveto_continuous.pl
+          planWith's own point(GX,GY) argument in basic_action_theory.pl
           -- per-call, not shared across other planning calls in the
           same tree.
       - name: control_points
@@ -208,7 +208,7 @@ actions:
     prolog_action: planWith
     prolog_algorithm: straight
     description: >
-      Direct straight-line planner (moveto_planners.py's
+      Direct straight-line planner (planners.py's
       plan_straight/5) -- no map lookup at all, a single degenerate
       (collinear-control-point) Bezier segment from the current
       position to an EXPLICIT goal port (NOT the global goal/2 fact --
@@ -244,7 +244,7 @@ actions:
     prolog_action: planWith
     prolog_algorithm: voronoi
     description: >
-      Generalized-Voronoi-diagram planner (moveto_planners.py's
+      Generalized-Voronoi-diagram planner (planners.py's
       plan_voronoi/5) -- SAME interface as PlanAstar/PlanStraight
       above (bare Algorithm atom, no extra ports). Builds a roadmap
       from scipy's Voronoi diagram of points sampled along every
@@ -292,7 +292,7 @@ actions:
   # Goal,CP)/plan_call/8 template as PlanAstar/PlanStraight above, just
   # with a COMPOUND Algorithm term (follow_boarder(ObstacleId,Offset))
   # instead of a bare atom -- see plan_call/8's own follow_boarder
-  # clauses in moveto_continuous.pl. UNLIKE an earlier version of this
+  # clauses in basic_action_theory.pl. UNLIKE an earlier version of this
   # schema (which had separate FollowBoarder0/FollowBoarder1 actions,
   # each with the stopping rule baked in), this planner does NOT decide
   # when to leave the boundary at all -- it just plans a full clockwise
@@ -306,7 +306,7 @@ actions:
   - id: FollowBoarder
     prolog_action: planWith
     description: >
-      Boundary-following planner (moveto_planners.py's follow_boarder/
+      Boundary-following planner (planners.py's follow_boarder/
       5): from the CURRENT position (now/2 + at/4), traces a FULL
       CLOCKWISE LOOP around obstacle_id's own obstacle_polygon/2
       boundary, offset outward by `offset`. Deliberately has NO goal
@@ -366,7 +366,7 @@ actions:
 conditions:
 
   # ----------------------------------------------------------------
-  # holds(at_goal(Tol), S) in moveto_continuous.pl.
+  # holds(at_goal(GX,GY,Tol), S) in basic_action_theory.pl.
   # ----------------------------------------------------------------
   - id: AtGoal
     prolog_condition: at_goal
@@ -394,7 +394,7 @@ conditions:
         description: Distance threshold, metres.
 
   # ----------------------------------------------------------------
-  # holds(halted_with_cond(Reason), S) in moveto_continuous.pl.
+  # holds(halted_with_cond(Reason), S) in basic_action_theory.pl.
   # ----------------------------------------------------------------
   - id: HaltedWith
     prolog_condition: halted_with_cond
@@ -423,7 +423,7 @@ conditions:
           threshold.
 
   # ----------------------------------------------------------------
-  # holds(obstacle_in_bound(Threshold), S) in moveto_continuous.pl.
+  # holds(obstacle_in_bound(Threshold), S) in basic_action_theory.pl.
   # ----------------------------------------------------------------
   - id: ObstacleInBound
     prolog_condition: obstacle_in_bound
@@ -445,7 +445,7 @@ conditions:
         description: Distance threshold, metres.
 
   # ----------------------------------------------------------------
-  # holds(obstacle_on_path(Threshold), S) in moveto_continuous.pl.
+  # holds(obstacle_on_path(Threshold), S) in basic_action_theory.pl.
   # ----------------------------------------------------------------
   - id: ObstacleOnPath
     prolog_condition: obstacle_on_path
@@ -462,7 +462,7 @@ conditions:
       does NOT fire for it. Needs the CURRENT walk's own trajectory
       to check against, so this fails outright before any walk has
       started (e.g. at s0) -- see holds(obstacle_on_path(...))'s own
-      comment in moveto_continuous.pl.
+      comment in basic_action_theory.pl.
     ports:
       - name: threshold
         direction: input
@@ -471,7 +471,7 @@ conditions:
         description: Distance threshold, metres.
 
   # ----------------------------------------------------------------
-  # holds(battery_below(Threshold), S) in moveto_continuous.pl.
+  # holds(battery_below(Threshold), S) in basic_action_theory.pl.
   # ----------------------------------------------------------------
   - id: BatteryBelow
     prolog_condition: battery_below
@@ -489,7 +489,7 @@ conditions:
         description: Battery level threshold, percent (0-100).
 
   # ----------------------------------------------------------------
-  # holds(battery_equal(Threshold), S) in moveto_continuous.pl.
+  # holds(battery_equal(Threshold), S) in basic_action_theory.pl.
   # ----------------------------------------------------------------
   - id: BatteryEqual
     prolog_condition: battery_equal
@@ -499,7 +499,7 @@ conditions:
       black box involved. In a continuous, noise-driven model this is
       only true at whatever instant Level(T) genuinely passes through
       Threshold (see first_battery_equal_time's own note in
-      moveto_continuous.pl) -- checking it at an arbitrary current time
+      basic_action_theory.pl) -- checking it at an arbitrary current time
       will usually be false.
     ports:
       - name: threshold
@@ -509,7 +509,7 @@ conditions:
         description: Battery level threshold, percent (0-100).
 
   # ----------------------------------------------------------------
-  # holds(battery_over(Threshold), S) in moveto_continuous.pl.
+  # holds(battery_over(Threshold), S) in basic_action_theory.pl.
   # ----------------------------------------------------------------
   - id: BatteryOver
     prolog_condition: battery_over
@@ -518,7 +518,7 @@ conditions:
       Threshold -- a single battery/3 lookup, no black box involved.
       As a CONDITION this is an ordinary, well-defined point-in-time
       check; only its TRIGGER counterpart is degenerate (see
-      first_battery_over_time's own note in moveto_continuous.pl for
+      first_battery_over_time's own note in basic_action_theory.pl for
       why -- battery never rises within a walk).
     ports:
       - name: threshold
@@ -529,7 +529,7 @@ conditions:
 
   # ----------------------------------------------------------------
   # holds(line_of_sight_clear(ObstacleId,GX,GY), S) in
-  # moveto_continuous.pl -- Bug0's own boundary-leave rule as a
+  # basic_action_theory.pl -- Bug0's own boundary-leave rule as a
   # standalone condition node. NO CrossesSegment condition counterpart
   # exists -- "has my trajectory crossed this segment" is fundamentally
   # an event over an interval of motion, not a fact true at a single

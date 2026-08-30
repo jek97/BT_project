@@ -1,56 +1,58 @@
 # config.yaml
 #
-# Single source of truth for every tunable constant in the action
-# theory. Previously these lived as scattered `name(value).` facts
-# directly inside moveto_continuous.pl; they are now all here instead,
-# so retuning the system means editing exactly one file, in one place,
-# with units documented next to each value.
+# Single source of truth for every tunable constant in this PROBLEM's
+# own action theory instance. Previously these lived as scattered
+# `name(value).` facts directly inside basic_action_theory.pl; they are
+# now all here instead, so retuning the system means editing exactly
+# one file, in one place, with units documented next to each value.
 #
 # How this reaches the theory:
-#   - config/generate_prolog_config.py turns this file into
-#     config/config_generated.pl (plain Prolog facts, same names/arities
-#     as before), which moveto_continuous.pl consults directly.
-#   - run_plan_continuous_safety.py regenerates config_generated.pl from
-#     this file automatically before every run -- you never need to run
-#     the generator by hand for a normal run, only if you want to
-#     inspect the generated Prolog without also running inference.
+#   - module/translators/config_to_prolog.py turns this file into
+#     config_generated.pl (plain Prolog facts, same names/arities as
+#     before, written into this same problem directory), which
+#     basic_action_theory.pl consults (via its problem_data.pl
+#     bootstrap -- see that file's Section 0).
+#   - main.py regenerates config_generated.pl from this file
+#     automatically before every run -- you never need to run the
+#     generator by hand for a normal run, only if you want to inspect
+#     the generated Prolog without also running inference.
 #   - collision_geometry.py (the collision/obstacle-sighted black box)
 #     reads bracket_samples / crossing_eps / noise.position.sigma
 #     directly from THIS file too (not from the generated .pl), so both
 #     the Prolog and Python sides of the theory are driven by the exact
 #     same numbers with no risk of drift.
 #
-# config_generated.pl is committed to the repo (like
-# environments/maps/obstacles_generated.pl already is) so that running
-# ProbLog directly (`problog moveto_continuous.pl`, per the project's
-# own testing convention) still works without going through
-# run_plan_continuous_safety.py first -- but treat it as a build
-# artifact: edit this file, not that one.
+# config_generated.pl is committed to the repo (like this same
+# directory's obstacles_generated.pl already is) so that running
+# ProbLog directly against basic_action_theory.pl (per the project's
+# own testing convention) still works without going through main.py
+# first -- but treat it as a build artifact: edit this file, not that
+# one.
 #
 # WHAT ISN'T HERE, ON PURPOSE: which Triggers (collision/battery/
 # obstacle_in_bound/...) a given moveto_leg reacts to is NOT a config
-# value -- moveto_continuous.pl has no default_triggers fact and no
+# value -- basic_action_theory.pl has no default_triggers fact and no
 # moveto_leg/1 sugar form. Every moveto_leg(CP,Triggers) call (in
-# plan/1, or in any BT node instantiated via actions/bt_actions.py's
-# moveto_leg_term) states its own Triggers list explicitly, right where
-# the leg is written, e.g. moveto_leg(CP,[collision,battery]) or
-# moveto_leg(CP,[]) for a genuinely unprotected leg. Each parametrized
-# trigger/condition (obstacle_in_bound(Threshold), battery_below
-# (Threshold), etc.) carries its own threshold as an argument at the
-# call site instead, so there is no per-trigger geometry config here
-# either.
+# plan/1, or in any BT node instantiated via module/contracts/
+# bt_actions.py's moveto_leg_term) states its own Triggers list
+# explicitly, right where the leg is written, e.g.
+# moveto_leg(CP,[collision,battery]) or moveto_leg(CP,[]) for a
+# genuinely unprotected leg. Each parametrized trigger/condition
+# (obstacle_in_bound(Threshold), battery_below(Threshold), etc.)
+# carries its own threshold as an argument at the call site instead, so
+# there is no per-trigger geometry config here either.
 
 initial_situation:
   # The robot's own position at s0 -- start/1 in the generated Prolog
-  # (see at(X,Y,_,s0) :- start(X,Y). in moveto_continuous.pl). Used to
+  # (see at(X,Y,_,s0) :- start(X,Y). in basic_action_theory.pl). Used to
   # live in plan_generation/plan/current_plan.pl, alongside a global
   # goal/2 fact and a now-superseded static control_points/1 -- that
   # file is gone; start moved here (config.yaml is the single source
   # of truth for everything else about the initial situation already:
   # battery_start below, the noise model, robot geometry), and "the
-  # goal" now lives entirely in plan_generation/plan/goal_formula.pl
+  # goal" now lives entirely in this problem's own goal_formula.pl
   # (there is no longer a single global goal point at all -- see that
-  # file's own header, and moveto_continuous.pl's AtGoal condition,
+  # file's own header, and basic_action_theory.pl's AtGoal condition,
   # which now takes its own goal point as an explicit argument instead
   # of reading one).
   start_x: 2.275   # metres

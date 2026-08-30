@@ -1,28 +1,29 @@
 #!/usr/bin/env python3
 """
-plan_generation/bt_to_prolog.py
+module/translators/bt_to_prolog.py
 
 The BT.cpp XML tree -> Prolog do_node term translator flagged as
 "not yet built" in this project's own history. Reads a real
-BehaviorTree.cpp v4 XML tree (plan_generation/plan/behavior_tree.xml),
-validates it against actions/schema.yaml (every leaf node must be a
-known, correctly-instantiated schema action/condition; every
+BehaviorTree.cpp v4 XML tree (a problem's own behavior_tree.xml),
+validates it against module/contracts/schema.yaml (every leaf node must
+be a known, correctly-instantiated schema action/condition; every
 control-flow node must be Sequence or Fallback -- the two BT.cpp
-built-ins moveto_continuous.pl's seq_node/fallback_node already map to
-1:1), and translates it into the nested do_node/4 term text
-moveto_continuous.pl's plan/1 expects.
+built-ins basic_action_theory.pl's seq_node/fallback_node already map
+to 1:1), and translates it into the nested do_node/4 term text
+basic_action_theory.pl's plan/1 expects.
 
-WHERE THE RESULT GOES: generate_plan_pl() writes
-plan_generation/plan/plan_generated.pl, a single plan/1 FACT (not a
-clause with a body -- see below), which moveto_continuous.pl now
-:- consult()s instead of hand-defining plan/1 itself. This mirrors the
-existing generated-artifact pattern (config/config_generated.pl,
-environments/maps/obstacles_generated.pl): the XML is the single
-source of truth for the POLICY'S SHAPE from now on -- change the tree
-by editing the XML and re-running, not by hand-editing
-moveto_continuous.pl.
-run_plan_continuous_safety.py regenerates it automatically before every
-run, exactly like it already does for config_generated.pl.
+WHERE THE RESULT GOES: generate_plan_pl() writes the problem's own
+plan_generated.pl, a single plan/1 FACT (not a clause with a body --
+see below), which basic_action_theory.pl consults (via its
+problem_data.pl bootstrap -- see that file's Section 0) instead of
+hand-defining plan/1 itself. This mirrors the existing
+generated-artifact pattern (config_generated.pl, obstacles_generated.pl,
+both written by this file's own sibling translators into the same
+problem directory): the XML is the single source of truth for the
+POLICY'S SHAPE from now on -- change the tree by editing the XML and
+re-running, not by hand-editing basic_action_theory.pl.
+main.py regenerates it automatically before every run, exactly like it
+already does for config_generated.pl.
 
 WHY A FACT, NOT A CLAUSE WITH A BODY: the old hand-written plan/1 was
 `plan(seq_node([moveto_leg(CP,Triggers)])) :- control_points(CP),
@@ -47,9 +48,9 @@ both a PlanAstar and a MoveTo node becomes the SAME Prolog variable CP
 in planWith(astar,point(GX,GY),CP) and moveto_leg(CP,[...]) -- the
 direct Prolog analogue of BT.cpp's blackboard, and exactly the existing
 "leave a variable free, let a prior step bind it" pattern already
-documented in moveto_continuous.pl for hand-written multi-leg plans.
+documented in basic_action_theory.pl for hand-written multi-leg plans.
 Never reuse one key across two DIFFERENT PlanAstar/PlanStraight calls
-that should compute independent paths -- see moveto_continuous.pl's own
+that should compute independent paths -- see basic_action_theory.pl's own
 note on giving fallback_node branches distinct CP1/CP2 variables; the
 same Prolog-variable-scope reasoning applies here.
 
@@ -68,7 +69,7 @@ corresponding PlanAstar/PlanStraight producer anywhere in the tree
 (which would silently leave CP unbound) all raise BTValidationError and
 stop the run -- these are structural errors in the tree itself, not a
 tunable value, so there is nothing sensible to warn-and-continue with
-(same reasoning as config/generate_prolog_config.py's own hard
+(same reasoning as module/translators/config_to_prolog.py's own hard
 requirements, as opposed to its two non-fatal numeric warnings).
 """
 import os
@@ -78,9 +79,11 @@ import xml.etree.ElementTree as ET
 import yaml
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_XML_PATH = os.path.join(_THIS_DIR, "plan", "behavior_tree.xml")
-DEFAULT_SCHEMA_PATH = os.path.join(os.path.dirname(_THIS_DIR), "actions", "schema.yaml")
-DEFAULT_OUTPUT_PATH = os.path.join(_THIS_DIR, "plan", "plan_generated.pl")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
+_DEFAULT_PROBLEM_DIR = os.path.join(_PROJECT_ROOT, "problems", "problem0")
+DEFAULT_XML_PATH = os.path.join(_DEFAULT_PROBLEM_DIR, "behavior_tree.xml")
+DEFAULT_SCHEMA_PATH = os.path.join(_PROJECT_ROOT, "module", "contracts", "schema.yaml")
+DEFAULT_OUTPUT_PATH = os.path.join(_DEFAULT_PROBLEM_DIR, "plan_generated.pl")
 
 # Every schema action's `id` maps to how it's dispatched below: which
 # do_node/4 Prolog functor it becomes, and (for the two planners) which
@@ -194,7 +197,7 @@ def _validate_ports(tag, elem, port_specs):
     if missing:
         raise BTValidationError(
             f"<{tag}> is missing required port(s) {missing} "
-            f"(schema.yaml: actions/schema.yaml's '{tag}' entry).")
+            f"(schema.yaml: module/contracts/schema.yaml's '{tag}' entry).")
     return attrs
 
 
@@ -279,7 +282,7 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool):
             cp_var = var_pool.var_for(key)
             # planWith/3's Goal slot is part of the SHARED template
             # every planner sits inside (do_node(planWith(Algorithm,
-            # Goal,CP),...) in moveto_continuous.pl) -- FollowBoarder
+            # Goal,CP),...) in basic_action_theory.pl) -- FollowBoarder
             # itself takes no goal port (see its own schema.yaml entry)
             # and plan_call/8's follow_boarder clauses ignore it
             # outright, so a placeholder point(0.0,0.0) is spliced in
@@ -326,7 +329,7 @@ def _translate_node(elem, schema_ports, var_pool):
     if tag not in schema_ports:
         raise BTValidationError(
             f"<{tag}> is not a recognized node -- not Sequence/Fallback and "
-            f"not an action/condition 'id' in actions/schema.yaml.")
+            f"not an action/condition 'id' in module/contracts/schema.yaml.")
 
     return _translate_leaf(tag, elem, None, schema_ports[tag], var_pool)
 
@@ -393,10 +396,10 @@ def generate_plan_pl(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
                       output_path=DEFAULT_OUTPUT_PATH):
     node_text = translate_tree(xml_path, schema_path)
     lines = [
-        "% AUTO-GENERATED by plan_generation/bt_to_prolog.py from",
+        "% AUTO-GENERATED by module/translators/bt_to_prolog.py from",
         f"% {os.path.relpath(xml_path, os.path.dirname(output_path))} -- DO NOT HAND-EDIT,",
-        "% edit the XML tree instead and regenerate (run_plan_continuous_safety.py",
-        "% does this automatically before every run).",
+        "% edit the XML tree instead and regenerate (main.py does this",
+        "% automatically before every run).",
         "",
         f"plan({node_text}).",
         "",

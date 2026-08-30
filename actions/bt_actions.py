@@ -214,10 +214,17 @@ def follow_boarder_term(obstacle_id, offset, cp_var="CP"):
 # =====================================================================
 # CONDITIONS -- interface-only: term builders
 # =====================================================================
-def at_goal_cond_term(tolerance):
-    """cond(at_goal(Tolerance)) term text -- matches AtGoal's
-    tolerance port in schema.yaml."""
-    return f"cond(at_goal({float(tolerance)}))"
+def at_goal_cond_term(goal, tolerance):
+    """cond(at_goal(GX,GY,Tolerance)) term text -- matches AtGoal's
+    goal/tolerance ports in schema.yaml. PARAMETRIZED, same as
+    obstacle_in_bound_cond_term/battery_below_cond_term below -- there
+    is no global "the goal" fact this reads instead.
+
+    goal: an (x,y) pair.
+    tolerance: distance threshold, metres.
+    """
+    gx, gy = goal
+    return f"cond(at_goal({float(gx)},{float(gy)},{float(tolerance)}))"
 
 
 def halted_with_cond_term(reason):

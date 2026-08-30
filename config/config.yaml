@@ -21,8 +21,7 @@
 #     same numbers with no risk of drift.
 #
 # config_generated.pl is committed to the repo (like
-# environments/maps/obstacles_generated.pl and
-# plan_generation/plan/current_plan.pl already are) so that running
+# environments/maps/obstacles_generated.pl already is) so that running
 # ProbLog directly (`problog moveto_continuous.pl`, per the project's
 # own testing convention) still works without going through
 # run_plan_continuous_safety.py first -- but treat it as a build
@@ -40,6 +39,22 @@
 # (Threshold), etc.) carries its own threshold as an argument at the
 # call site instead, so there is no per-trigger geometry config here
 # either.
+
+initial_situation:
+  # The robot's own position at s0 -- start/1 in the generated Prolog
+  # (see at(X,Y,_,s0) :- start(X,Y). in moveto_continuous.pl). Used to
+  # live in plan_generation/plan/current_plan.pl, alongside a global
+  # goal/2 fact and a now-superseded static control_points/1 -- that
+  # file is gone; start moved here (config.yaml is the single source
+  # of truth for everything else about the initial situation already:
+  # battery_start below, the noise model, robot geometry), and "the
+  # goal" now lives entirely in plan_generation/plan/goal_formula.pl
+  # (there is no longer a single global goal point at all -- see that
+  # file's own header, and moveto_continuous.pl's AtGoal condition,
+  # which now takes its own goal point as an explicit argument instead
+  # of reading one).
+  start_x: 2.275   # metres
+  start_y: 2.075   # metres
 
 robot:
   radius: 0.20          # metres -- robot_radius/1

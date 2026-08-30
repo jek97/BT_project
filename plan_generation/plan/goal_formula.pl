@@ -1,10 +1,10 @@
 % goal_formula.pl
 %
 % Hand-authored, tied to THIS PARTICULAR plan's own behavior_tree.xml
-% -- same "must be kept in sync with whichever tree it verifies"
-% convention already accepted for current_plan.pl's own goal/2 vs
-% behavior_tree.xml's goal port (see moveto_continuous.pl's own note
-% there); if the tree's own waypoints change, update this file too.
+% -- "must be kept in sync with whichever tree it verifies": this file
+% is now the SINGLE place mission-goal information lives (there is no
+% global goal/2 fact any more); if the tree's own waypoints change,
+% update this file too.
 %
 % goal_formula(S) is a UNIFORM formula in S (Reiter's own sense: S is
 % the ONLY free situation term in the body, and every fluent that

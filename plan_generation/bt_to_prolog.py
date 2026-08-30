@@ -17,10 +17,10 @@ plan_generation/plan/plan_generated.pl, a single plan/1 FACT (not a
 clause with a body -- see below), which moveto_continuous.pl now
 :- consult()s instead of hand-defining plan/1 itself. This mirrors the
 existing generated-artifact pattern (config/config_generated.pl,
-environments/maps/obstacles_generated.pl,
-plan_generation/plan/current_plan.pl): the XML is the single source of
-truth for the POLICY'S SHAPE from now on -- change the tree by editing
-the XML and re-running, not by hand-editing moveto_continuous.pl.
+environments/maps/obstacles_generated.pl): the XML is the single
+source of truth for the POLICY'S SHAPE from now on -- change the tree
+by editing the XML and re-running, not by hand-editing
+moveto_continuous.pl.
 run_plan_continuous_safety.py regenerates it automatically before every
 run, exactly like it already does for config_generated.pl.
 
@@ -100,12 +100,15 @@ _ACTION_DISPATCH = {
     "FollowBoarder": {"kind": "planWith_follow_boarder"},
 }
 # "single_float_port": the shared shape of every cond(Functor(Value))
-# condition whose one port is a plain float -- AtGoal, ObstacleInBound,
-# and BatteryBelow all reduce to this, just with different functor/port
-# names, so they share ONE translation branch below instead of three
-# near-identical ones.
+# condition whose one port is a plain float -- ObstacleInBound and
+# BatteryBelow/Equal/Over all reduce to this, just with different
+# functor/port names, so they share ONE translation branch below
+# instead of several near-identical ones.
 _CONDITION_DISPATCH = {
-    "AtGoal": {"kind": "single_float_port", "functor": "at_goal", "port": "tolerance"},
+    # at_goal(GX,GY,Tol) -- PARAMETRIZED (no global "the goal" fact to
+    # read instead), so it needs its own dispatch kind, not the shared
+    # single_float_port shape (two ports, a Point AND a float).
+    "AtGoal": {"kind": "at_goal_cond"},
     "ObstacleInBound": {"kind": "single_float_port", "functor": "obstacle_in_bound", "port": "threshold"},
     "ObstacleOnPath": {"kind": "single_float_port", "functor": "obstacle_on_path", "port": "threshold"},
     "BatteryBelow": {"kind": "single_float_port", "functor": "battery_below", "port": "threshold"},
@@ -295,6 +298,10 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool):
             obstacle_id = attrs["obstacle_id"].strip()
             gx, gy = _point_xy(attrs["goal"], tag, "goal")
             return f"cond(line_of_sight_clear({obstacle_id},{gx},{gy}))"
+        if info["kind"] == "at_goal_cond":
+            gx, gy = _point_xy(attrs["goal"], tag, "goal")
+            tolerance = float(attrs["tolerance"])
+            return f"cond(at_goal({gx},{gy},{tolerance}))"
 
     raise BTValidationError(f"Unhandled schema entry '{tag}' -- add it to "
                              f"_ACTION_DISPATCH/_CONDITION_DISPATCH.")

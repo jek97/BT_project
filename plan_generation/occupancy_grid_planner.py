@@ -18,8 +18,19 @@ Workflow
    drawn on top of the A* path.
 6. The B-spline is converted EXACTLY into a chain of cubic Bezier segments
    (via full knot insertion) and written out as ProbLog/Prolog facts
-   (start/2, goal/2, control_points/1) directly consultable by
-   moveto_continuous.pl -- see write_prolog_plan() below.
+   (start/2, goal/2, control_points/1) -- see write_prolog_plan() below.
+
+NOTE: this is a standalone interactive exploration tool, no longer wired
+into the live pipeline -- moveto_continuous.pl gets its plan from
+behavior_tree.xml (via plan_generation/bt_to_prolog.py, run
+automatically by run_plan_continuous_safety.py before every run) and
+its start position from config.yaml, not from this script's output.
+The Prolog file this script writes is a descriptive record only,
+useful for exploring what an A*+spline plan over a given map would
+look like; nothing else in the project reads it. Its map-loading/A*/
+spline PIPELINE (OccupancyGridMap, load_map_yaml, inflate_obstacles,
+astar, ...) is still reused as a library by actions/moveto_planners.py
+for the live PlanAstar action.
 
 Press 'r' at any time to reset the start/goal selection and try again.
 
@@ -46,7 +57,7 @@ OccupancyGrid array instead (see below), if you need to override this.
 
 Output
 ------
-Two files are always written into a FIXED output folder relative to the
+A single file is written into a FIXED output folder relative to the
 current working directory:
 
     ./plan/
@@ -54,13 +65,10 @@ current working directory:
 (created automatically if it doesn't exist):
 
   - ./plan/<map_name>_plan.pl  -- a descriptive, per-map record of this
-    specific plan (so multiple maps/runs don't overwrite each other)
-  - ./plan/current_plan.pl     -- ALWAYS overwritten with the same content
-    as the file above; this is the FIXED path moveto_continuous.pl expects
-    to consult (see its own header comment for the expected relative
-    location: ./plan_generation/plan/current_plan.pl)
+    specific plan (so multiple maps/runs don't overwrite each other);
+    not consulted by anything else in the project (see the NOTE above).
 
-Both are plain ProbLog/Prolog fact files:
+It is a plain ProbLog/Prolog fact file:
 
     start(X0, Y0).
     goal(Xn, Yn).
@@ -75,8 +83,7 @@ exact conversion -- not an approximation -- from the general B-spline
 scipy fits into the specific chained-cubic-Bezier representation the
 action theory uses. See bspline_to_bezier_chain() below.
 
-Pass --out to override the per-map output file path if needed (the fixed
-current_plan.pl in the same folder is still written either way).
+Pass --out to override the per-map output file path if needed.
 
 If you are getting the map directly from a running ROS system instead of a
 file, subscribe to the OccupancyGrid topic and build an OccupancyGridMap
@@ -115,9 +122,6 @@ DEFAULT_MAP_PATH = os.path.join(".", "..", "environments", "maps", "map.yaml")
 
 # Fixed output folder, relative to the current working directory.
 OUTPUT_DIR = os.path.join(os.getcwd(), "plan")
-
-# Fixed filename moveto_continuous.pl always consults (see its header).
-CURRENT_PLAN_FILENAME = "current_plan.pl"
 
 
 # --------------------------------------------------------------------------
@@ -392,9 +396,11 @@ def bspline_to_bezier_chain(tck):
 
 
 def write_prolog_plan(out_path, control_points, start_world, goal_world):
-    """Write start/2, goal/2, control_points/1 as ProbLog/Prolog facts,
-    directly consultable by moveto_continuous.pl -- no separate parsing
-    step needed on the Prolog side."""
+    """Write start/2, goal/2, control_points/1 as ProbLog/Prolog facts --
+    a descriptive record of the plan this script found, in the same
+    fact shape moveto_continuous.pl's spline_point/4 expects, but not
+    itself consumed by anything else in the project (see this module's
+    own header NOTE)."""
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
 
     with open(out_path, "w") as f:
@@ -402,8 +408,8 @@ def write_prolog_plan(out_path, control_points, start_world, goal_world):
         f.write("% A* path -> B-spline fit -> exact Bezier-chain extraction.\n")
         f.write("% control_points/1 has length 3k+1 for k cubic Bezier segments\n")
         f.write("% (segment i uses control points 3i..3i+3, consecutive segments\n")
-        f.write("% sharing their boundary point) -- consult directly from\n")
-        f.write("% moveto_continuous.pl.\n\n")
+        f.write("% sharing their boundary point), same shape as\n")
+        f.write("% moveto_continuous.pl's spline_point/4 expects.\n\n")
 
         f.write(f"start({start_world[0]:.6f}, {start_world[1]:.6f}).\n")
         f.write(f"goal({goal_world[0]:.6f}, {goal_world[1]:.6f}).\n\n")
@@ -534,10 +540,6 @@ class InteractivePlanner:
         write_prolog_plan(self.args.out, control_points, start_world, goal_world)
         print(f"Plan (Prolog facts) written to: {self.args.out}")
 
-        current_plan_path = os.path.join(OUTPUT_DIR, CURRENT_PLAN_FILENAME)
-        write_prolog_plan(current_plan_path, control_points, start_world, goal_world)
-        print(f"Also updated fixed path consulted by moveto_continuous.pl: {current_plan_path}")
-
 
 # --------------------------------------------------------------------------
 # CLI
@@ -548,11 +550,10 @@ def build_arg_parser():
         description="Click a start/goal on an OccupancyGrid map, plan with A*, "
                     "fit a spline to the path, convert it exactly to a cubic "
                     "Bezier chain, and export it as ProbLog/Prolog facts "
-                    "(start/2, goal/2, control_points/1) directly consultable "
-                    "by moveto_continuous.pl. By default the map is always "
-                    "read from ./../environments/maps/map.yaml and the result "
-                    "is always written into ./plan/ (both a per-map file and "
-                    "the fixed ./plan/current_plan.pl).")
+                    "(start/2, goal/2, control_points/1) -- a descriptive record "
+                    "only, not consumed elsewhere in the project. By default the "
+                    "map is always read from ./../environments/maps/map.yaml and "
+                    "the result is always written into ./plan/.")
 
     src = parser.add_mutually_exclusive_group(required=False)
     src.add_argument("--map", type=str, default=None,
@@ -587,9 +588,7 @@ def build_arg_parser():
 
     parser.add_argument("--out", type=str, default=None,
                          help="Output .pl path for the per-map plan record "
-                              "(default: ./plan/<map_name>_plan.pl). The fixed "
-                              f"./plan/{CURRENT_PLAN_FILENAME} is always ALSO "
-                              "written, regardless of this option.")
+                              "(default: ./plan/<map_name>_plan.pl).")
     return parser
 
 

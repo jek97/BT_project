@@ -31,29 +31,33 @@ Usage:
     python3 run_plan_continuous_safety.py moveto_continuous.pl
 
 Before running inference, this script:
-  1. regenerates config/config_generated.pl from config/config.yaml
+  1. regenerates environments/maps/obstacles_generated.pl from
+     environments/maps/map.yaml (see environments/occgrid_to_problog.py's
+     own header) -- map.yaml is the single source of truth for the
+     obstacle layout.
+  2. regenerates config/config_generated.pl from config/config.yaml
      (see that module's own header) -- config.yaml is the single
      source of truth for every tunable constant in the theory (noise
      sigmas, the Z discretization tables, battery drain rates,
-     robot/safety thresholds, tolerances, verification resolution).
-  2. translates plan_generation/plan/behavior_tree.xml -- a real
+     robot/safety thresholds, tolerances, verification resolution, and
+     the robot's own starting position).
+  3. translates plan_generation/plan/behavior_tree.xml -- a real
      BT.cpp v4 tree, the single source of truth for the POLICY'S
      SHAPE -- into plan_generation/plan/plan_generated.pl, validating
      it against actions/schema.yaml on the way (see
      plan_generation/bt_to_prolog.py's own header).
-  3. validates plan_generation/plan/goal_formula.pl -- the hand-
-     authored verification goal for THIS particular plan -- against
+  4. validates plan_generation/plan/goal_formula.pl -- the hand-
+     authored verification goal for THIS particular plan, and the
+     ONLY place goal information lives in this theory -- against
      plan_generation/vocabulary.yaml (see
      plan_generation/goal_formula_check.py's own header): every
      predicate it calls must be a known fluent, and the whole formula
      must be uniform in one situation (Reiter's own sense).
-All three steps mean a normal run always reflects whatever is
-currently in config.yaml / behavior_tree.xml / goal_formula.pl, with
+All four steps mean a normal run always reflects whatever is currently
+in map.yaml / config.yaml / behavior_tree.xml / goal_formula.pl, with
 no separate regeneration step needed.
 
-Requires: obstacles_generated.pl and the given plan file to be in the
-same directory (or already consulted from within the plan file), and
-`problog` importable/runnable on PATH.
+Requires: `problog` importable/runnable on PATH.
 
 Saves a timestamped log file and a PNG with the obstacle polygons, the
 nominal spline, the sampled hazard heatmap along it, and the riskiest
@@ -109,9 +113,9 @@ def resolve_consulted_text(theory_path, _seen=None):
     Read theory_path's text, AND the text of every file it :- consult()s
     (resolved relative to theory_path's own directory), recursively, and
     return it all concatenated. This mirrors what ProbLog itself does at
-    load time -- moveto_continuous.pl no longer contains start/2, goal/2,
-    control_points/1, or obstacle_polygon/2 directly; they live in files
-    it consults (current_plan.pl, obstacle_generated.pl), so parsing only
+    load time -- moveto_continuous.pl no longer contains start/1 or
+    obstacle_polygon/2 directly; they live in files it consults
+    (config_generated.pl, obstacles_generated.pl), so parsing only
     theory_path's own text (as earlier versions of this script did) finds
     nothing. _seen guards against accidental consult cycles.
     """
@@ -152,6 +156,32 @@ def parse_scalar_fact(theory_text, name):
     if not m:
         raise ValueError(f"Could not find numeric {name}/2 fact")
     return (float(m.group(1)), float(m.group(2)))
+
+
+PLANWITH_GOAL_RE = re.compile(
+    r"planWith\([^,]+,\s*point\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)")
+
+
+def parse_last_plan_goal(theory_text):
+    """The LAST planWith(...,point(GX,GY),...) literal appearing in the
+    (fully resolved) theory text -- used as a plottable "goal" marker
+    now that there is no longer a single global goal/2 fact (goal
+    information lives entirely in plan_generation/plan/goal_formula.pl,
+    which has no fixed shape a plotting script could reliably parse
+    instead). The LAST occurrence, not the first, since a multi-leg
+    plan's own final target is the more representative "where the
+    mission is headed" point. KNOWN LIMITATION: a plan ending on a
+    follow_boarder(...) leaf would mark the wrong point, since that
+    planner's own goal argument is a meaningless point(0.0,0.0)
+    placeholder (see moveto_continuous.pl's own note on why) -- not hit
+    by the shipped plan."""
+    matches = PLANWITH_GOAL_RE.findall(theory_text)
+    if not matches:
+        raise ValueError(
+            "Could not find any planWith(...,point(X,Y),...) literal in "
+            "the theory file to use as a goal marker")
+    x, y = matches[-1]
+    return (float(x), float(y))
 
 
 def parse_int_fact(theory_text, name, default):
@@ -388,7 +418,7 @@ def print_safety_results(tee, results, num_samples):
         tee("  No failure samples detected.")
 
     section(tee, "Overall outcome")
-    for key, label in [("goal_reached", "goal_reached         "),
+    for key, label in [("verify_goal_formula", "verify_goal_formula  "),
                         ("any_collision", "any_collision        "),
                         ("any_battery_depletion", "any_battery_depletion")]:
         p = results.get(key, 0.0)
@@ -475,6 +505,28 @@ def main():
             tee(f"\n  [ERROR] File not found: {plan_path}")
             sys.exit(1)
 
+        # Regenerate environments/maps/obstacles_generated.pl from
+        # environments/maps/map.yaml BEFORE anything reads the theory --
+        # map.yaml is the single source of truth for the obstacle
+        # layout (see environments/occgrid_to_problog.py), same
+        # automatic-every-run treatment config.yaml/behavior_tree.xml
+        # already get, rather than the separate manual step this used
+        # to be. Must happen before resolve_consulted_text() below, for
+        # the same staleness reason as config_generated.pl.
+        env_dir = os.path.join(script_dir, "environments")
+        if env_dir not in sys.path:
+            sys.path.insert(0, env_dir)
+        try:
+            from occgrid_to_problog import generate as generate_obstacles
+            generated_obstacles_path = generate_obstacles(
+                yaml_path=os.path.join(env_dir, "maps", "map.yaml"),
+                output_path=os.path.join(env_dir, "maps", "obstacles_generated.pl"))
+            tee(f"  Obstacles   : {generated_obstacles_path} (regenerated from "
+                f"{os.path.join(env_dir, 'maps', 'map.yaml')})")
+        except Exception as e:
+            tee(f"\n  [ERROR] Could not regenerate obstacles_generated.pl: {e}")
+            sys.exit(1)
+
         # Regenerate config/config_generated.pl from config/config.yaml
         # BEFORE anything reads the theory -- config.yaml is the single
         # source of truth for every tunable constant (see config/
@@ -550,14 +602,16 @@ def main():
             sys.exit(1)
 
         # Follow moveto_continuous.pl's own :- consult(...) directives --
-        # start/2, goal/2, control_points/1, and obstacle_polygon/2 now
-        # live in the consulted files (current_plan.pl, obstacle_generated.pl),
-        # not in the theory file's own text.
+        # start/1 now lives in config_generated.pl, obstacle_polygon/2
+        # in obstacles_generated.pl -- not in the theory file's own
+        # text. There is no goal/2 fact anywhere anymore (see
+        # parse_last_plan_goal's own note on where "the goal" is read
+        # from instead, for plotting purposes).
         theory_text = resolve_consulted_text(plan_path)
 
         try:
             start = parse_scalar_fact(theory_text, "start")
-            goal = parse_scalar_fact(theory_text, "goal")
+            goal = parse_last_plan_goal(theory_text)
             num_samples = parse_int_fact(theory_text, "num_samples", 20)
         except ValueError as e:
             tee(f"\n  [ERROR] {e}")

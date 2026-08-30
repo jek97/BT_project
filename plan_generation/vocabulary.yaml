@@ -244,22 +244,16 @@ predicates:
   # goal formula (to bind a coordinate, say) without affecting
   # uniformity, since they carry no situation argument at all.
   # ----------------------------------------------------------------
-  - name: goal
-    arity: 2
-    situation_arg: null
-    args:
-      - {position: 1, name: GX, type: float, description: "The global mission goal's own X coordinate."}
-      - {position: 2, name: GY, type: float, description: "The global mission goal's own Y coordinate."}
-    description: >
-      The global goal/2 fact (from current_plan.pl) -- NOT necessarily
-      identical to any single leg's own planWith Goal literal in
-      behavior_tree.xml; see moveto_continuous.pl's own note on that
-      accepted gap.
-
   - name: start
     arity: 2
     situation_arg: null
     args:
       - {position: 1, name: SX, type: float, description: "The robot's own starting X coordinate."}
       - {position: 2, name: SY, type: float, description: "The robot's own starting Y coordinate."}
-    description: "The start/2 fact (from current_plan.pl) -- the robot's position at s0."
+    description: >
+      The start/2 fact -- the robot's position at s0. Sourced from
+      config.yaml's initial_situation.start_x/start_y, generated into
+      config_generated.pl. There is no global goal/2 fact any more --
+      goal information lives only in this file (goal_formula.pl); a
+      formula that needs a specific coordinate should use the literal
+      value, or the goal point named in a planWith(...) leg.

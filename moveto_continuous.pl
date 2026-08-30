@@ -72,11 +72,14 @@ obstacle_polygon(no_obstacles_placeholder, []) :- fail.
 % Expected project layout (paths below are relative to THIS file):
 %   ./environments/maps/map.yaml (+ .pgm)       -- the source map
 %   ./environments/maps/obstacles_generated.pl  -- consulted here
-%   ./plan_generation/occupancy_grid_planner.py
-%   ./plan_generation/plan/current_plan.pl      -- consulted further down
-% Generate the obstacle file with (no --out override needed -- this is
-% occgrid_to_problog.py's own actual default filename):
-%   python3 occgrid_to_problog.py environments/maps/map.yaml \
+%   ./environments/occgrid_to_problog.py
+% run_plan_continuous_safety.py regenerates obstacles_generated.pl from
+% map.yaml automatically before every run (occgrid_to_problog.py's own
+% generate()), same as it already does for config_generated.pl/
+% plan_generated.pl -- you don't need to run the generator by hand for
+% a normal run. To do it manually anyway (no --out override needed --
+% this is occgrid_to_problog.py's own actual default filename):
+%   python3 environments/occgrid_to_problog.py environments/maps/map.yaml \
 %       --out environments/maps/obstacles_generated.pl
 :- consult('./environments/maps/obstacles_generated.pl').
 % Must exist relative to wherever ProbLog is invoked FROM (typically the
@@ -1257,9 +1260,10 @@ plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, [], no_path, false) 
 %    moveto_leg(CP2,...)])) -- the direct Prolog analogue of
 %    instantiating a parametrized "GoTo(target)" BT.cpp subtree twice
 %    with two different port bindings, rather than both calls silently
-%    aiming at one shared destination. goal/2 itself is UNCHANGED and
-%    still used elsewhere (at_goal/1, goal_reached) -- only planWith's
-%    OWN target is now per-call rather than global. Status flows
+%    aiming at one shared destination (there is no longer a global
+%    goal/2 fact at all -- see at_goal/3's own note, and plan_generation
+%    /plan/goal_formula.pl for where a plan's own goal information
+%    lives now). Status flows
 %    straight through as Outcome, exactly like moveto_leg's own Status
 %    -- no translation predicate, since plan_call/8 already produces
 %    it directly.
@@ -1364,25 +1368,24 @@ holds(neg(P),   S) :- \+ holds(P,S).
 % written the same way: reason="crashed(_)" or reason="crashed(obs5)".
 holds(halted_with_cond(Reason), S) :- halted_with(Reason, S).
 
-% at_goal(Tol): true iff the CURRENT position (at the current time,
-% via now/2) is within Tol of goal/2. Typical use: a fallback child
-% that skips moveto entirely if already there --
-%   fallback_node([cond(at_goal(0.3)), moveto_leg(CP,[collision,battery])])
-%
-% TODO / KNOWN GAP: this reads the GLOBAL goal/2 fact (from
-% plan_generation/plan/current_plan.pl) -- NOT any PlanAstar/
-% PlanStraight node's own `goal` port (a literal in behavior_tree.xml,
-% see plan_generation/bt_to_prolog.py's translation). The two are
-% independent numbers that only happen to agree today because
-% behavior_tree.xml was hand-written to match goal/2 at the time. If
-% either changes without the other, at_goal/goal_reached below would
-% silently check against a stale/different point than what PlanAstar
-% actually planned toward. Left as-is for now (accepted, discussed
-% explicitly) -- a real fix belongs here eventually, e.g. having the
-% translator read goal/2 itself and refuse a disagreeing XML value, or
-% substitute it automatically when the XML's goal port is left unset.
-holds(at_goal(Tol), S) :-
-    now(T, S), at(X,Y,T,S), goal(GX,GY), dist(X,Y,GX,GY,D), D =< Tol.
+% at_goal(GX,GY,Tol): true iff the CURRENT position (at the current
+% time, via now/2) is within Tol of the EXPLICIT point (GX,GY) --
+% PARAMETRIZED, same as obstacle_in_bound(Threshold)/battery_below
+% (Threshold)/etc., not a lookup against any global "the goal" fact
+% (there is no such fact anymore -- see plan_generation/plan/
+% goal_formula.pl for where a plan's own goal information now lives
+% entirely; at_goal is a DIFFERENT, complementary thing: a REACTIVE
+% in-tree check, evaluated possibly many times at different situations
+% as the policy runs, not a one-time post-hoc verification query).
+% Typical use: a fallback child that skips moveto entirely if already
+% there --
+%   fallback_node([cond(at_goal(11.675,11.525,0.3)), moveto_leg(CP,[collision,battery])])
+% Pass the SAME point as whichever PlanAstar/PlanVoronoi/... node's own
+% goal port targets, if that's the intent -- being explicit here means
+% there is no longer a global/local goal-point mismatch to drift out
+% of sync (the risk a single shared goal/2 fact used to carry).
+holds(at_goal(GX,GY,Tol), S) :-
+    now(T, S), at(X,Y,T,S), dist(X,Y,GX,GY,D), D =< Tol.
 
 % obstacle_in_bound(Threshold): true iff the CURRENT position (at the
 % current time, via now/2) is within Threshold of ANY obstacle. Same
@@ -1475,8 +1478,8 @@ final_situation(S) :- plan(Node), do_node(Node, s0, S, _).
 
 % plan_outcome(Outcome): the WHOLE tree's true/false outcome, a
 % first-class query -- P(plan_outcome(true)) is the BT-level analogue
-% of goal_reached, but based on Status/Outcome rather than a
-% hand-written distance check.
+% of verify_goal_formula, but based on Status/Outcome rather than an
+% explicit goal formula.
 plan_outcome(Outcome) :- plan(Node), do_node(Node, s0, _, Outcome).
 
 % plan_time_span(+S, -T0, -TEnd): T0 is when the (most recent) walk
@@ -1559,7 +1562,7 @@ halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 % a fluent that starts false and, once made true, stays true in every
 % situation built on top of that one, exactly the shape a multi-leg
 % "visited(A), visited(B), visited(C)" goal formula needs, verified
-% the same way goal_reached/any_collision already are (P(...) over
+% the same way verify_goal_formula/any_collision already are (P(...) over
 % resolved worlds, since a collision or battery depletion partway
 % through a multi-leg plan can genuinely truncate the history before
 % a later waypoint is ever reached -- this is NOT something you could
@@ -1724,39 +1727,27 @@ on_track(I) :-
     tolerance(Tol),
     D =< Tol.
 
-% -- goal reached: arrives near the goal AND the walk's actual
-%    recorded outcome was `completed` (read via halted_with/2, not an
-%    ad-hoc list of \+ crashed_in/\+ battery_depleted_in-style
-%    exclusions -- that style would need a new exclusion added by
-%    hand for every future trigger; checking halted_with(completed,S)
-%    directly is correct for any number of current or future causes
-%    with no changes needed here).
-%    goal_tolerance/1 is now a config fact -- see
-%    config/config.yaml's tolerances.goal.
-%    TODO / KNOWN GAP: reads the global goal/2 fact, same caveat as
-%    at_goal/1 above (see the TODO note on that clause) -- not any
-%    PlanAstar/PlanStraight node's own `goal` port.
-
-goal_reached :-
-    final_situation(S),
-    halted_with(completed, S),
-    plan_time_span(S, _, TEnd),
-    at(GX,GY,TEnd,S),
-    goal(GXt,GYt),
-    dist(GX,GY,GXt,GYt,D),
-    goal_tolerance(Tol),
-    D =< Tol.
+% goal_reached (the old single-point "arrives near THE goal AND the
+% walk's actual recorded outcome was completed" query) is GONE --
+% superseded by goal_formula.pl's own goal_formula/1 (verified,
+% earlier, to compute the EXACT SAME probability as goal_reached did
+% for a single-leg plan), and by visited/2's own more general history
+% search for anything beyond that. See moveto_continuous.pl's own
+% verify_goal_formula wrapper further down, and
+% plan_generation/plan/goal_formula.pl for where "did the plan
+% succeed" is now formalized -- there is no longer a global goal/2
+% fact anywhere in this theory for a query like this to read.
 
 % ============================================================
 % 9. THE POLICY -- an explicit start/end ACTION PAIR:
 %        startMoveto(ControlPoints, T0)  ...  haltMoveto(T,Reason)
-%    ControlPoints is now computed at runtime by a planWith leaf (see
-%    plan/1's own note further down) rather than hand-filled here, but
-%    a hand-authored control_points/1 fact (from
-%    plan_generation/plan/current_plan.pl) still has to start at
-%    start/2 and end at goal/2, with length 3k+1 for some k >= 1 (k
-%    cubic Bezier segments), for anything that still uses it directly
-%    (e.g. plotting -- see run_plan_continuous_safety.py).
+%    ControlPoints is computed at runtime by a planWith leaf (see
+%    plan/1's own note further down) -- there is no longer a
+%    hand-authored control_points/1 fact anywhere in this theory
+%    (plan_generation/plan/current_plan.pl, which used to hold one
+%    alongside start/2 and goal/2, is gone entirely; see start/1's own
+%    note below and goal_formula.pl for where the two things it used
+%    to carry now live instead).
 %
 %    T and Reason are left as FREE VARIABLES -- they are DERIVED by
 %    Poss(haltMoveto(T,Reason),S), never chosen by the plan: Reason
@@ -1769,8 +1760,7 @@ goal_reached :-
 %    interruption). To model an interruption, replace it with
 %    something like:
 %
-%        plan(seq(startMoveto(CP,0), seq(interrupt(5.0), nil))) :-
-%            control_points(CP).
+%        plan(seq(startMoveto(CP,0), seq(interrupt(5.0), nil))).
 %
 %    which ends the walk at T=5.0 regardless of the walk's own
 %    natural completion or collision time -- poss(interrupt(T),S)
@@ -1781,22 +1771,15 @@ goal_reached :-
 %    same pattern as interrupt/1 above.
 % ============================================================
 
-% start/2, goal/2, and control_points/1 are produced by
-% occupancy_grid_planner.py (A* over the map -> B-spline fit -> exact
-% cubic-Bezier-chain extraction) and consulted directly here -- no
-% hand-typed numbers, no separate parsing step. Path is relative to
-% wherever ProbLog is invoked FROM (typically the directory containing
-% this file); see occupancy_grid_planner.py's own header for its output
-% locations. current_plan.pl is ALWAYS the most recently generated plan
-% (overwritten on every run); per-map dated copies are also kept
-% alongside it under the same folder if you need to go back to an
-% earlier one.
-:- consult('./plan_generation/plan/current_plan.pl').
-% Must define exactly: start(X,Y). goal(X,Y). control_points([point(...),...]).
-% control_points/1 MUST have length 3k+1 for some k>=1 (k cubic Bezier
-% segments) and must start at start/2's point and end at goal/2's point
-% -- occupancy_grid_planner.py's output always satisfies this by
-% construction, so this is only a concern if you hand-author the file.
+% start/1 is now a config.yaml fact (config/config.yaml's own
+% initial_situation.start_x/start_y, via config/config_generated.pl,
+% already consulted near the top of this file) -- it used to live in
+% plan_generation/plan/current_plan.pl, alongside a global goal/2 fact
+% and a control_points/1 static fallback, both now GONE: goal
+% information lives entirely in plan_generation/plan/goal_formula.pl
+% (see verify_goal_formula further down), and control_points/1 has had
+% no consumer since planWith started computing ControlPoints at
+% runtime.
 
 % plan/1 is no longer hand-written here -- it comes from
 % plan_generation/plan/plan_generated.pl, generated by
@@ -1845,12 +1828,13 @@ goal_reached :-
 % goal_formula/1 is hand-authored, tied to THIS PARTICULAR plan's own
 % waypoints -- see plan_generation/plan/goal_formula.pl's own header
 % for the full rationale and the "must be kept in sync with
-% behavior_tree.xml" caveat (same accepted convention as current_
-% plan.pl's own goal/2 vs the tree's goal port). It is a UNIFORM
-% formula (Reiter's sense -- one free situation argument, every fluent
-% inside applied to exactly it); verify_goal_formula below is what
-% actually applies it AT final_situation, same "zero-arg convenience
-% wrapper hardwired to final_situation" shape as goal_reached/
+% behavior_tree.xml" caveat. This is now the ONLY place a plan's own
+% goal information lives -- there is no separate global goal/2 fact
+% anywhere in this theory anymore (see at_goal/3's own note). It is a
+% UNIFORM formula (Reiter's sense -- one free situation argument,
+% every fluent inside applied to exactly it); verify_goal_formula
+% below is what actually applies it AT final_situation, same "zero-arg
+% convenience wrapper hardwired to final_situation" shape as
 % any_collision/plan_outcome below.
 :- consult('./plan_generation/plan/goal_formula.pl').
 
@@ -1859,7 +1843,7 @@ verify_goal_formula :- final_situation(S), goal_formula(S).
 % ============================================================
 % 10. QUERIES
 % ============================================================
-query(goal_reached).
+query(verify_goal_formula).
 query(plan_outcome(true)).
 query(plan_outcome(false)).
 query(any_collision).

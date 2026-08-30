@@ -3,6 +3,7 @@
 % and regenerate (run_plan_continuous_safety.py does this
 % automatically before every run).
 
+start(2.275,2.075).
 robot_radius(0.2).
 safety_buffer(0.1).
 speed(1.0).

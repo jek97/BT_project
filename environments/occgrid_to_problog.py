@@ -17,12 +17,19 @@ Pipeline:
      coordinates using the resolution/origin from the yaml
   5. write ONE obstacle_polygon(Id, [point(X,Y),...]) fact per region
 
-This is a one-time, deterministic, OFFLINE preprocessing step -- it has
-nothing to do with ProbLog's probabilistic machinery and does not affect
-world-count/grounding cost at all. Run it once whenever the map changes,
-then consult the resulting file from moveto_continuous.pl.
+This is a deterministic, OFFLINE preprocessing step -- it has nothing to
+do with ProbLog's probabilistic machinery and does not affect
+world-count/grounding cost at all.
 
-Usage:
+generate(yaml_path, output_path, epsilon_m, min_area_m2) is the
+importable core (steps 1-5 above); run_plan_continuous_safety.py calls
+it directly, before every run, exactly like it already does for
+config/generate_prolog_config.py's own generate() and
+plan_generation/bt_to_prolog.py's generate_plan_pl() -- so map.yaml is
+translated fresh every run, same as config.yaml/behavior_tree.xml, with
+no separate manual step to remember.
+
+Usage (the CLI wrapper, for standalone/one-off use):
     python3 occgrid_to_problog.py map.yaml
     python3 occgrid_to_problog.py map.yaml --out obstacles_generated.pl \
         --epsilon 0.05 --min-area 0.02 --inline PLAN_FILE.pl
@@ -33,9 +40,11 @@ invoke the script from), not next to the script or the input yaml. Pass
 --out with your own path if you want to override this.
 
 --inline PLAN_FILE.pl additionally rewrites start/2 and goal/2 in the
-given action-theory file if --start/--goal are supplied (handy for
-scripting a full map -> theory pipeline), leaving control_points/1
-untouched, since you said you'll fill that in by hand.
+given action-theory file if --start/--goal are supplied -- a vestigial
+feature now that start/2 lives in config.yaml and goal/2 no longer
+exists at all (moveto_continuous.pl's own goal information now lives
+entirely in plan_generation/plan/goal_formula.pl); left in place as an
+optional developer convenience, not part of the automatic pipeline.
 """
 import argparse
 import os
@@ -133,6 +142,22 @@ def extract_polygons(mask, resolution, origin, epsilon_m, min_area_m2):
 # ---------------------------------------------------------------------
 # 5. Write the ProbLog facts
 # ---------------------------------------------------------------------
+def generate(yaml_path, output_path, epsilon_m=0.05, min_area_m2=0.02):
+    """Regenerate output_path (obstacle_polygon/2 facts) from yaml_path (a
+    map_server map.yaml) -- the importable core main() itself calls, same
+    "importable function + thin CLI wrapper" shape as config/
+    generate_prolog_config.py's generate() and plan_generation/
+    bt_to_prolog.py's generate_plan_pl(). run_plan_continuous_safety.py
+    calls this directly before every run, exactly like it already does
+    for those other two -- the map pipeline used to be the one manual,
+    easy-to-forget step; it no longer is."""
+    img, resolution, origin, negate, occ_thresh, free_thresh = load_map(yaml_path)
+    mask = occupied_mask(img, negate, occ_thresh)
+    polygons = extract_polygons(mask, resolution, origin, epsilon_m, min_area_m2)
+    write_problog_facts(polygons, output_path, yaml_path)
+    return output_path
+
+
 def write_problog_facts(polygons, out_path, source_yaml):
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w") as f:
@@ -213,13 +238,7 @@ def main():
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         out_path = os.path.join(OUTPUT_DIR, "obstacles_generated.pl")
 
-    img, resolution, origin, negate, occ_thresh, free_thresh = load_map(args.yaml_path)
-    mask = occupied_mask(img, negate, occ_thresh)
-
-    polygons = extract_polygons(mask, resolution, origin,
-                                 args.epsilon, args.min_area)
-
-    write_problog_facts(polygons, out_path, args.yaml_path)
+    generate(args.yaml_path, out_path, args.epsilon, args.min_area)
 
     if args.inline:
         if not os.path.isfile(args.inline):

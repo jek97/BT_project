@@ -372,9 +372,21 @@ conditions:
     prolog_condition: at_goal
     description: >
       True iff the CURRENT position (now/2 + at/4) is within
-      tolerance of the global goal/2. Typical use: the first child of
-      a Fallback, to skip planning/moving entirely if already there.
+      tolerance of an EXPLICIT point -- PARAMETRIZED, same as
+      ObstacleInBound/BatteryBelow/etc., not a lookup against any
+      global "the goal" fact (there is no such fact in this theory).
+      Typical use: the first child of a Fallback, to skip planning/
+      moving entirely if already there. Pass the SAME point as
+      whichever PlanAstar/PlanVoronoi/... node's own goal port
+      targets, if that's the intent.
     ports:
+      - name: goal
+        direction: input
+        type: Point
+        required: true
+        description: >
+          The point to check proximity to -- see PlanAstar's own goal
+          port.
       - name: tolerance
         direction: input
         type: double

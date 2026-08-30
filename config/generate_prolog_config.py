@@ -10,10 +10,10 @@ for the full rationale.
 
 This mirrors an ALREADY-ESTABLISHED project pattern: occgrid_to_problog.py
 generates environments/maps/obstacles_generated.pl from a map, and
-occupancy_grid_planner.py generates plan_generation/plan/current_plan.pl
-from a click-planned path. config_generated.pl is a third instance of
-the same "source data -> generated Prolog facts, consulted separately"
-shape, just with config.yaml as the source instead of a map or a plan.
+bt_to_prolog.py generates plan_generation/plan/plan_generated.pl from a
+BT.cpp XML tree. config_generated.pl is a third instance of the same
+"source data -> generated Prolog facts, consulted separately" shape,
+just with config.yaml as the source instead of a map or a plan.
 
 Usage:
     python3 config/generate_prolog_config.py
@@ -100,6 +100,8 @@ def render_prolog(config):
         "% and regenerate (run_plan_continuous_safety.py does this",
         "% automatically before every run).",
         "",
+        f"start({_format_number(config['initial_situation']['start_x'])},"
+        f"{_format_number(config['initial_situation']['start_y'])}).",
         f"robot_radius({_format_number(config['robot']['radius'])}).",
         f"safety_buffer({_format_number(config['robot']['safety_buffer'])}).",
         f"speed({_format_number(config['motion']['speed'])}).",

@@ -859,17 +859,22 @@ first_collision_time(CP,T0,Duration,Z,Zt,Tcross,ObstacleId) :-
 % than a special-cased blocking precondition for battery alone.
 poss(startMoveto(_,_Triggers,T0), S) :-
     \+ moving(S),
-    now(S, T0).
+    now(T0, S).
 
-% now(+S,-T): current wall-clock time -- needed above only to know
+% now(-T,+S): current wall-clock time -- needed above only to know
 % WHEN to check the battery level (battery/3 needs a query time).
-now(s0, 0).
-now(do(startMoveto(_,_,T),_), T).
-now(do(haltMoveto(T,_,_),_), T).
-now(do(interrupt(T),_), T).
-now(do(A,S), T) :-
+% Situation argument S is LAST, per Reiter's own convention (see
+% plan_generation/vocabulary.yaml's own note -- this used to be
+% now(S,T), the one remaining exception flagged when the other six
+% out-of-convention accessors were fixed; fixed here too, along with
+% every one of its own call sites throughout this file).
+now(0, s0).
+now(T, do(startMoveto(_,_,T),_)).
+now(T, do(haltMoveto(T,_,_),_)).
+now(T, do(interrupt(T),_)).
+now(T, do(A,S)) :-
     A \= startMoveto(_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
-    now(S, T).
+    now(T, S).
 
 % haltMoveto(T,Reason): the ways a walk stops other than an interrupt.
 % ALL are NATURAL events, not choices -- T/Reason are DERIVED, never
@@ -1292,7 +1297,7 @@ plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, [], no_path, false) 
 %    the fallback in a confusing way that looks unrelated to variable
 %    scoping. This was hit directly while testing this exact feature.
 do_node(planWith(Algorithm, point(GX,GY), CP), S, do(planned(Algorithm,Reason), S), Status) :-
-    now(S, T), at(SX,SY,T,S),
+    now(T, S), at(SX,SY,T,S),
     plan_call(Algorithm, SX,SY,GX,GY, CP, Reason, Status).
 
 % planned_with(+Algorithm, +Reason, +S): the direct parallel to
@@ -1377,7 +1382,7 @@ holds(halted_with_cond(Reason), S) :- halted_with(Reason, S).
 % translator read goal/2 itself and refuse a disagreeing XML value, or
 % substitute it automatically when the XML's goal port is left unset.
 holds(at_goal(Tol), S) :-
-    now(S, T), at(X,Y,T,S), goal(GX,GY), dist(X,Y,GX,GY,D), D =< Tol.
+    now(T, S), at(X,Y,T,S), goal(GX,GY), dist(X,Y,GX,GY,D), D =< Tol.
 
 % obstacle_in_bound(Threshold): true iff the CURRENT position (at the
 % current time, via now/2) is within Threshold of ANY obstacle. Same
@@ -1392,7 +1397,7 @@ holds(at_goal(Tol), S) :-
 % bisection here: a condition only ever asks "is it true RIGHT NOW",
 % not "will it ever become true during this walk".
 holds(obstacle_in_bound(Threshold), S) :-
-    now(S, T), at(X,Y,T,S),
+    now(T, S), at(X,Y,T,S),
     obstacle_within_threshold(X,Y,Threshold).
 
 % line_of_sight_clear(ObstacleId,GX,GY): true iff the CURRENT position
@@ -1403,7 +1408,7 @@ holds(obstacle_in_bound(Threshold), S) :-
 % to line_of_sight_clear/5, exactly the same "single check, no
 % bracket-scan" relationship obstacle_in_bound has to its own trigger.
 holds(line_of_sight_clear(ObstacleId,GX,GY), S) :-
-    now(S, T), at(X,Y,T,S),
+    now(T, S), at(X,Y,T,S),
     line_of_sight_clear(X,Y,ObstacleId,GX,GY).
 
 % obstacle_on_path(Threshold): true iff the CURRENT position is within
@@ -1421,7 +1426,7 @@ holds(obstacle_on_path(Threshold), S) :-
     walk_duration(CP, Duration),
     z(do(startMoveto(CP,Triggers,T0),SPrev), Z),
     zt(do(startMoveto(CP,Triggers,T0),SPrev), Zt),
-    now(S, T), at(X,Y,T,S),
+    now(T, S), at(X,Y,T,S),
     obstacle_on_path_within_threshold(CP,T0,Duration,Z,Zt,X,Y,Threshold).
 
 % battery_below(Threshold): true iff the CURRENT battery level (at the
@@ -1432,7 +1437,7 @@ holds(obstacle_on_path(Threshold), S) :-
 % closed-form solve; no black box involved at all, battery/3 is already
 % plain Prolog.
 holds(battery_below(Threshold), S) :-
-    now(S, T), battery(Level, T, S),
+    now(T, S), battery(Level, T, S),
     Level < Threshold.
 
 % battery_equal(Threshold) / battery_over(Threshold): the SAME shape as
@@ -1446,10 +1451,10 @@ holds(battery_below(Threshold), S) :-
 % an ARBITRARY current time will usually be false, same as asking "is
 % it exactly noon" at a random moment.
 holds(battery_equal(Threshold), S) :-
-    now(S, T), battery(Level, T, S),
+    now(T, S), battery(Level, T, S),
     Level =:= Threshold.
 holds(battery_over(Threshold), S) :-
-    now(S, T), battery(Level, T, S),
+    now(T, S), battery(Level, T, S),
     Level > Threshold.
 
 % ---------------------------------------------------------------

@@ -78,6 +78,7 @@ sample marked.
 import argparse
 import os
 import re
+import shutil
 import sys
 import time
 from datetime import datetime
@@ -102,6 +103,7 @@ TRANSLATORS_DIR = os.path.join(MODULE_DIR, "translators")
 CONTRACTS_DIR = os.path.join(MODULE_DIR, "contracts")
 PROBLEMS_DIR = os.path.join(_THIS_DIR, "problems")
 THEORY_PATH = os.path.join(THEORY_DIR, "basic_action_theory.pl")
+OUTPUT_DIR = os.path.join(_THIS_DIR, "output")
 
 
 # -----------------------------------------------------------------------
@@ -510,9 +512,20 @@ def main():
 
     problem_dir = os.path.join(PROBLEMS_DIR, args.problem)
 
+    # Each run's own report lives in output/<problem>/, wiped and
+    # recreated fresh every time -- this is a REPORT of the run, not an
+    # input any other file depends on, so there's no reason to keep
+    # stale runs around the way problems/<name>/'s own generated
+    # Prolog facts are (those get committed; this doesn't -- see
+    # .gitignore).
+    problem_output_dir = os.path.join(OUTPUT_DIR, args.problem)
+    if os.path.isdir(problem_output_dir):
+        shutil.rmtree(problem_output_dir)
+    os.makedirs(problem_output_dir)
+
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = os.path.join(_THIS_DIR, f"{args.problem}_{ts}.log")
-    img_path = os.path.join(_THIS_DIR, f"{args.problem}_{ts}.png")
+    log_path = os.path.join(problem_output_dir, f"{args.problem}_{ts}.log")
+    img_path = os.path.join(problem_output_dir, f"{args.problem}_{ts}.png")
 
     with open(log_path, "w", encoding="utf-8") as fh:
         tee = Tee(fh)

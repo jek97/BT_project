@@ -931,15 +931,35 @@ leg_target(ControlPoints, GX,GY) :-
 last_element([X], X).
 last_element([_|T], X) :- T \= [], last_element(T, X).
 
-% leg_status(+Reason,+CP,+T0,+Duration,+Z,+Zt,+T,-Status): the NEW
-% OUTPUT -- Status is TRUE iff Reason=completed AND the actual (noisy)
-% final position lands within goal_tolerance of the leg's OWN endpoint.
-% Deliberately DISTINCT from Reason: Reason=completed only means the
-% walk wasn't cut short (by collision/battery/a trigger) before its
-% nominal duration elapsed -- it says nothing about whether noise
-% carried the robot far enough off course to miss the target despite
-% "completing". Status is what a Sequence/Fallback composite (below)
-% actually branches on.
+% leg_status(+Reason,+CP,+T0,+Duration,+Z,+Zt,+T,-Status): THREE
+% possible outputs now, not two -- true/false/reactive are plain
+% Prolog ATOMS here (there is no built-in boolean type restricting
+% this to two values; true/false are ordinary symbols like any other,
+% same as reactive), so a Sequence/Fallback composite (below) can
+% branch on all three the same way it already branched on two.
+%
+%   true     -- Reason=completed AND the actual (noisy) final position
+%                lands within goal_tolerance of the leg's OWN endpoint.
+%                Deliberately DISTINCT from Reason=completed alone,
+%                which only means the walk wasn't cut short before its
+%                nominal duration elapsed -- it says nothing about
+%                whether noise carried the robot far enough off course
+%                to miss the target despite "completing".
+%   false    -- a genuine, unrecoverable failure: crashed(ObstacleId)
+%                or battery_depleted. Nothing downstream can react to
+%                these and continue; the leg (and, per Sequence/
+%                Fallback's own do_node rules, quite possibly the
+%                whole plan) is simply done.
+%   reactive -- every OTHER trigger (obstacle_in_bound(...),
+%                obstacle_on_path(...), battery_under/equal/over(...),
+%                line_of_sight_clear(...), crosses_segment(...), and
+%                any future trigger name not explicitly listed as a
+%                hard failure above): the walk was cut short by a
+%                condition that's meant to be REACTED to, not treated
+%                as outright success or failure -- see
+%                evaluate_plan/4's own header, further down, for what
+%                happens when a do_node/4 call anywhere in the tree
+%                returns this.
 leg_status(completed, CP, T0, Duration, Z, Zt, T, true) :-
     walk_noisy_point(CP, T0, Duration, Z, Zt, T, X, Y),
     leg_target(CP, GX, GY),
@@ -952,7 +972,12 @@ leg_status(completed, CP, T0, Duration, Z, Zt, T, false) :-
     dist(X, Y, GX, GY, D),
     goal_tolerance(Tol),
     D > Tol.
-leg_status(Reason, _,_,_,_,_,_, false) :- Reason \= completed.
+leg_status(crashed(_), _,_,_,_,_,_, false).
+leg_status(battery_depleted, _,_,_,_,_,_, false).
+leg_status(Reason, _,_,_,_,_,_, reactive) :-
+    Reason \= completed,
+    Reason \= crashed(_),
+    Reason \= battery_depleted.
 
 % earliest_of/3: like earliest_of/2, but takes a fixed head list
 % (currently just [completed-NaturalEnd]) and a (possibly empty) list
@@ -1316,13 +1341,21 @@ planned_with(Algorithm, Reason, do(planned(Algorithm,Reason), _)).
 planned_with(Algorithm, Reason, do(_A, S)) :- planned_with(Algorithm, Reason, S).
 
 % -- SEQUENCE composite: stop and FAIL at the first failing child; --
-%    succeed only if every child succeeds, in order.
+%    succeed only if every child succeeds, in order. A REACTIVE child
+%    (see leg_status/8's own note on the three-valued Status) stops
+%    the sequence too, same as false -- but is NOT the same as false:
+%    it propagates straight through, UNCHANGED, to whatever node
+%    contains THIS seq_node -- see the block comment above
+%    evaluate_plan/4, further down, for the full picture of why and
+%    where this eventually gets caught.
 do_node(seq_node([]), S, S, true).
 do_node(seq_node([Child|Rest]), S, S1, Outcome) :-
     do_node(Child, S, S2, true),
     do_node(seq_node(Rest), S2, S1, Outcome).
 do_node(seq_node([Child|_]), S, S1, false) :-
     do_node(Child, S, S1, false).
+do_node(seq_node([Child|_]), S, S1, reactive) :-
+    do_node(Child, S, S1, reactive).
 
 % -- FALLBACK (Selector) composite: stop and SUCCEED at the first ---
 %    succeeding child; fail only if every child fails, in order.
@@ -1333,13 +1366,18 @@ do_node(seq_node([Child|_]), S, S1, false) :-
 %    assumption that failed leaves are side-effect-free, a fallback
 %    over durative ACTIONS here means "try the next option from
 %    wherever the failed attempt left us," not "rewind and try the
-%    next option from the start."
+%    next option from the start." A REACTIVE child does NOT try the
+%    next sibling this way -- same as seq_node above, it propagates
+%    straight through unchanged instead (see evaluate_plan/4's own
+%    header further down).
 do_node(fallback_node([]), S, S, false).
 do_node(fallback_node([Child|_]), S, S1, true) :-
     do_node(Child, S, S1, true).
 do_node(fallback_node([Child|Rest]), S, S1, Outcome) :-
     do_node(Child, S, S2, false),
     do_node(fallback_node(Rest), S2, S1, Outcome).
+do_node(fallback_node([Child|_]), S, S1, reactive) :-
+    do_node(Child, S, S1, reactive).
 
 % ---------------------------------------------------------------
 % holds/2: minimal condition language for cond(C) leaves -- standard
@@ -1477,13 +1515,92 @@ holds(battery_over(Threshold), S) :-
 
 sample_frac(I, Frac) :- num_samples(N), Frac is I / N.
 
-final_situation(S) :- plan(Node), do_node(Node, s0, S, _).
+% evaluate_plan(+S0,-S,-Outcome,+Budget): drives plan/1's WHOLE
+% tree to a genuine true/false conclusion, re-descending it from its
+% own ROOT -- not from wherever a trigger fired -- every time do_node
+% comes back `reactive`. This is what "the plan re-evaluates itself
+% once a reactive condition changes" actually means in a one-shot
+% Golog theory like this one, where do_node/4 has no notion of ticking
+% or re-entering from partway through: a REACTIVE outcome propagates
+% UNCHANGED through every enclosing seq_node/fallback_node (see their
+% own do_node clauses above -- neither one applies its normal
+% Sequence/Fallback logic to `reactive`, it's just passed straight up,
+% exactly like an exception passing untouched through stack frames
+% that don't catch it) until it escapes the ENTIRE do_node(Node,...)
+% call for the whole tree and lands here. THIS predicate is the only
+% place a `reactive` outcome is ever actually acted on -- and what it
+% does is call do_node on the SAME root Node again, starting from S1
+% (wherever the just-halted walk left the robot), so the WHOLE tree --
+% including any condition nearer the root than where the trigger fired
+% -- gets a fresh chance to decide what happens next, potentially
+% taking a completely different branch than last time.
+%
+% BUDGET: a hard cap on how many times this may re-descend before
+% giving up. This exists for ProbLog's own sake, not the robot's: this
+% predicate's recursion depth is driven by a PROBABILISTIC condition
+% (whether a given resolved world's noise draws make some trigger fire
+% again), not by the plan's own static structure the way seq_node/
+% fallback_node's list-recursion is -- Prolog (and so ProbLog's
+% grounding, which is the same SLD engine run once per resolved world)
+% handles that kind of recursion fine as long as it's GUARANTEED to
+% terminate for every world, and nothing here structurally guarantees
+% that on its own. It is tempting to assume battery depletion alone
+% would always eventually force a hard `false` and stop this -- it
+% doesn't, reliably: a degenerate zero-duration leg (e.g. a freshly
+% re-planned straight line whose start already equals its own target)
+% drains zero battery no matter how many times it's retried, and even
+% for ordinary legs the argument depends on config.yaml's own
+% moving_drain_rate/idle_drain_rate staying nonzero, which is a tuning
+% choice, not a theory-level invariant. Hence an explicit, unconditional
+% bound instead of relying on either of those. The bound is
+% deliberately large -- this is a safety net for a pathological world,
+% not a value meant to bind in any of this project's own problems; if
+% it ever does, world_too_large is a signal that something about the
+% plan or the map genuinely doesn't terminate, not something to fix by
+% casually raising the number.
+% Re-fetches plan(Node) FRESH on every attempt below, rather than
+% taking Node as a parameter reused across retries -- this matters,
+% not just style: plan/1's own term has FREE VARIABLES embedded in it
+% (e.g. problem3's own PathS/Obst1/PathFB, bound by planWith/cond calls
+% AS do_node descends it), and Prolog only gives you a FRESH, unbound
+% copy of a fact's own variables each time that fact is RESOLVED AS ITS
+% OWN GOAL. Passing an already-resolved Node into a second do_node call
+% reuses whatever THOSE variables got bound to on the FIRST attempt
+% (e.g. PathS already bound to leg 1's own control points) -- a SECOND
+% attempt's planWith(...,PathS) would then try to UNIFY its own freshly
+% computed (and generally DIFFERENT) control points against that stale
+% binding instead of producing a new one, which fails outright for any
+% plan whose reactive retry actually needs to re-plan. Re-querying
+% plan(Node) on each attempt is what gives every retry its own clean
+% set of variables, exactly as if do_node were being run for the very
+% first time.
+evaluate_plan(S0, S, Outcome, Budget) :-
+    Budget > 0,
+    plan(Node),
+    do_node(Node, S0, S1, reactive),
+    Budget1 is Budget - 1,
+    evaluate_plan(S1, S, Outcome, Budget1).
+evaluate_plan(S0, S1, Outcome, _Budget) :-
+    plan(Node),
+    do_node(Node, S0, S1, Outcome),
+    Outcome \== reactive.
+evaluate_plan(S0, S0, world_too_large, 0) :-
+    plan(Node),
+    do_node(Node, S0, _, reactive).
+
+replan_budget(1000).
+
+final_situation(S) :-
+    replan_budget(B), evaluate_plan(s0, S, _, B).
 
 % plan_outcome(Outcome): the WHOLE tree's true/false outcome, a
 % first-class query -- P(plan_outcome(true)) is the BT-level analogue
 % of verify_goal_formula, but based on Status/Outcome rather than an
-% explicit goal formula.
-plan_outcome(Outcome) :- plan(Node), do_node(Node, s0, _, Outcome).
+% explicit goal formula. Outcome is now one of true/false/world_too_large
+% (never reactive -- evaluate_plan/4 never returns that, by
+% construction; see its own header).
+plan_outcome(Outcome) :-
+    replan_budget(B), evaluate_plan(s0, _, Outcome, B).
 
 % plan_time_span(+S, -T0, -TEnd): T0 is when the (most recent) walk
 % started; TEnd is the wall-clock time the PLAN actually ends at --
@@ -1622,6 +1739,27 @@ obstacle_on_path_obstacle(Threshold, ObstacleId, S) :- halted_with(obstacle_on_p
 battery_under_threshold(Threshold, S) :- halted_with(battery_under(Threshold), S).
 battery_equal_threshold(Threshold, S) :- halted_with(battery_equal(Threshold), S).
 battery_over_threshold(Threshold, S) :- halted_with(battery_over(Threshold), S).
+
+% recover_obstacle(-ObstacleId): a cond() leaf that RETRIEVES which
+% obstacle a PRECEDING branch's own obstacle_on_path(Threshold) trigger
+% fired against, wildcarding Threshold -- built directly on
+% obstacle_on_path_obstacle/3 above. Exists for exactly one purpose: a
+% Fallback whose first branch plans+walks straight (watching
+% obstacle_on_path(Threshold) as a trigger) and whose SECOND branch
+% needs to know WHICH obstacle to hand FollowBoarder(ObstacleId,...) --
+% Golog's own fallback_node semantics threads the SITUATION S forward
+% from a failed branch into the next one (see fallback_node's own
+% do_node note near the top of this section), but NEVER a raw Prolog
+% variable binding a failed branch happened to make, so the second
+% branch cannot simply "reuse" a variable the first branch bound; it
+% has to look the obstacle back up from S's own recorded history,
+% which is exactly what this does. Fails (no solution) if S's history
+% never actually halted for that reason -- same "absence, not
+% sentinel" convention as everywhere else -- so a Fallback branch
+% guarded by cond(recover_obstacle(Obst)) simply doesn't apply unless
+% there really is one to recover.
+holds(recover_obstacle(ObstacleId), S) :-
+    obstacle_on_path_obstacle(_Threshold, ObstacleId, S).
 
 % -- overall collision probability (exact) --------------------------
 any_collision :- final_situation(S), crashed_in(S).
@@ -1847,6 +1985,7 @@ verify_goal_formula :- final_situation(S), goal_formula(S).
 query(verify_goal_formula).
 query(plan_outcome(true)).
 query(plan_outcome(false)).
+query(plan_outcome(world_too_large)).
 query(any_collision).
 query(any_battery_depletion).
 query(verify_safe).

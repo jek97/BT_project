@@ -5,15 +5,15 @@
 # chaining TWO full evaluations of the tree (see two_hop_diag.pl)
 # times out ProbLog's exact inference at the problem's default 5x5x5
 # noise table (125 discrete noise combinations per hop), but succeeds
-# at a reduced 3x1x1 table (3 combinations per hop, position only --
-# tangential and battery deterministic) -- isolating the noise-table
-# combinatorics, not the tree's own logic, as the driver. A third
-# config, 3x3x3 (27 combinations/hop, all three axes active), ALSO
-# times out -- confirming it's specifically the NUMBER OF ACTIVE NOISE
-# AXES that drives the blowup, not the per-axis value count: 3x1x1
-# (one active axis) is tractable, but 3x3x3 (three active axes, even
-# at only 3 values each) is not, despite 27 being a small raw world
-# count on its own.
+# at reduced tables with only ONE active noise axis -- 3x1x1 (3
+# combinations/hop) and 5x1x1 (5/hop) both succeed -- while ANY config
+# with TWO OR MORE active axes times out, regardless of how few values
+# each one takes: 3x3x1 (9/hop, two axes), 3x3x3 (27/hop, three axes),
+# and the 5x5x5 default (125/hop, three axes) all time out alike. So
+# it's specifically the NUMBER OF ACTIVE NOISE AXES that drives the
+# blowup, not the per-axis value count or the raw combination count --
+# 5x1x1 (5 combos, one axis) is tractable, 3x3x1 (9 combos, two axes)
+# is not, despite 9 being a smaller raw world count than 5.
 #
 # What this does, for EACH of the noise configs in this directory:
 #   1. Copies that config over problems/problem3/config.yaml.
@@ -82,6 +82,8 @@ generate('$CONFIG', '$CONFIG_GEN')
     echo
 }
 
-run_one "5x5x5 noise -- 125 combinations/hop (this problem's default)" "$DIAG_DIR/config_noise_555.yaml"
-run_one "3x1x1 noise -- 3 combinations/hop (position only, rest deterministic)" "$DIAG_DIR/config_noise_3.yaml"
-run_one "3x3x3 noise -- 27 combinations/hop (all three axes at 3 values each)" "$DIAG_DIR/config_noise_333.yaml"
+run_one "3x1x1 noise -- 3 combinations/hop, ONE active axis (position only)" "$DIAG_DIR/config_noise_3.yaml"
+run_one "5x1x1 noise -- 5 combinations/hop, ONE active axis (position only)" "$DIAG_DIR/config_noise_511.yaml"
+run_one "3x3x1 noise -- 9 combinations/hop, TWO active axes (position+tangential)" "$DIAG_DIR/config_noise_331.yaml"
+run_one "3x3x3 noise -- 27 combinations/hop, THREE active axes (3 values each)" "$DIAG_DIR/config_noise_333.yaml"
+run_one "5x5x5 noise -- 125 combinations/hop, THREE active axes (this problem's default)" "$DIAG_DIR/config_noise_555.yaml"

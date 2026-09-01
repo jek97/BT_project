@@ -1740,26 +1740,54 @@ battery_under_threshold(Threshold, S) :- halted_with(battery_under(Threshold), S
 battery_equal_threshold(Threshold, S) :- halted_with(battery_equal(Threshold), S).
 battery_over_threshold(Threshold, S) :- halted_with(battery_over(Threshold), S).
 
+% last_halt(-Reason): a cond() leaf that reads off WHY the MOST RECENT
+% moveto_leg halted, without searching S's history at all. Works by
+% direct unification against S's own OUTERMOST layer: do_node(moveto_
+% leg(...),...) always ends with do_action(haltMoveto(_T,Reason,
+% Status), S2, S1) as its very last step (see moveto_leg's own do_node
+% clause above), and every seq_node/fallback_node `reactive` clause
+% passes that S1 straight through, UNCHANGED, all the way up to
+% evaluate_plan/4 -- no do_node level in between ever layers another
+% action on top of it. So whatever S evaluate_plan/4 re-descends from
+% is STRUCTURALLY GUARANTEED to be exactly do(haltMoveto(_,Reason,_),
+% _) at its outermost layer, and reading Reason back off it is a
+% single deterministic unification, not a search -- unlike halted_with
+% /2 above (which walks S's WHOLE history and can match more than one
+% past action), this can only ever produce the ONE most recent halt,
+% so it stays a single ProbLog world instead of branching into one
+% world per historical match. Fails outright (no solution) if S isn't
+% shaped like a just-halted moveto at all (e.g. S=s0, before any walk
+% has ever run) -- same "absence, not sentinel" convention as
+% everywhere else.
+holds(last_halt(Reason), do(haltMoveto(_T,Reason,_Status),_SPrev)).
+
 % recover_obstacle(-ObstacleId): a cond() leaf that RETRIEVES which
-% obstacle a PRECEDING branch's own obstacle_on_path(Threshold) trigger
-% fired against, wildcarding Threshold -- built directly on
-% obstacle_on_path_obstacle/3 above. Exists for exactly one purpose: a
-% Fallback whose first branch plans+walks straight (watching
-% obstacle_on_path(Threshold) as a trigger) and whose SECOND branch
-% needs to know WHICH obstacle to hand FollowBoarder(ObstacleId,...) --
-% Golog's own fallback_node semantics threads the SITUATION S forward
-% from a failed branch into the next one (see fallback_node's own
-% do_node note near the top of this section), but NEVER a raw Prolog
-% variable binding a failed branch happened to make, so the second
-% branch cannot simply "reuse" a variable the first branch bound; it
-% has to look the obstacle back up from S's own recorded history,
-% which is exactly what this does. Fails (no solution) if S's history
-% never actually halted for that reason -- same "absence, not
+% obstacle the branch that led here just halted against, wildcarding
+% Threshold -- built on last_halt/1 above, NOT on the whole-history
+% obstacle_on_path_obstacle/3 (see that predicate's own family comment
+% above it): a Fallback whose first branch plans+walks straight
+% (watching obstacle_on_path(Threshold) as a trigger) and whose SECOND
+% branch needs to know WHICH obstacle to hand FollowBoarder(ObstacleId,
+% ...) -- Golog's own fallback_node semantics threads the SITUATION S
+% forward from a failed branch into the next one (see fallback_node's
+% own do_node note near the top of this section), but NEVER a raw
+% Prolog variable binding a failed branch happened to make, so the
+% second branch cannot simply "reuse" a variable the first branch
+% bound; it has to look the obstacle back up from S. Built on last_halt
+% /1 rather than halted_with/2 SPECIFICALLY so this stays correct with
+% more than one obstacle in play (e.g. straight -> hits obstacle A ->
+% follow A's boundary -> line of sight clears -> straight again -> hits
+% a DIFFERENT obstacle B): halted_with/2 would match BOTH A's and B's
+% halt actions once B is also in S's history, grounding two alternative
+% (one stale) worlds; last_halt/1 can only ever see the outermost one,
+% so recover_obstacle always reports the obstacle THIS branch is
+% actually reacting to. Fails (no solution) if the most recent halt
+% wasn't an obstacle_on_path one at all -- same "absence, not
 % sentinel" convention as everywhere else -- so a Fallback branch
 % guarded by cond(recover_obstacle(Obst)) simply doesn't apply unless
 % there really is one to recover.
 holds(recover_obstacle(ObstacleId), S) :-
-    obstacle_on_path_obstacle(_Threshold, ObstacleId, S).
+    holds(last_halt(obstacle_on_path(_Threshold,ObstacleId)), S).
 
 % -- overall collision probability (exact) --------------------------
 any_collision :- final_situation(S), crashed_in(S).

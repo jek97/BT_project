@@ -1759,6 +1759,25 @@ battery_over_threshold(Threshold, S) :- halted_with(battery_over(Threshold), S).
 % shaped like a just-halted moveto at all (e.g. S=s0, before any walk
 % has ever run) -- same "absence, not sentinel" convention as
 % everywhere else.
+%
+% NOT YET GENERIC across leaf/action types -- a caveat for whoever adds
+% the next reactive-capable leaf (e.g. a robotic-arm action halting via
+% its own haltArmMove(...) instead of haltMoveto(...)): this clause
+% will simply FAIL to match such an S, silently, not with an error --
+% do(haltArmMove(...),_) doesn't unify with do(haltMoveto(...),_), so
+% neg(last_halt(...))-based guards elsewhere would trivially succeed
+% even though something genuinely just halted. Two things have to keep
+% holding for last_halt/1 to stay correct as this theory grows: (1)
+% every new reactive-capable leaf type needs its OWN last_halt/1 clause
+% added here (or all leaves funneled through one shared halt-action
+% functor with a Kind tag, instead of a differently-named action per
+% leaf type), and (2) every future composite/decorator node's own
+% `reactive` do_node clause has to keep passing S through UNCHANGED, on
+% the way up, the same way seq_node/fallback_node already do -- a
+% future composite that layers so much as one more action on top of S1
+% before reactive reaches evaluate_plan/4 would break the "S's
+% outermost layer IS the most recent halt" guarantee this whole
+% predicate rests on.
 holds(last_halt(Reason), do(haltMoveto(_T,Reason,_Status),_SPrev)).
 
 % recover_obstacle(-ObstacleId): a cond() leaf that RETRIEVES which

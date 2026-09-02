@@ -145,6 +145,28 @@ outcome_status(Reason, reactive) :-
 %    Algorithm is now just an argument (straight/astar/...), consumed
 %    entirely by the offline calibrator when it built this leg's own
 %    moveto_outcome rows -- this theory never dispatches on it itself.
+%
+%    COMPLETENESS OF moveto_outcomes_generated.pl is NOT enforced here.
+%    An in-theory guard was tried and abandoned: ProbLog's own
+%    grounder explores every (LegId,InBranch) combination reachable by
+%    unification while building its Boolean formula -- including ones
+%    a real resolved world can never take (e.g. "what if leg_try_goal's
+%    Fallback branch had resolved to false", even though none of its
+%    rows map to false) -- not only the combinations a specific
+%    resolved world actually needs. A guard built from negation-as-
+%    failure (the only mechanism ProbLog offers for this -- it
+%    supports neither if-then-else, throw/1, nor format/2, all
+%    confirmed unsupported) cannot tell "genuinely missing and
+%    reachable" apart from "structurally explored but always
+%    zero-weight", and false-positived on this very theory's own
+%    complete, correct problem4 stub. The right place for this check
+%    is a Python-side pre-flight validator, mirroring
+%    goal_formula_check.py's existing pattern, that walks
+%    plan_generated.pl's tree directly (real graph traversal, not
+%    ProbLog's grounder) before problog ever runs -- not yet built,
+%    see FUTUREWORK.md. Until then, an incomplete table just makes
+%    do_node silently fail for the affected world, exactly as any
+%    other missing fact would.
 % ---------------------------------------------------------------
 do_node(moveto(LegId,_Algorithm,_Goal), S,
         do(moveto_result(LegId,BranchId,Reason,EndPoint,Duration,Drain), S), Status) :-
@@ -317,3 +339,4 @@ query(plan_outcome(false)).
 query(plan_outcome(world_too_large)).
 query(any_collision).
 query(any_battery_depletion).
+debug_missing(_,_).

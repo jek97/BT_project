@@ -22,10 +22,16 @@
 % leg_go_home (InBranch=b3 -- the ONLY branch of leg_try_goal that
 % reaches leg_go_home in this plan's own tree, since b1/b2 succeed and
 % the Fallback never tries its second branch at all in those worlds).
-% No InBranch=root variant is supplied: with battery_start=100,
-% cond(battery_over(70)) is always true on the very first descent, so
-% leg_go_home is never reached without going through leg_try_goal's
-% own b3 first -- if that ever changes (e.g. a lower battery_start),
-% this stub would need a root variant too.
+% No InBranch=root/b1/b2 variant is supplied: ProbLog's grounder does
+% explore do_node(moveto(leg_go_home,...),...) from those situations
+% too while building its formula (see basic_action_theory.pl Section
+% 3's own note), but their contribution to every real query is exactly
+% zero regardless, since the plan's own Fallback semantics never
+% actually reaches leg_go_home from a resolved world where leg_try_goal
+% succeeded -- confirmed empirically (adding placeholder rows for
+% them changed no query's result). A real offline calibrator would
+% still need to decide whether to over-provision these dead
+% combinations or rely on a pre-flight validator that understands
+% they're unreachable; this stub takes the latter approach.
 0.7::moveto_outcome(leg_go_home, b3, c1, success,          point(2.275,2.075), 13.0, 15.0) ;
 0.3::moveto_outcome(leg_go_home, b3, c2, battery_depleted, point(6.0,2.05),     9.0,  70.0).

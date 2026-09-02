@@ -346,4 +346,3 @@ query(plan_outcome(false)).
 query(plan_outcome(world_too_large)).
 query(any_collision).
 query(any_battery_depletion).
-debug_missing(_,_).

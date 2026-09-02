@@ -142,9 +142,16 @@ outcome_status(Reason, reactive) :-
 % ---------------------------------------------------------------
 % 3. THE moveto ACTION -- ONE atomic leaf, replacing the old
 %    planWith(Algorithm,Goal,CP) + moveto_leg(CP,Triggers) pair.
-%    Algorithm is now just an argument (straight/astar/...), consumed
-%    entirely by the offline calibrator when it built this leg's own
-%    moveto_outcome rows -- this theory never dispatches on it itself.
+%    Algorithm is now just an argument, consumed entirely by the
+%    offline calibrator when it built this leg's own moveto_outcome
+%    rows -- this theory never dispatches on it itself. Valid values
+%    are the same ones planners.py and schema.yaml's own
+%    prolog_algorithm already use (kept consistent deliberately, not
+%    reinvented for this leaf): straight, astar, voronoi, or the
+%    compound follow_boarder(ObstacleId,Offset) (planners.py's
+%    plan_astar_points/plan_straight_points/plan_voronoi_points/
+%    follow_boarder_points respectively -- see schema.yaml's own
+%    MoveTo entry for the full port-level description of each).
 %
 %    COMPLETENESS OF moveto_outcomes_generated.pl is NOT enforced here.
 %    An in-theory guard was tried and abandoned: ProbLog's own

@@ -65,6 +65,20 @@ actions:
       they are kept distinct (Reason=completed only means the walk
       wasn't cut short; Status additionally requires landing within
       goal_tolerance of THIS LEG'S OWN endpoint).
+      SIMPLIFIED-BRANCH NOTE: on the simplified branch (see
+      basic_action_theory.pl's own header there), MoveTo, PlanAstar,
+      PlanStraight, PlanVoronoi, and FollowBoarder below all collapse
+      into ONE atomic moveto(LegId,Algorithm,Goal) leaf -- this
+      description (control_points/triggers/reason/status) is the
+      PRE-simplification shape, still current for bt_to_prolog.py's
+      own translator, which has not yet been updated to emit the new
+      shape (same translator-gap precedent as problem3/problem4's own
+      hand-written plan_generated.pl stubs on that branch -- see
+      FUTUREWORK.md). The new leaf's own `algorithm` port, valid
+      values, and rationale are documented below on the entry
+      SIMPLIFIED-BRANCH: MoveTo (algorithm-parametrized), once
+      bt_to_prolog.py is updated this section should replace the
+      pre-simplification one above rather than sit alongside it.
     ports:
       - name: control_points
         direction: input
@@ -151,6 +165,67 @@ actions:
           within goal_tolerance of this leg's own endpoint (the last
           point of control_points, NOT necessarily the global goal --
           see leg_target/3's own comment in basic_action_theory.pl).
+
+  # ----------------------------------------------------------------
+  # SIMPLIFIED-BRANCH: MoveTo (algorithm-parametrized). The atomic
+  # moveto(LegId,Algorithm,Goal) leaf basic_action_theory.pl's own
+  # simplified-branch Section 3 describes -- replaces PlanAstar/
+  # PlanStraight/PlanVoronoi/FollowBoarder below AND the
+  # pre-simplification MoveTo entry above with ONE node, an
+  # `algorithm` port taking the place of four separate node types.
+  # Not yet emitted by bt_to_prolog.py (translator gap, same as the
+  # pre-simplification note above); problem4's own plan_generated.pl
+  # is hand-written against this shape in the meantime.
+  # ----------------------------------------------------------------
+  - id: MoveToSimplified
+    prolog_action: moveto
+    description: >
+      One atomic action: its full outcome distribution (landing
+      position, duration, battery drained, and why it stopped) is
+      looked up from a moveto_outcome/7 table calibrated offline, once
+      per (leg, incoming-branch) pair -- see basic_action_theory.pl's
+      own Section 2 and FUTUREWORK.md. No separate planning step, no
+      durative start/halt pair, no triggers port: which reactive
+      conditions this leg watches is decided by the offline calibrator
+      when it builds this leg's own table, not stated at the tree
+      level the way the pre-simplification MoveTo's triggers port
+      required.
+    ports:
+      - name: leg_id
+        direction: input
+        type: std::string
+        required: true
+        description: >
+          Static id for this leaf, taken from the BT node's own name=
+          attribute -- the key moveto_outcomes_generated.pl's own rows
+          are addressed by (together with the incoming branch, looked
+          up at run time, not a port here -- see incoming_branch/2 in
+          basic_action_theory.pl).
+      - name: algorithm
+        direction: input
+        type: std::string
+        required: true
+        description: >
+          Which planner the offline calibrator should use internally
+          when it builds this leg's own outcome table -- this theory
+          never dispatches on it itself, unlike the pre-simplification
+          MoveTo/PlanAstar/PlanStraight/PlanVoronoi/FollowBoarder
+          split, where each planner was its own node type. Kept
+          consistent with the SAME prolog_algorithm vocabulary the
+          pre-simplification planner entries below already use, not
+          reinvented: straight, astar, voronoi, or the compound
+          follow_boarder(ObstacleId,Offset) (planners.py's
+          plan_straight_points/plan_astar_points/plan_voronoi_points/
+          follow_boarder_points respectively).
+      - name: goal
+        direction: input
+        type: Point
+        required: true
+        description: >
+          This leg's own target point -- explicit here, same
+          "argument of the node itself, not a global goal/2 fact"
+          rationale the pre-simplification PlanAstar/PlanStraight
+          ports below already document.
 
   # ----------------------------------------------------------------
   # The two planners. Both are dispatched, underneath, through the

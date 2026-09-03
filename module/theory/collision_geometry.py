@@ -189,8 +189,8 @@ def _parse_obstacle_polygons(text):
 _config = load_config(config_path=os.path.join(_PROBLEM_DIR, "config.yaml"))
 BRACKET_SAMPLES = int(_config["verification"]["bracket_samples"])
 CROSSING_EPS = float(_config["verification"]["crossing_eps"])
-SIGMA = float(_config["noise"]["position"]["sigma"])
-SIGMA_TANGENTIAL = float(_config["noise"]["tangential"]["sigma"])
+SIGMA = float(_config["position"]["lateral"]["sigma"])
+SIGMA_TANGENTIAL = float(_config["position"]["tangential"]["sigma"])
 
 try:
     with open(_OBSTACLES_PATH) as f:

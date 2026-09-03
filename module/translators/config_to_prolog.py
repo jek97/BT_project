@@ -16,6 +16,31 @@ directory this file does. config_generated.pl is a third instance of
 the same "source data -> generated Prolog facts, consulted separately"
 shape, just with config.yaml as the source instead of a map or a plan.
 
+config.yaml's own top level is organized by PHYSICAL QUANTITY
+(position:, battery:, ...) rather than by "noise vs. drain vs.
+grounding" -- see that file's own header for why -- but the Prolog
+FACT NAMES this emits are unchanged from before that reorganization
+(sigma/1, sigma_tangential/1, battery_start/1, position_merge_grid/1,
+...), so basic_action_theory.pl itself needed no changes for it.
+
+battery.enabled (config.yaml) drives TWO things here:
+  - battery_enabled/1: a plain fact basic_action_theory.pl doesn't
+    itself read (nothing there branches on it) -- it exists so other
+    generators/tooling can inspect it without re-parsing config.yaml.
+  - whether query(any_battery_depletion) is emitted at all (see
+    render_prolog's own note on this below) -- basic_action_theory.pl's
+    own Section 10 no longer declares this query as a hardcoded fact,
+    specifically so it can be conditional on a PER-PROBLEM config
+    value instead of being the same for every problem.
+Every OTHER battery-related fact (battery_start/1, idle_drain_rate/1,
+moving_drain_rate/1, sigma_battery/1, battery_merge_grid/1, zbatt/1's
+own table) is ALWAYS emitted regardless of battery.enabled -- battery/3
+(the fluent itself) is unconditional theory code, still tracking charge
+level either way; only whether battery can ever be a HALTING cause
+(handled in module/translators/bt_to_prolog.py, which strips battery-
+related trigger names out of every leg's own Triggers list when
+disabled) and whether depletion is queried change.
+
 Usage:
     python3 module/translators/config_to_prolog.py
         (regenerates config_generated.pl from config.yaml, both in
@@ -47,7 +72,7 @@ def _check_gaussian_weights(label, discretized_gaussian):
     total = sum(entry["weight"] for entry in discretized_gaussian)
     if abs(total - 1.0) > 1e-9:
         print(
-            f"[warn] config.yaml's noise.{label}.discretized_gaussian weights "
+            f"[warn] config.yaml's {label}.discretized_gaussian weights "
             f"sum to {total!r}, not 1.0 -- ProbLog silently treats the missing "
             f"mass as an implicit failure branch, which will cap every "
             f"downstream probability. Fix the weights in config.yaml.",
@@ -85,30 +110,32 @@ def _gaussian_disjunction(functor, args_prefix, discretized_gaussian):
 
 
 def render_prolog(config):
-    _check_gaussian_weights("position", config["noise"]["position"]["discretized_gaussian"])
-    _check_gaussian_weights("tangential", config["noise"]["tangential"]["discretized_gaussian"])
-    _check_gaussian_weights("battery", config["noise"]["battery"]["discretized_gaussian"])
+    position_cfg = config["position"]
+    battery_cfg = config["battery"]
 
-    # Optional "grounding:" section -- absent entirely (every existing
-    # problem's own config.yaml) means all three grids are 0, which
-    # basic_action_theory.pl's own quantize/quantize_down/quantize_up
-    # treat as "disabled": exact behaviour, byte-for-byte identical to
-    # this feature not existing. See that file's MERGE-GRID
-    # QUANTIZATION note (above dist/5's own section) for the mechanism
-    # and why these three specific quantities.
-    grounding_cfg = config.get("grounding", {})
-    position_merge_grid = grounding_cfg.get("position_merge_grid", 0.0)
-    battery_merge_grid = grounding_cfg.get("battery_merge_grid", 0.0)
-    time_merge_grid = grounding_cfg.get("time_merge_grid", 0.0)
+    _check_gaussian_weights("position.lateral", position_cfg["lateral"]["discretized_gaussian"])
+    _check_gaussian_weights("position.tangential", position_cfg["tangential"]["discretized_gaussian"])
+    _check_gaussian_weights("battery", battery_cfg["discretized_gaussian"])
+
+    # position.merge_grid/battery.merge_grid default to 0 if omitted;
+    # grounding.time_merge_grid the same, via its own (much smaller,
+    # now single-purpose) grounding: section -- all three "disabled,
+    # exact" at 0, per basic_action_theory.pl's own quantize/
+    # quantize_down/quantize_up.
+    position_merge_grid = position_cfg.get("merge_grid", 0.0)
+    battery_merge_grid = battery_cfg.get("merge_grid", 0.0)
+    time_merge_grid = config.get("grounding", {}).get("time_merge_grid", 0.0)
+
+    battery_enabled = battery_cfg.get("enabled", True)
 
     z_block = _gaussian_disjunction(
         "z", "do(startMoveto(CP,Triggers,T0),S), ",
-        config["noise"]["position"]["discretized_gaussian"])
+        position_cfg["lateral"]["discretized_gaussian"])
     zt_block = _gaussian_disjunction(
         "zt", "do(startMoveto(CP,Triggers,T0),S), ",
-        config["noise"]["tangential"]["discretized_gaussian"])
+        position_cfg["tangential"]["discretized_gaussian"])
     zbatt_block = _gaussian_disjunction(
-        "zbatt", "", config["noise"]["battery"]["discretized_gaussian"])
+        "zbatt", "", battery_cfg["discretized_gaussian"])
 
     lines = [
         "% AUTO-GENERATED by module/translators/config_to_prolog.py from",
@@ -121,19 +148,20 @@ def render_prolog(config):
         f"robot_radius({_format_number(config['robot']['radius'])}).",
         f"safety_buffer({_format_number(config['robot']['safety_buffer'])}).",
         f"speed({_format_number(config['motion']['speed'])}).",
-        f"sigma({_format_number(config['noise']['position']['sigma'])}).",
-        f"sigma_tangential({_format_number(config['noise']['tangential']['sigma'])}).",
-        f"sigma_battery({_format_number(config['noise']['battery']['sigma'])}).",
-        f"battery_start({_format_number(config['battery']['start'])}).",
-        f"idle_drain_rate({_format_number(config['battery']['idle_drain_rate'])}).",
-        f"moving_drain_rate({_format_number(config['battery']['moving_drain_rate'])}).",
+        f"sigma({_format_number(position_cfg['lateral']['sigma'])}).",
+        f"sigma_tangential({_format_number(position_cfg['tangential']['sigma'])}).",
+        f"position_merge_grid({_format_number(position_merge_grid)}).",
+        f"battery_enabled({str(bool(battery_enabled)).lower()}).",
+        f"sigma_battery({_format_number(battery_cfg['sigma'])}).",
+        f"battery_start({_format_number(battery_cfg['start'])}).",
+        f"idle_drain_rate({_format_number(battery_cfg['idle_drain_rate'])}).",
+        f"moving_drain_rate({_format_number(battery_cfg['moving_drain_rate'])}).",
+        f"battery_merge_grid({_format_number(battery_merge_grid)}).",
         f"goal_tolerance({_format_number(config['tolerances']['goal'])}).",
         f"tolerance({_format_number(config['tolerances']['on_track'])}).",
         f"num_samples({_format_number(config['verification']['num_samples'])}).",
         f"bracket_samples({_format_number(config['verification']['bracket_samples'])}).",
         f"crossing_eps({_format_number(config['verification']['crossing_eps'])}).",
-        f"position_merge_grid({_format_number(position_merge_grid)}).",
-        f"battery_merge_grid({_format_number(battery_merge_grid)}).",
         f"time_merge_grid({_format_number(time_merge_grid)}).",
         "",
         z_block,
@@ -143,6 +171,16 @@ def render_prolog(config):
         zbatt_block,
         "",
     ]
+
+    # any_battery_depletion is basic_action_theory.pl's own ONLY query
+    # about "finishing the battery" (see main.py's SUMMARY_QUERIES) --
+    # emitted here, conditionally, rather than as a hardcoded fact in
+    # Section 10 of basic_action_theory.pl, specifically so a problem
+    # with battery.enabled: false can drop it without touching the
+    # (problem-independent) theory file at all.
+    if battery_enabled:
+        lines += ["query(any_battery_depletion).", ""]
+
     return "\n".join(lines)
 
 

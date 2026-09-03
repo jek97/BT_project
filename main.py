@@ -72,14 +72,12 @@ in the selected problem's own map.yaml / config.yaml / behavior_tree.xml
 
 Requires: `problog` importable/runnable on PATH.
 
-Saves a timestamped log file and a PNG with the obstacle polygons, the
-nominal spline, the sampled hazard heatmap along it, and the riskiest
-sample marked.
+Saves a timestamped log file with a compact query-result summary --
+no image/plot is produced (see print_compact_summary).
 """
 
 import argparse
 import os
-import re
 import shutil
 import sys
 from datetime import datetime
@@ -87,13 +85,6 @@ from datetime import datetime
 from problog.errors import ProbLogError
 
 from pipeline_stages import run_staged_inference, write_problem_data_pl, StageTimeout
-
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-import matplotlib.colors as mcolors
-from matplotlib.lines import Line2D
 
 W = 68
 
@@ -108,153 +99,11 @@ OUTPUT_DIR = os.path.join(_THIS_DIR, "output")
 
 
 # -----------------------------------------------------------------------
-# Parsing the .pl files (regex-based -- we control the fact format that
-# basic_action_theory.pl / occgrid_to_problog.py emit, so this is safe
-# and avoids needing a Prolog engine just to read back ground facts)
-# -----------------------------------------------------------------------
-POINT_RE = re.compile(r"point\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)")
-
-
-CONSULT_RE = re.compile(r":-\s*consult\(\s*'([^']+)'\s*\)\s*\.")
-
-
-def strip_prolog_comments(text):
-    """Remove '%'-to-end-of-line comments before regex-parsing facts. This
-    matters specifically because basic_action_theory.pl's own documentation
-    comments include example/placeholder syntax like
-    'control_points([point(...),...]).' to illustrate the expected shape
-    -- which otherwise matches parse_control_points' regex BEFORE the real
-    data (found via re.search, which stops at the first match), silently
-    parsing to an empty point list instead of raising or finding the real
-    fact further down."""
-    return re.sub(r"%.*$", "", text, flags=re.MULTILINE)
-
-
-def resolve_consulted_text(theory_path, _seen=None):
-    """
-    Read theory_path's text, AND the text of every file it :- consult()s
-    (resolved relative to theory_path's own directory), recursively, and
-    return it all concatenated. This mirrors what ProbLog itself does at
-    load time -- basic_action_theory.pl no longer contains start/1 or
-    obstacle_polygon/2 directly; they live in files it consults (via its
-    own problem_data.pl bootstrap -- see that file's Section 0), so
-    parsing only theory_path's own text (as earlier versions of this
-    script did) finds nothing. _seen guards against accidental consult
-    cycles.
-    """
-    theory_path = os.path.abspath(theory_path)
-    if _seen is None:
-        _seen = set()
-    if theory_path in _seen or not os.path.isfile(theory_path):
-        return ""
-    _seen.add(theory_path)
-
-    with open(theory_path) as f:
-        text = strip_prolog_comments(f.read())
-
-    combined = [text]
-    theory_dir = os.path.dirname(theory_path)
-    for m in CONSULT_RE.finditer(text):
-        consult_target = m.group(1)
-        resolved = os.path.normpath(os.path.join(theory_dir, consult_target))
-        combined.append(resolve_consulted_text(resolved, _seen))
-
-    return "\n".join(combined)
-
-
-def parse_control_points(theory_text):
-    m = re.search(r"control_points\(\s*\[(.*?)\]\s*\)\s*\.", theory_text, re.S)
-    if not m:
-        raise ValueError("Could not find control_points/1 in the theory file")
-    pts = [(float(x), float(y)) for x, y in POINT_RE.findall(m.group(1))]
-    if len(pts) < 4 or (len(pts) - 1) % 3 != 0:
-        print(f"[warn] control_points has {len(pts)} points -- expected 3k+1 "
-              f"for k cubic Bezier segments", file=sys.stderr)
-    return pts
-
-
-def parse_scalar_fact(theory_text, name):
-    m = re.search(rf"^{name}\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)\s*\.",
-                  theory_text, re.MULTILINE)
-    if not m:
-        raise ValueError(f"Could not find numeric {name}/2 fact")
-    return (float(m.group(1)), float(m.group(2)))
-
-
-PLANWITH_GOAL_RE = re.compile(
-    r"planWith\([^,]+,\s*point\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)")
-
-
-def parse_last_plan_goal(theory_text):
-    """The LAST planWith(...,point(GX,GY),...) literal appearing in the
-    (fully resolved) theory text -- used as a plottable "goal" marker
-    now that there is no longer a single global goal/2 fact (goal
-    information lives entirely in the problem's own goal_formula.pl,
-    which has no fixed shape a plotting script could reliably parse
-    instead). The LAST occurrence, not the first, since a multi-leg
-    plan's own final target is the more representative "where the
-    mission is headed" point. KNOWN LIMITATION: a plan ending on a
-    follow_boarder(...) leaf would mark the wrong point, since that
-    planner's own goal argument is a meaningless point(0.0,0.0)
-    placeholder (see basic_action_theory.pl's own note on why) -- not
-    hit by the shipped plan."""
-    matches = PLANWITH_GOAL_RE.findall(theory_text)
-    if not matches:
-        raise ValueError(
-            "Could not find any planWith(...,point(X,Y),...) literal in "
-            "the theory file to use as a goal marker")
-    x, y = matches[-1]
-    return (float(x), float(y))
-
-
-def parse_int_fact(theory_text, name, default):
-    m = re.search(rf"^{name}\(\s*(\d+)\s*\)\s*\.", theory_text, re.MULTILINE)
-    return int(m.group(1)) if m else default
-
-
-def parse_obstacle_polygons(obstacles_text):
-    polys = []
-    for m in re.finditer(r"obstacle_polygon\([^,]+,\s*\[(.*?)\]\s*\)\s*\.",
-                          obstacles_text, re.S):
-        pts = [(float(x), float(y)) for x, y in POINT_RE.findall(m.group(1))]
-        if len(pts) >= 3:
-            polys.append(pts)
-    return polys
-
-
-# -----------------------------------------------------------------------
-# Closed-form spline evaluation in Python, mirroring the ProbLog theory's
-# bezier_point/spline_point EXACTLY, so the plot matches what ProbLog
-# actually reasoned about.
-# -----------------------------------------------------------------------
-def bezier_point(p0, p1, p2, p3, u):
-    mu = 1 - u
-    x = mu**3*p0[0] + 3*mu**2*u*p1[0] + 3*mu*u**2*p2[0] + u**3*p3[0]
-    y = mu**3*p0[1] + 3*mu**2*u*p1[1] + 3*mu*u**2*p2[1] + u**3*p3[1]
-    return x, y
-
-
-def spline_point(control_points, u):
-    n_segs = (len(control_points) - 1) // 3
-    seg_len = 1.0 / n_segs
-    seg_idx = min(n_segs - 1, int(u // seg_len))
-    local_u = (u - seg_idx*seg_len) / seg_len
-    local_u = max(0.0, min(1.0, local_u))
-    p0, p1, p2, p3 = control_points[3*seg_idx:3*seg_idx+4]
-    return bezier_point(p0, p1, p2, p3, local_u)
-
-
-def nominal_trajectory(control_points, n=200):
-    return [spline_point(control_points, i/n) for i in range(n+1)]
-
-
-# -----------------------------------------------------------------------
 # Run ProbLog via its PYTHON API (not the CLI/subprocess) and return a
 # results dict directly. str(term) for a query like plan_outcome(true)
-# or first_hit(5) is EXACTLY the same string PARSE_RESULTS used to
-# extract from CLI text output -- so everything downstream (
-# print_safety_results, plotting) needs zero changes; only how the
-# numbers get INTO the dict changes.
+# is EXACTLY the same string PARSE_RESULTS used to extract from CLI
+# text output -- so everything downstream (print_compact_summary)
+# needs zero changes; only how the numbers get INTO the dict changes.
 #
 # Delegates to pipeline_stages.run_staged_inference for the actual
 # parse/ground/compile/evaluate work -- see that module's own header
@@ -268,115 +117,6 @@ def nominal_trajectory(control_points, n=200):
 def run_problog_api(plan_file, tee, phase_timeout=300):
     results, timings = run_staged_inference(plan_file, tee, phase_timeout=phase_timeout)
     return results, sum(timings.values())
-
-
-# -----------------------------------------------------------------------
-# Plotting
-# -----------------------------------------------------------------------
-def save_plot(control_points, obstacle_polygons, start, goal, num_samples,
-              first_hit_probs, output_path, world_bounds=None):
-    """
-    first_hit_probs: list of (I, x, y, prob) for I = 0..num_samples, where
-    (x,y) is the NOMINAL spline position at that sample (the segment
-    ending at I is coloured by prob).
-    """
-    cmap = plt.cm.RdYlGn_r
-    lw = 3.5
-
-    all_probs = [p for _, _, _, p in first_hit_probs]
-    max_prob = max(all_probs) if all_probs and max(all_probs) > 0 else 1e-9
-    norm = mcolors.Normalize(vmin=0, vmax=max_prob)
-
-    riskiest = max(first_hit_probs, key=lambda t: t[3]) if first_hit_probs else None
-
-    fig, ax = plt.subplots(figsize=(11, 11))
-    ax.set_aspect("equal")
-
-    if world_bounds:
-        xmin, xmax, ymin, ymax = world_bounds
-    else:
-        all_xy = [p for p in control_points] + [pt for poly in obstacle_polygons for pt in poly]
-        xs = [p[0] for p in all_xy]; ys = [p[1] for p in all_xy]
-        pad = 2.0
-        xmin, xmax = min(xs)-pad, max(xs)+pad
-        ymin, ymax = min(ys)-pad, max(ys)+pad
-    ax.set_xlim(xmin, xmax)
-    ax.set_ylim(ymin, ymax)
-
-    # -- obstacle polygons -----------------------------------------------
-    for poly in obstacle_polygons:
-        patch = patches.Polygon(poly, closed=True, facecolor="#1a1a1a",
-                                 edgecolor="#555555", linewidth=0.8, zorder=2)
-        ax.add_patch(patch)
-
-    # -- nominal spline, colour-scaled by first_hit hazard ----------------
-    dense = nominal_trajectory(control_points, n=200)
-    xs_d = [p[0] for p in dense]; ys_d = [p[1] for p in dense]
-    ax.plot(xs_d, ys_d, color="#999999", linewidth=1.0, linestyle="--",
-             zorder=3, label="_nolegend_")  # faint full nominal path underneath
-
-    if len(first_hit_probs) > 1:
-        for i in range(len(first_hit_probs) - 1):
-            _, x0, y0, _ = first_hit_probs[i]
-            _, x1, y1, p1 = first_hit_probs[i+1]
-            color = cmap(norm(p1))
-            ax.plot([x0, x1], [y0, y1], color=color, linewidth=lw,
-                     solid_capstyle="round", zorder=4)
-
-    # -- riskiest sample marker -------------------------------------------
-    if riskiest is not None and riskiest[3] > 0:
-        ri, rx, ry, rp = riskiest
-        ax.plot(rx, ry, "x", markersize=22, markeredgewidth=3.5,
-                 color="#cc0000", zorder=9)
-        ax.text(rx + 0.3, ry - 0.3, f"I={ri}\np={rp:.4f}",
-                fontsize=7, color="#cc0000", fontweight="bold", va="top",
-                zorder=10, bbox=dict(facecolor="white", edgecolor="#cc0000",
-                                      linewidth=0.7, alpha=0.9, pad=1.5))
-
-    # -- start / goal --------------------------------------------------
-    ax.plot(start[0], start[1], "o", markersize=14, color="#16a34a",
-             markeredgecolor="white", markeredgewidth=1.5, zorder=7)
-    ax.text(start[0], start[1], "S", ha="center", va="center",
-             fontsize=8, fontweight="bold", color="white", zorder=8)
-    ax.plot(goal[0], goal[1], "*", markersize=18, color="#dc2626",
-             markeredgecolor="white", markeredgewidth=1.0, zorder=7)
-    ax.text(goal[0] + 0.4, goal[1] + 0.4, "G", ha="center", va="center",
-             fontsize=8, fontweight="bold", color="#dc2626", zorder=8)
-
-    ax.set_xlabel("x (m)", fontsize=10)
-    ax.set_ylabel("y (m)", fontsize=10)
-    ax.set_title(
-        "Continuous-space Robot Trajectory - Safety Verification\n"
-        f"Start: {start}   Goal: {goal}   {num_samples} verification samples\n"
-        "Trajectory colour: P(first_hit at sample I)  -  green=safe  red=risky\n"
-        "Red X: most likely failure sample",
-        fontsize=9, pad=10)
-
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    cbar = plt.colorbar(sm, ax=ax, fraction=0.03, pad=0.02)
-    cbar.set_label("P(first_hit at sample I)", fontsize=8)
-    cbar.ax.tick_params(labelsize=7)
-
-    legend_elements = [
-        patches.Patch(facecolor="#1a1a1a", edgecolor="#555", label="Obstacle"),
-        Line2D([0], [0], color="#999999", linestyle="--", linewidth=1,
-               label="Nominal spline (full)"),
-        Line2D([0], [0], color=cmap(0.0), linewidth=3, label="Trajectory - safe"),
-        Line2D([0], [0], color=cmap(0.5), linewidth=3, label="Trajectory - moderate risk"),
-        Line2D([0], [0], color=cmap(1.0), linewidth=3, label="Trajectory - high risk"),
-        Line2D([0], [0], marker="x", color="#cc0000", linewidth=0,
-               markersize=12, markeredgewidth=2.5, label="Most likely failure sample"),
-        Line2D([0], [0], marker="o", color="w", markerfacecolor="#16a34a",
-               markersize=10, label="Start"),
-        Line2D([0], [0], marker="*", color="w", markerfacecolor="#dc2626",
-               markersize=13, label="Goal"),
-    ]
-    ax.legend(handles=legend_elements, loc="lower right", fontsize=8, framealpha=0.9)
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close()
 
 
 # -----------------------------------------------------------------------
@@ -438,37 +178,17 @@ def print_compact_summary(tee, results, goal_formula_path):
     tee(f"  {'Query':<{label_w}}   Probability")
     tee(f"  {'-'*label_w}   -----------")
     for name in SUMMARY_QUERIES:
-        p = results.get(name, 0.0)
+        if name not in results:
+            # any_battery_depletion specifically: absent (not just 0)
+            # when this problem's own config.yaml has battery.enabled:
+            # false -- config_to_prolog.py then never declares that
+            # query at all (see its own header). Reporting 0.00% here
+            # would misleadingly read as "verified never happens"
+            # rather than "not modeled for this problem".
+            tee(f"  {name:<{label_w}}   N/A (not queried)")
+            continue
+        p = results[name]
         tee(f"  {name:<{label_w}}   {p*100:6.2f}%")
-
-
-def control_points_via_planner(algorithm, start, goal):
-    """Fallback for when control_points/1 can't be found by static
-    parsing -- e.g. the plan uses planAstar/planStraight (see
-    basic_action_theory.pl's plan/1 documentation) instead of a static
-    fact, so there's nothing for parse_control_points' regex to find.
-    Calls the SAME black-box predicate directly (importing planners.py
-    from module/theory/, exactly where basic_action_theory.pl's own
-    :- use_module(...) directive expects it to live) to get a plottable
-    nominal path. Uses the plain-Python plan_*_points functions (no
-    ProbLog Term objects involved) -- see planners.py's own header.
-    Returns None if the import or the planner call itself fails (e.g.
-    no map, or A* finds no path) -- the caller decides what to do
-    next."""
-    if THEORY_DIR not in sys.path:
-        sys.path.insert(0, THEORY_DIR)
-    try:
-        import planners as mp
-    except ImportError:
-        return None
-    func = mp.plan_astar_points if algorithm == "astar" else mp.plan_straight_points
-    try:
-        control_points = func(float(start[0]), float(start[1]), float(goal[0]), float(goal[1]))
-    except Exception:
-        return None
-    if not control_points:
-        return None
-    return [(float(x), float(y)) for x, y in control_points]
 
 
 # -----------------------------------------------------------------------
@@ -488,14 +208,6 @@ def main():
                           "resolution pipeline -- parse/ground/compile/"
                           "evaluate each get their own budget (default: "
                           "300 = 5 minutes). See pipeline_stages.py.")
-    ap.add_argument("--obstacles", default=None,
-                     help="Optional EXTRA obstacle facts file to also parse, "
-                          "on top of whatever basic_action_theory.pl itself "
-                          "already :- consult()s (normally you don't need "
-                          "this -- obstacle_polygon/2 facts are found "
-                          "automatically by following the theory file's own "
-                          "consult directives, same as ProbLog does at load "
-                          "time).")
     args = ap.parse_args()
 
     problem_dir = os.path.join(PROBLEMS_DIR, args.problem)
@@ -513,13 +225,11 @@ def main():
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = os.path.join(problem_output_dir, f"{args.problem}_{ts}.log")
-    img_path = os.path.join(problem_output_dir, f"{args.problem}_{ts}.png")
 
     with open(log_path, "w", encoding="utf-8") as fh:
         tee = Tee(fh)
         banner(tee, f"ProbLog Continuous-Space Safety Verification - {datetime.now():%Y-%m-%d %H:%M:%S}")
         tee(f"  Log file    : {log_path}")
-        tee(f"  Image       : {img_path}")
         tee(f"  Problem     : {args.problem} ({problem_dir})")
         tee(f"  Theory file : {THEORY_PATH}")
 
@@ -534,8 +244,7 @@ def main():
         # (planners.py, collision_geometry.py) reads BT_PROBLEM_DIR at
         # IMPORT time to find this problem's own map.yaml/config.yaml/
         # obstacles_generated.pl -- must be set before ProbLog ever
-        # loads the theory (see run_problog_api below, and
-        # control_points_via_planner's own import further up).
+        # loads the theory (see run_problog_api below).
         os.environ["BT_PROBLEM_DIR"] = problem_dir
 
         # Regenerate <problem>/obstacles_generated.pl from
@@ -543,8 +252,7 @@ def main():
         # map.yaml is the single source of truth for the obstacle
         # layout (see module/translators/occgrid_to_problog.py), same
         # automatic-every-run treatment config.yaml/behavior_tree.xml
-        # already get. Must happen before resolve_consulted_text()
-        # below, for the same staleness reason as config_generated.pl.
+        # already get.
         if TRANSLATORS_DIR not in sys.path:
             sys.path.insert(0, TRANSLATORS_DIR)
         try:
@@ -565,10 +273,13 @@ def main():
         # every run picks up whatever is currently there with no
         # separate step.
         try:
-            from config_to_prolog import generate as generate_config
+            from config_to_prolog import generate as generate_config, load_config
             generated_config_path = generate_config(
                 config_path=os.path.join(problem_dir, "config.yaml"),
                 output_path=os.path.join(problem_dir, "config_generated.pl"))
+            battery_enabled = load_config(
+                os.path.join(problem_dir, "config.yaml")
+            ).get("battery", {}).get("enabled", True)
             tee(f"  Config      : {generated_config_path} (regenerated from "
                 f"{os.path.join(problem_dir, 'config.yaml')})")
         except Exception as e:
@@ -584,13 +295,18 @@ def main():
         # a control_points blackboard key with no producer) is a hard
         # failure here, same as a missing config fact above; there is
         # no sensible way to run inference against a tree that doesn't
-        # actually match its own schema.
+        # actually match its own schema. battery_enabled (this
+        # problem's own config.yaml battery.enabled, read above) is
+        # threaded through so a disabled problem gets every battery-
+        # related trigger name stripped from its own Triggers lists --
+        # see bt_to_prolog.py's own generate_plan_pl/_is_battery_trigger.
         try:
             from bt_to_prolog import generate_plan_pl, BTValidationError
             generated_plan_path = generate_plan_pl(
                 xml_path=os.path.join(problem_dir, "behavior_tree.xml"),
                 schema_path=os.path.join(CONTRACTS_DIR, "schema.yaml"),
-                output_path=os.path.join(problem_dir, "plan_generated.pl"))
+                output_path=os.path.join(problem_dir, "plan_generated.pl"),
+                battery_enabled=battery_enabled)
             tee(f"  Plan (BT)   : {generated_plan_path} (translated + validated "
                 f"from {os.path.join(problem_dir, 'behavior_tree.xml')})")
         except BTValidationError as e:
@@ -634,49 +350,6 @@ def main():
                                run_label=f"main.py --problem {args.problem}, run {ts}",
                                tee=tee)
 
-        # Follow basic_action_theory.pl's own :- consult(...) directives
-        # (via problem_data.pl) -- start/1 now lives in
-        # config_generated.pl, obstacle_polygon/2 in
-        # obstacles_generated.pl -- not in the theory file's own text.
-        # There is no goal/2 fact anywhere anymore (see
-        # parse_last_plan_goal's own note on where "the goal" is read
-        # from instead, for plotting purposes).
-        theory_text = resolve_consulted_text(THEORY_PATH)
-
-        try:
-            start = parse_scalar_fact(theory_text, "start")
-            goal = parse_last_plan_goal(theory_text)
-            num_samples = parse_int_fact(theory_text, "num_samples", 20)
-        except ValueError as e:
-            tee(f"\n  [ERROR] {e}")
-            sys.exit(1)
-
-        try:
-            control_points = parse_control_points(theory_text)
-        except ValueError:
-            tee("  [info] No static control_points/1 found -- plan likely "
-                "uses planAstar/planStraight (see basic_action_theory.pl's "
-                "plan/1 docs) instead of a static fact. Calling the SAME "
-                "black-box predicate directly for a plottable nominal path.")
-            control_points = None
-            for algorithm in ("astar", "straight"):
-                control_points = control_points_via_planner(algorithm, start, goal)
-                if control_points is not None:
-                    tee(f"  [info] Got a nominal path via plan_{algorithm}.")
-                    break
-            if control_points is None:
-                tee("\n  [ERROR] Could not obtain control points, neither "
-                    "statically nor via the planner fallback.")
-                sys.exit(1)
-
-        obstacle_polygons = parse_obstacle_polygons(theory_text)
-        if args.obstacles and os.path.isfile(args.obstacles):
-            with open(args.obstacles) as f:
-                obstacle_polygons += parse_obstacle_polygons(f.read())
-        tee(f"\n  Parsed: {len(control_points)} control points, "
-            f"{len(obstacle_polygons)} obstacle polygon(s), "
-            f"{num_samples} verification samples")
-
         tee(f"\n  Started : {datetime.now():%H:%M:%S}  "
             f"(phase timeout: {args.phase_timeout}s per stage)")
         try:
@@ -700,22 +373,8 @@ def main():
 
         print_compact_summary(tee, results, goal_formula_path)
 
-        # -- build (I, x, y, prob) using the NOMINAL spline position ------
-        fh_data = []
-        for i in range(num_samples + 1):
-            frac = i / num_samples
-            x, y = spline_point(control_points, frac)
-            prob = results.get(f"first_hit({i})", 0.0)
-            fh_data.append((i, x, y, prob))
-
-        tee(f"\n  Generating safety plot...")
-        save_plot(control_points, obstacle_polygons, start, goal, num_samples,
-                   fh_data, img_path)
-        tee(f"  Image saved : {img_path}")
-
         tee("")
         banner(tee, f"Log : {log_path}")
-        banner(tee, f"PNG : {img_path}")
 
 
 if __name__ == "__main__":

@@ -225,12 +225,27 @@ def _point_xy(text, tag, port_name):
             f"X/Y -- expected \"X;Y\" with two floats.")
 
 
-def _string_list_literal(text):
-    items = [t.strip() for t in text.split(";") if t.strip()]
-    return "[" + ",".join(items) + "]"
+def _is_battery_trigger(token):
+    """True for a Triggers-list token that's battery-related -- the
+    bare atom 'battery' or any battery_<whatever>(...) functor
+    (battery_below(N), battery_over(N), battery_equal(N), and any
+    future one, matched by prefix rather than an enumerated list so a
+    new battery_* trigger added later is covered automatically). Used
+    to strip battery out of a leg's own Triggers list entirely when
+    this problem's own config.yaml sets battery.enabled: false -- see
+    that flag's own comment for why "not considering battery in the
+    problem" has to happen HERE, at translation time, not just by
+    dropping the any_battery_depletion query: a Triggers list is baked
+    into plan_generated.pl, a problem-specific generated file, exactly
+    like config_generated.pl, so it's the right place for a
+    problem-specific flag to take effect, and it's the only way to
+    stop battery from ever being able to HALT a walk (as opposed to
+    merely not being reported on)."""
+    functor = token.split("(", 1)[0].strip()
+    return functor == "battery" or functor.startswith("battery_")
 
 
-def _translate_leaf(tag, elem, dispatch, port_specs, var_pool):
+def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled):
     attrs = _validate_ports(tag, elem, port_specs)
 
     if tag in _ACTION_DISPATCH:
@@ -246,7 +261,10 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool):
             key = _blackboard_key(cp_value)
             var_pool.consumers.add(key)
             cp_var = var_pool.var_for(key)
-            triggers = _string_list_literal(attrs["triggers"])
+            trigger_tokens = [t.strip() for t in attrs["triggers"].split(";") if t.strip()]
+            if not battery_enabled:
+                trigger_tokens = [t for t in trigger_tokens if not _is_battery_trigger(t)]
+            triggers = "[" + ",".join(trigger_tokens) + "]"
             return f"moveto_leg({cp_var},{triggers})"
 
         if info["kind"] == "planWith":
@@ -310,7 +328,7 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool):
                              f"_ACTION_DISPATCH/_CONDITION_DISPATCH.")
 
 
-def _translate_node(elem, schema_ports, var_pool):
+def _translate_node(elem, schema_ports, var_pool, battery_enabled):
     tag = elem.tag
 
     if tag in _CONTROL_FLOW:
@@ -322,7 +340,8 @@ def _translate_node(elem, schema_ports, var_pool):
         children = list(elem)
         if not children:
             raise BTValidationError(f"<{tag}> has no children.")
-        child_terms = [_translate_node(c, schema_ports, var_pool) for c in children]
+        child_terms = [_translate_node(c, schema_ports, var_pool, battery_enabled)
+                       for c in children]
         functor = _CONTROL_FLOW[tag]
         return f"{functor}([{','.join(child_terms)}])"
 
@@ -331,7 +350,7 @@ def _translate_node(elem, schema_ports, var_pool):
             f"<{tag}> is not a recognized node -- not Sequence/Fallback and "
             f"not an action/condition 'id' in module/contracts/schema.yaml.")
 
-    return _translate_leaf(tag, elem, None, schema_ports[tag], var_pool)
+    return _translate_leaf(tag, elem, None, schema_ports[tag], var_pool, battery_enabled)
 
 
 def _find_tree_root(xml_root):
@@ -363,10 +382,18 @@ def _find_tree_root(xml_root):
     return children[0]
 
 
-def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH):
+def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
+                    battery_enabled=True):
     """Parse + validate + translate the BT XML into ONE Prolog term
     (Node's own text, e.g. "seq_node([planWith(...),moveto_leg(...)])").
-    Raises BTValidationError on any structural problem."""
+    Raises BTValidationError on any structural problem.
+
+    battery_enabled=False strips every battery-related trigger name
+    (battery, battery_below(...), battery_over(...), battery_equal(...)
+    -- see _is_battery_trigger's own note) out of every MoveTo's own
+    Triggers list -- the problem's own config.yaml battery.enabled
+    flag, threaded in by generate_plan_pl's caller (main.py/
+    diagnose_pipeline.py)."""
     schema = load_schema(schema_path)
     schema_ports = _schema_port_index(schema)
 
@@ -377,7 +404,7 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH):
 
     tree_root_elem = _find_tree_root(xml_root)
     var_pool = _VarPool()
-    node_text = _translate_node(tree_root_elem, schema_ports, var_pool)
+    node_text = _translate_node(tree_root_elem, schema_ports, var_pool, battery_enabled)
 
     # A MoveTo whose control_points key has no PlanAstar/PlanStraight
     # producer anywhere in the tree would silently leave CP unbound --
@@ -393,13 +420,23 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH):
 
 
 def generate_plan_pl(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
-                      output_path=DEFAULT_OUTPUT_PATH):
-    node_text = translate_tree(xml_path, schema_path)
+                      output_path=DEFAULT_OUTPUT_PATH, battery_enabled=True):
+    node_text = translate_tree(xml_path, schema_path, battery_enabled=battery_enabled)
     lines = [
         "% AUTO-GENERATED by module/translators/bt_to_prolog.py from",
         f"% {os.path.relpath(xml_path, os.path.dirname(output_path))} -- DO NOT HAND-EDIT,",
         "% edit the XML tree instead and regenerate (main.py does this",
         "% automatically before every run).",
+    ]
+    if not battery_enabled:
+        lines += [
+            "%",
+            "% battery.enabled: false in this problem's own config.yaml --",
+            "% every battery-related trigger name has been stripped from",
+            "% every leg's own Triggers list below (see bt_to_prolog.py's",
+            "% own _is_battery_trigger).",
+        ]
+    lines += [
         "",
         f"plan({node_text}).",
         "",

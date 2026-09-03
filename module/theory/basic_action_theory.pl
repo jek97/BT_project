@@ -324,18 +324,18 @@ walk_duration(ControlPoints, Duration) :-
 %    it does not "reset" or get resampled.
 % ---------------------------------------------------------------
 % z/2's annotated-disjunction table and sigma/1 (its scale) are now
-% config facts -- see the problem's own config.yaml's noise.discretized_gaussian
-% and noise.position_sigma, generated into config_generated.pl
-% (consulted at the top of this file) by
-% module/translators/config_to_prolog.py. NOTE kept here as a standing
-% reminder even though the table itself moved: these five weights must
-% sum to EXACTLY 1.0 (0.0606*2 + 0.2417*2 + 0.3954 = 1.0000) -- an
-% earlier version of this table used 0.3854 for the centre weight,
-% which summed to only 0.99, and ProbLog silently treats missing mass
-% as an implicit "none of these" failure branch, which caps EVERY
-% downstream probability at 0.99 in every world. The generator checks
-% this sum and warns if it's off; always verify it after editing
-% config.yaml regardless.
+% config facts -- see the problem's own config.yaml's
+% position.lateral.discretized_gaussian and position.lateral.sigma,
+% generated into config_generated.pl (consulted at the top of this
+% file) by module/translators/config_to_prolog.py. NOTE kept here as a
+% standing reminder even though the table itself moved: these weights
+% MUST sum to EXACTLY 1.0 -- an earlier version of this table used
+% 0.3854 for the centre weight where 0.3954 was required, which summed
+% to only 0.99, and ProbLog silently treats missing mass as an
+% implicit "none of these" failure branch, which caps EVERY downstream
+% probability at 0.99 in every world. The generator checks each
+% table's own sum and warns if it's off; always verify it after
+% editing config.yaml regardless.
 
 % ---------------------------------------------------------------
 % 5. THE MOVING FLUENT -- true while a walk is in progress (between
@@ -406,7 +406,9 @@ current_walk(do(A,S), CP, Triggers, T0, SPrev) :-
 % battery_start/1, idle_drain_rate/1, moving_drain_rate/1, and
 % sigma_battery/1 (the SAME value used in every phase -- moving, idle,
 % and s0 -- see zbatt/1 below) are now config facts -- see
-% the problem's own config.yaml's battery.* and noise.battery_sigma.
+% the problem's own config.yaml's battery.* (battery.sigma for
+% sigma_battery/1 specifically -- everything battery-related, noise
+% included, lives in that one section now).
 
 % zbatt/1: ONE noise draw for the WHOLE MISSION -- deliberately
 % decoupled from any specific startMoveto occurrence. This is an
@@ -2105,21 +2107,28 @@ verify_goal_formula :- final_situation(S), goal_formula(S).
 % ============================================================
 % 10. QUERIES
 %
-% Trimmed to exactly the six queries actually needed for the
-% reactive-redescend/merge-grid performance investigation: the
-% problem's own goal_formula.pl verification, whether the plan ever
-% ends via collision or battery depletion, and the BT's own three
-% possible outcomes. hit_by/1, first_hit/1, on_track/1, verify_safe/0,
-% and plan_route_blocked/0 are all still DEFINED above (Section 7/8) --
-% only their query(...) declarations were removed, so they simply stay
-% unground/uncomputed (ProbLog only grounds what a query(...) or
-% something IT depends on actually reaches) rather than being deleted
-% outright. Re-add whichever query(...) line(s) you need if per-sample
-% hazard/drift reporting is wanted again later.
+% Trimmed to exactly the queries actually needed for the reactive-
+% redescend/merge-grid performance investigation: the problem's own
+% goal_formula.pl verification, whether the plan ever ends via
+% collision, and the BT's own three possible outcomes. hit_by/1,
+% first_hit/1, on_track/1, verify_safe/0, and plan_route_blocked/0 are
+% all still DEFINED above (Section 7/8) -- only their query(...)
+% declarations were removed, so they simply stay unground/uncomputed
+% (ProbLog only grounds what a query(...) or something IT depends on
+% actually reaches) rather than being deleted outright. Re-add
+% whichever query(...) line(s) you need if per-sample hazard/drift
+% reporting is wanted again later.
+%
+% query(any_battery_depletion) is NOT declared here, on purpose --
+% it's the one query about "finishing the battery", so it's emitted
+% instead by module/translators/config_to_prolog.py, conditionally on
+% this problem's own config.yaml battery.enabled flag (see that
+% generator's own header for why: a problem-independent theory file
+% can't itself vary per-problem, but the generated config_generated.pl
+% it consults can).
 % ============================================================
 query(verify_goal_formula).
 query(any_collision).
-query(any_battery_depletion).
 query(plan_outcome(true)).
 query(plan_outcome(false)).
 query(plan_outcome(world_too_large)).

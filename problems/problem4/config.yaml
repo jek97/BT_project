@@ -152,6 +152,6 @@ grounding:
   # as a deliberate accuracy/tractability tradeoff for the reactive-
   # redescend grounding investigation (see FUTUREWORK.md and this
   # project's own conversation log).
-  position_merge_grid: 2.0   # metres
-  battery_merge_grid: 20     # percent
-  time_merge_grid: 45        # seconds
+  position_merge_grid: 1.0   # metres
+  battery_merge_grid: 10     # percent
+  time_merge_grid: 20        # seconds

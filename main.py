@@ -10,23 +10,25 @@ re-indexed from "discrete grid step N" to "sampled instant I along the
 one continuous walk", and from "grid obstacle cells" to "obstacle
 polygons" (as produced by module/translators/occgrid_to_problog.py).
 
-Four safety features, same structure as before, ALL specifically about
-COLLISION (first_hit/hit_by are collision-only PMFs/CDFs -- see below
-for the separate battery report):
-  Feature 1  - verify_safe: under NO noise, does the plan fail via ANY
-               known cause -- collision OR battery depletion?
-  Feature 2a - hit_by(N): P(collision has occurred by sample N)
-  Feature 2b - first_hit(I): P(first COLLISION is exactly at sample I)
-               -- a proper PMF over sampled instants, no double-counting
-  (implied)  - riskiest sample = argmax of first_hit(I)
+Prints a COMPACT summary (the problem's own goal_formula.pl, plus a
+small probability table) rather than the earlier verbose per-sample
+report -- trimmed together with basic_action_theory.pl's own Section
+10 QUERIES list to exactly six queries, for the reactive-redescend/
+merge-grid grounding-performance investigation (see FUTUREWORK.md and
+this project's own conversation log):
+  - verify_goal_formula: P(the problem's own goal_formula.pl holds at
+    the final situation)
+  - any_collision / any_battery_depletion: P(the plan ends via that
+    cause)
+  - plan_outcome(true) / plan_outcome(false) / plan_outcome
+    (world_too_large): the BT's own three possible outcomes
 
-Also reports, separately (kept distinct rather than folded into the
-collision-specific features above, so the two failure modes stay
-individually diagnosable):
-  - any_battery_depletion: P(the battery runs out before the walk
-    would otherwise complete)
-  - on_track(I): P(actual position stays within tolerance of the
-    nominal spline at sample I) -- shows cumulative drift over time
+hit_by/1, first_hit/1, on_track/1, verify_safe/0, and plan_route_
+blocked/0 are all still DEFINED in basic_action_theory.pl -- only their
+query(...) declarations (and this script's own per-sample report
+formatting) were removed, not the underlying predicates. Re-add
+whichever query(...) line(s) are wanted again, and a matching report
+section, to bring per-sample hazard/drift reporting back.
 
 Usage:
     python3 main.py [--problem NAME]
@@ -395,72 +397,49 @@ def banner(tee, text, char="="):
 def section(tee, text):
     tee(f"\n{'-'*W}"); tee(f"  {text}"); tee(f"{'-'*W}")
 
-def bar(prob, width=30):
-    filled = round(max(0.0, min(1.0, prob)) * width)
-    return "#" * filled + "-" * (width - filled)
+def extract_goal_formula_text(goal_formula_path):
+    """The problem's own goal_formula.pl, stripped down to its actual
+    clause(s) -- drops '%'-prefixed comment lines and blank lines, so
+    the compact report can show WHAT was actually verified without
+    dumping that file's own (often long) header comment. Returns the
+    remaining lines joined with '\n', or a placeholder if the file
+    turns out to be all comments/blank (shouldn't happen in practice,
+    but this is report formatting, not validation -- goal_formula_check
+    .py already validated the real file earlier in this same run)."""
+    with open(goal_formula_path) as f:
+        lines = [ln.rstrip() for ln in f
+                 if ln.strip() and not ln.strip().startswith("%")]
+    return "\n".join(lines) if lines else "(no clause found)"
 
 
-def print_safety_results(tee, results, num_samples):
-    section(tee, "Feature 1 - Deterministic nominal-path safety [verify_safe]")
-    tee("  Checks: under NO noise (zero-noise/modal case), does the plan ever")
-    tee("          fail for ANY known cause -- currently: coming within the")
-    tee("          safety margin of an obstacle, OR the battery running out")
-    tee("          before the walk would otherwise complete?")
-    vs = results.get("verify_safe", 0.0)
-    tee(f"  verify_safe : {vs:.0f}  ->  "
-        + ("PASS - nominal plan is clear of every known failure cause" if vs >= 0.999
-           else "FAIL - nominal plan fails via collision and/or battery depletion "
-                "(see any_collision / any_battery_depletion below for which)"))
+# query(...) names this report covers -- kept in sync with
+# basic_action_theory.pl's own Section 10 QUERIES list by hand (there
+# are only six now, trimmed specifically to what this reactive-
+# redescend/merge-grid investigation needs -- see that section's own
+# comment for what else is still DEFINED but no longer queried).
+SUMMARY_QUERIES = [
+    "verify_goal_formula",
+    "any_collision",
+    "any_battery_depletion",
+    "plan_outcome(true)",
+    "plan_outcome(false)",
+    "plan_outcome(world_too_large)",
+]
 
-    section(tee, "Feature 2a - P(ever hits obstacle along trajectory) [hit_by]")
-    ua = results.get(f"hit_by({num_samples})", 0.0)
-    tee(f"  hit_by({num_samples})        : {bar(ua)}  {ua*100:6.3f}%")
-    tee(f"  Safe probability      : {bar(1-ua)}  {(1-ua)*100:6.3f}%")
 
-    section(tee, "Feature 2b - Per-sample first-passage hazard [first_hit]")
-    tee("  P(first collision is exactly at sample I) - proper PMF")
-    fh_vals = [(i, results.get(f"first_hit({i})", 0.0)) for i in range(num_samples+1)]
-    nonzero = [(i, p) for i, p in fh_vals if p > 0]
-    total_fh = sum(p for _, p in fh_vals)
-    if nonzero:
-        max_p = max(p for _, p in nonzero)
-        tee(f"\n  {'I':<4} {'first_hit(I)':>14}  {'Hazard bar':<22}")
-        tee(f"  {'-'*4} {'-'*14}  {'-'*22}")
-        for i, p in fh_vals:
-            if p <= 0:
-                continue
-            b = bar(p/max_p, 20) if max_p > 0 else "-"*20
-            note = "  <- most dangerous" if p == max_p else ""
-            tee(f"  {i:<4} {p:>14.6f}  {b}{note}")
-        tee(f"\n  Sum of first_hit PMF : {total_fh:.6f}  (should equal hit_by = {ua:.6f})")
-    else:
-        tee("  No non-zero first_hit values - never hits obstacle stochastically")
+def print_compact_summary(tee, results, goal_formula_path):
+    section(tee, "Goal formula")
+    tee(f"  {goal_formula_path}")
+    for line in extract_goal_formula_text(goal_formula_path).split("\n"):
+        tee(f"    {line}")
 
-    section(tee, "Implied - Most likely failure sample (argmax of first_hit)")
-    if nonzero:
-        i_r, p_r = max(nonzero, key=lambda t: t[1])
-        tee(f"  Riskiest sample I = {i_r} (of {num_samples})  with P(first_hit) = {p_r:.6f}")
-    else:
-        tee("  No failure samples detected.")
-
-    section(tee, "Overall outcome")
-    for key, label in [("verify_goal_formula", "verify_goal_formula  "),
-                        ("any_collision", "any_collision        "),
-                        ("any_battery_depletion", "any_battery_depletion")]:
-        p = results.get(key, 0.0)
-        tee(f"  {label}  {bar(p)}  {p*100:6.2f}%")
-
-    section(tee, "On-track probability per sample")
-    tee("  P(actual position stays within tolerance of nominal spline)")
-    ot_vals = [(i, results.get(f"on_track({i})", None)) for i in range(num_samples+1)]
-    ot_vals = [(i, p) for i, p in ot_vals if p is not None]
-    if ot_vals:
-        min_p = min(p for _, p in ot_vals)
-        tee(f"\n  {'I':<4} {'on_track':>10}  {'Bar':<22}")
-        tee(f"  {'-'*4} {'-'*10}  {'-'*22}")
-        for i, p in ot_vals:
-            marker = "  <- riskiest" if p == min_p else ""
-            tee(f"  {i:<4} {p:>10.4f}  {bar(p,20)}{marker}")
+    section(tee, "Query results")
+    label_w = max(len(name) for name in SUMMARY_QUERIES)
+    tee(f"  {'Query':<{label_w}}   Probability")
+    tee(f"  {'-'*label_w}   -----------")
+    for name in SUMMARY_QUERIES:
+        p = results.get(name, 0.0)
+        tee(f"  {name:<{label_w}}   {p*100:6.2f}%")
 
 
 def control_points_via_planner(algorithm, start, goal):
@@ -719,7 +698,7 @@ def main():
                 "file has query(...) declarations.")
             sys.exit(1)
 
-        print_safety_results(tee, results, num_samples)
+        print_compact_summary(tee, results, goal_formula_path)
 
         # -- build (I, x, y, prob) using the NOMINAL spline position ------
         fh_data = []

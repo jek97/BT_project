@@ -18,9 +18,9 @@ tolerance(0.5).
 num_samples(20).
 bracket_samples(60).
 crossing_eps(0.01).
-position_merge_grid(2.0).
-battery_merge_grid(20).
-time_merge_grid(45).
+position_merge_grid(1.0).
+battery_merge_grid(10).
+time_merge_grid(20).
 
 0.25::z(do(startMoveto(CP,Triggers,T0),S), -1.0) ;
 0.5::z(do(startMoveto(CP,Triggers,T0),S), 0.0) ;

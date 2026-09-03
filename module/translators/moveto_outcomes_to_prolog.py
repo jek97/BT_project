@@ -55,6 +55,7 @@ from dataclasses import dataclass
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "theory"))
 from moveto_calibrator import calibrate_moveto  # noqa: E402
 from config_to_prolog import load_config  # noqa: E402
+from collision_geometry import _parse_obstacle_polygons, _strip_prolog_comments  # noqa: E402
 
 
 # =====================================================================
@@ -161,7 +162,7 @@ def outcome_status(reason):
     return "reactive"
 
 
-def eval_node(node, state, cache, config):
+def eval_node(node, state, cache, config, obstacle_polygons):
     """Returns a list of (status, new_state, probability) triples.
     Probabilities are CONDITIONAL on having reached `state` -- the
     caller (a composite node, or the top-level BFS) is responsible for
@@ -178,7 +179,7 @@ def eval_node(node, state, cache, config):
         if key not in cache:
             cache[key] = calibrate_moveto(
                 node.leg_id, state.last_branch, state.position, state.battery,
-                node.goal, node.algorithm, [], config)
+                node.goal, node.algorithm, [], config, obstacle_polygons)
         results = []
         for row in cache[key]:
             status = outcome_status(row["reason"])
@@ -195,9 +196,9 @@ def eval_node(node, state, cache, config):
             return [("true", state, 1.0)]
         first, rest = node.children[0], SequenceNode(node.children[1:])
         results = []
-        for status, s2, p in eval_node(first, state, cache, config):
+        for status, s2, p in eval_node(first, state, cache, config, obstacle_polygons):
             if status == "true":
-                for status2, s3, p2 in eval_node(rest, s2, cache, config):
+                for status2, s3, p2 in eval_node(rest, s2, cache, config, obstacle_polygons):
                     results.append((status2, s3, p * p2))
             else:  # false or reactive propagate straight through, unchanged
                 results.append((status, s2, p))
@@ -208,9 +209,9 @@ def eval_node(node, state, cache, config):
             return [("false", state, 1.0)]
         first, rest = node.children[0], FallbackNode(node.children[1:])
         results = []
-        for status, s2, p in eval_node(first, state, cache, config):
+        for status, s2, p in eval_node(first, state, cache, config, obstacle_polygons):
             if status == "false":
-                for status2, s3, p2 in eval_node(rest, s2, cache, config):
+                for status2, s3, p2 in eval_node(rest, s2, cache, config, obstacle_polygons):
                     results.append((status2, s3, p * p2))
             else:  # true or reactive propagate straight through, unchanged
                 results.append((status, s2, p))
@@ -224,7 +225,7 @@ def eval_node(node, state, cache, config):
 # bounded by `budget` (== replan_budget/1). See this file's own header
 # for the hop-numbering / world_too_large correspondence.
 # =====================================================================
-def enumerate_and_calibrate(tree, start, battery_start, budget, config):
+def enumerate_and_calibrate(tree, start, battery_start, budget, config, obstacle_polygons=()):
     cache = {}
     frontier = [(State(start, battery_start, "root"), 1.0)]
     hop = 0
@@ -232,7 +233,7 @@ def enumerate_and_calibrate(tree, start, battery_start, budget, config):
     while frontier:
         next_frontier = []
         for state, prob in frontier:
-            for status, new_state, p in eval_node(tree, state, cache, config):
+            for status, new_state, p in eval_node(tree, state, cache, config, obstacle_polygons):
                 total_p = prob * p
                 if status == "true":
                     p_true += total_p
@@ -290,14 +291,24 @@ def render_prolog(cache):
     return "\n".join(lines)
 
 
+def _load_obstacle_polygons(problem_dir):
+    obstacles_path = os.path.join(problem_dir, "obstacles_generated.pl")
+    try:
+        with open(obstacles_path) as f:
+            return _parse_obstacle_polygons(_strip_prolog_comments(f.read()))
+    except FileNotFoundError:
+        return []
+
+
 def generate(problem_dir, budget):
     config = load_config(os.path.join(problem_dir, "config.yaml"))
     tree = parse_tree(os.path.join(problem_dir, "behavior_tree.xml"))
+    obstacle_polygons = _load_obstacle_polygons(problem_dir)
     start = (config["initial_situation"]["start_x"], config["initial_situation"]["start_y"])
     battery_start = config["battery"]["start"]
 
     cache, p_true, p_false, p_world_too_large = enumerate_and_calibrate(
-        tree, start, battery_start, budget, config)
+        tree, start, battery_start, budget, config, obstacle_polygons)
 
     output_path = os.path.join(problem_dir, "moveto_outcomes_generated.pl")
     with open(output_path, "w") as f:

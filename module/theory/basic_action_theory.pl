@@ -79,7 +79,9 @@
 %        sigma_tangential/1, sigma_battery/1, battery_start/1,
 %        idle_drain_rate/1, moving_drain_rate/1, goal_tolerance/1,
 %        tolerance/1, num_samples/1, bracket_samples/1, crossing_eps/1,
-%        z/2, zt/2, zbatt/1
+%        z/2, zt/2, zbatt/1, position_merge_grid/1, battery_merge_grid/1,
+%        time_merge_grid/1 (see the MERGE-GRID QUANTIZATION note above
+%        dist/5's own section)
 %                              from config_generated.pl, itself
 %                              generated from config.yaml by
 %                              module/translators/config_to_prolog.py.
@@ -146,6 +148,80 @@ obstacle_polygon(no_obstacles_placeholder, []) :- fail.
 %    bisection epsilon, ported line-for-line, not re-derived).
 % ---------------------------------------------------------------
 dist(X1,Y1,X2,Y2,D) :- D is sqrt((X2-X1)**2 + (Y2-Y1)**2).
+
+% ---------------------------------------------------------------
+% MERGE-GRID QUANTIZATION -- three rounding primitives used ONLY at
+% the specific "seam" where a NEW leg (a fresh startMoveto) reads its
+% own starting condition from wherever the PREVIOUS leg's actual halt
+% left things. See position_merge_grid/1, battery_merge_grid/1, and
+% time_merge_grid/1 (config facts, from the problem's own config.yaml
+% -- see that file's own "grounding:" section) for what actually
+% enables this, and leg_start_battery/3, poss(startMoveto(...)), and
+% do_node(planWith(...)) further down for where each is applied.
+%
+% WHY: this project's own investigation (see FUTUREWORK.md and the
+% conversation that produced this feature) found that ProbLog's
+% grounder DOES merge multiple proofs of an identical ground atom into
+% one shared formula node for free -- but a NEW leg's own control
+% points (via planWith), starting battery, and starting time are each
+% CONTINUOUS functions of the noise (Z,Zt,Zb) an EARLIER leg resolved,
+% so they are essentially NEVER bit-identical across different worlds,
+% and merging never actually happens on its own. Rounding these three
+% quantities to a config-chosen grid, EXACTLY at the point a new leg
+% reads them, makes different worlds that land close enough together
+% produce the SAME ground term -- letting ProbLog's existing, exact
+% sharing machinery do the compression, with no change to how anything
+% is combined/weighted.
+%
+% WITHIN one leg, this changes NOTHING: Tcross (bracket-scan or
+% closed-form battery algebra), position (walk_noisy_point), and
+% battery drain (noisy_drain) are all still computed at FULL FLOAT
+% PRECISION exactly as before this feature existed. Quantization
+% happens EXACTLY ONCE per leg boundary -- on the value a leg reads as
+% its OWN starting condition -- never mid-computation, and never on
+% anything used for REPORTING (first_hit/on_track/verify_safe/
+% halted_with/2 all still read the exact, un-rounded Tcross/position/
+% battery of whichever leg actually produced them; only what SEEDS the
+% NEXT leg is coarsened). cond() checks (holds(battery_over(...)),
+% holds(at_goal(...)), etc.) also stay exact, on purpose -- a
+% decision boundary like "is battery actually over 70%" should not be
+% shifted by a floor/ceiling/round choice made for an unrelated reason.
+%
+% All three grids default to 0 in config.yaml (disabled): every
+% quantize* predicate below passes its Value straight through
+% UNCHANGED at Grid =< 0, so a problem that never sets these stays
+% byte-for-byte identical to this feature not existing at all.
+%
+% Direction matters for two of the three, not the first:
+%   quantize/3       -- round-to-NEAREST. Used for position: rounding
+%                        either way is an equally valid approximation,
+%                        no physical-consistency constraint.
+%   quantize_down/3  -- FLOOR. Used for a new leg's own starting
+%                        battery: never OVERESTIMATE remaining charge,
+%                        the same "approximation must never look safer
+%                        than reality" convention noisy_drain/3 above
+%                        already follows (it clamps drain at 0 for
+%                        exactly this reason).
+%   quantize_up/3    -- CEILING. Used for a new leg's own start time:
+%                        a leg can never plausibly begin BEFORE the
+%                        previous one actually ended, so rounding down
+%                        (or to nearest) could produce a non-causal
+%                        T0 earlier than the real halt instant.
+% ---------------------------------------------------------------
+quantize(Value, Grid, Value) :- Grid =< 0.
+quantize(Value, Grid, Quantized) :-
+    Grid > 0,
+    Quantized is round(Value / Grid) * Grid.
+
+quantize_down(Value, Grid, Value) :- Grid =< 0.
+quantize_down(Value, Grid, Quantized) :-
+    Grid > 0,
+    Quantized is floor(Value / Grid) * Grid.
+
+quantize_up(Value, Grid, Value) :- Grid =< 0.
+quantize_up(Value, Grid, Quantized) :-
+    Grid > 0,
+    Quantized is ceiling(Value / Grid) * Grid.
 
 sum_list([], 0.0).
 sum_list([H|T], Sum) :- sum_list(T, SumT), Sum is H + SumT.
@@ -393,6 +469,23 @@ battery(Level, T, s0) :-
     noisy_drain(NominalDrain, Deviation, TotalDrain),
     Level is max(0, min(100, B0 - TotalDrain)).
 
+% leg_start_battery(+T0, +SPrev, -B0): a NEW leg's own starting
+% battery level, rounded DOWN to battery_merge_grid/1's own
+% granularity (see the MERGE-GRID QUANTIZATION note above dist/5's own
+% section) -- the SINGLE shared definition used both here (the MOVING-
+% phase clause just below) and by poss(haltMoveto(...))/poss(interrupt
+% (...)) further down, so a leg's own crossing-time computation and its
+% own battery/3 regression can never read a different B0 for the same
+% leg. Quantizing HERE -- exactly where a NEW leg's own physics starts
+% -- is what keeps every OTHER battery/3 read (idle-phase reporting,
+% mid-walk queries, first_hit/on_track/verify_safe) at full float
+% precision, unaffected: only the value that seeds a brand new leg is
+% coarsened, once, at the seam.
+leg_start_battery(T0, SPrev, B0) :-
+    battery(B0Exact, T0, SPrev),
+    battery_merge_grid(Grid),
+    quantize_down(B0Exact, Grid, B0).
+
 % MOVING phase keeps the Duration-normalized scaling (Elapsed/sqrt(D),
 % not sqrt(Elapsed)) -- a walk DOES have a genuine, known, fixed
 % Duration, and that normalization is what keeps Level EXACTLY LINEAR
@@ -402,7 +495,7 @@ battery(Level, T, s0) :-
 % deviation, clamped at zero" pattern as the idle phases -- only the
 % Deviation formula's normalization differs, for the reason above.
 battery(Level, T, do(startMoveto(CP,Triggers,T0), S)) :-
-    battery(B0, T0, S),
+    leg_start_battery(T0, S, B0),
     walk_duration(CP, Duration),
     Elapsed0 is T - T0,
     Elapsed is max(0.0, min(Elapsed0, Duration)),
@@ -830,9 +923,18 @@ first_collision_time(CP,T0,Duration,Z,Zt,Tcross,ObstacleId) :-
 % produces a well-formed, immediately-halted situation with the
 % correct Reason, consistent with every other halting cause, rather
 % than a special-cased blocking precondition for battery alone.
+% T0 is rounded UP to time_merge_grid/1's own granularity (see the
+% MERGE-GRID QUANTIZATION note above dist/5's own section) -- the
+% previous leg's own recorded halt instant (embedded in ITS OWN
+% haltMoveto/interrupt term, read by REPORTING queries) stays exact;
+% only the value THIS new leg treats as its own start time is
+% coarsened, and CEILING (never floor/round) guarantees a new leg can
+% never appear to start before the previous one actually ended.
 poss(startMoveto(_,_Triggers,T0), S) :-
     \+ moving(S),
-    now(T0, S).
+    now(T0Exact, S),
+    time_merge_grid(Grid),
+    quantize_up(T0Exact, Grid, T0).
 
 % now(-T,+S): current wall-clock time -- needed above only to know
 % WHEN to check the battery level (battery/3 needs a query time).
@@ -881,7 +983,7 @@ poss(haltMoveto(T, Reason, Status), S) :-
     z(do(startMoveto(CP,Triggers,T0),SPrev), Z),
     zt(do(startMoveto(CP,Triggers,T0),SPrev), Zt),
     zbatt(Zb),
-    battery(B0, T0, SPrev),
+    leg_start_battery(T0, SPrev, B0),
     earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, Reason,T),
     leg_status(Reason, CP, T0, Duration, Z, Zt, T, Status).
 
@@ -978,7 +1080,7 @@ poss(interrupt(T), S) :-
     z(do(startMoveto(CP,Triggers,T0),SPrev), Z),
     zt(do(startMoveto(CP,Triggers,T0),SPrev), Zt),
     zbatt(Zb),
-    battery(B0, T0, SPrev),
+    leg_start_battery(T0, SPrev, B0),
     earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, _Reason,Tend),
     T >= T0, T < Tend.
 
@@ -1279,8 +1381,22 @@ plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, [], no_path, false) 
 %    CP to its own (non-empty) result then fails to unify, breaking
 %    the fallback in a confusing way that looks unrelated to variable
 %    scoping. This was hit directly while testing this exact feature.
+% SX,SY are rounded to position_merge_grid/1's own granularity (see
+% the MERGE-GRID QUANTIZATION note above dist/5's own section) before
+% being handed to plan_call/plan straight/plan_astar/... -- this is
+% what actually makes CP (hence the NEW leg's own startMoveto(CP,...)
+% term) merge-friendly: since a planner's own path always begins
+% EXACTLY at the point it's given, quantizing the point handed in here
+% is enough on its own to make every downstream CP identical across
+% worlds that round to the same grid cell -- no separate CP-level
+% rounding needed. Every OTHER read of at/4 (collision detection,
+% goal-tolerance checking in leg_status, first_hit/on_track/
+% verify_safe reporting) stays exact, unaffected -- only the position
+% a NEW leg gets planned FROM is coarsened.
 do_node(planWith(Algorithm, point(GX,GY), CP), S, do(planned(Algorithm,Reason), S), Status) :-
-    now(T, S), at(SX,SY,T,S),
+    now(T, S), at(SXExact,SYExact,T,S),
+    position_merge_grid(Grid),
+    quantize(SXExact, Grid, SX), quantize(SYExact, Grid, SY),
     plan_call(Algorithm, SX,SY,GX,GY, CP, Reason, Status).
 
 % planned_with(+Algorithm, +Reason, +S): the direct parallel to
@@ -1839,11 +1955,20 @@ hit_by(N) :-
 %    earlier crashed_in/1 did. If collision/battery aren't in this
 %    leg's Triggers, verify_safe correctly won't flag them, matching
 %    exactly what real execution would (or wouldn't) halt on.
+% B0 here MUST be leg_start_battery/3, not a raw battery(B0,T0,SPrev)
+% read: T0 (from current_walk/5 on the ALREADY-RESOLVED final
+% situation) is whatever quantized start time real resolution actually
+% used for this leg (see poss(startMoveto(...))'s own note), so this
+% has to read the SAME quantized B0 that leg's own real
+% Poss(haltMoveto(...)) used -- otherwise this "was it safe from THIS
+% leg's own start" check could disagree with what the leg ACTUALLY
+% started with, exactly the kind of drift this predicate's own header
+% comment (just above) warns against.
 verify_safe :-
     final_situation(S),
     current_walk(S, CP, Triggers, T0, SPrev),
     walk_duration(CP, Duration),
-    battery(B0, T0, SPrev),
+    leg_start_battery(T0, SPrev, B0),
     earliest_halt(CP,Triggers,T0,Duration,0.0,0.0,0.0,B0, completed,_).
 
 plan_route_blocked :- \+ verify_safe.

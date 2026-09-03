@@ -89,6 +89,18 @@ def render_prolog(config):
     _check_gaussian_weights("tangential", config["noise"]["tangential"]["discretized_gaussian"])
     _check_gaussian_weights("battery", config["noise"]["battery"]["discretized_gaussian"])
 
+    # Optional "grounding:" section -- absent entirely (every existing
+    # problem's own config.yaml) means all three grids are 0, which
+    # basic_action_theory.pl's own quantize/quantize_down/quantize_up
+    # treat as "disabled": exact behaviour, byte-for-byte identical to
+    # this feature not existing. See that file's MERGE-GRID
+    # QUANTIZATION note (above dist/5's own section) for the mechanism
+    # and why these three specific quantities.
+    grounding_cfg = config.get("grounding", {})
+    position_merge_grid = grounding_cfg.get("position_merge_grid", 0.0)
+    battery_merge_grid = grounding_cfg.get("battery_merge_grid", 0.0)
+    time_merge_grid = grounding_cfg.get("time_merge_grid", 0.0)
+
     z_block = _gaussian_disjunction(
         "z", "do(startMoveto(CP,Triggers,T0),S), ",
         config["noise"]["position"]["discretized_gaussian"])
@@ -120,6 +132,9 @@ def render_prolog(config):
         f"num_samples({_format_number(config['verification']['num_samples'])}).",
         f"bracket_samples({_format_number(config['verification']['bracket_samples'])}).",
         f"crossing_eps({_format_number(config['verification']['crossing_eps'])}).",
+        f"position_merge_grid({_format_number(position_merge_grid)}).",
+        f"battery_merge_grid({_format_number(battery_merge_grid)}).",
+        f"time_merge_grid({_format_number(time_merge_grid)}).",
         "",
         z_block,
         "",

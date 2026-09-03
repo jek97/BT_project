@@ -147,3 +147,26 @@ verification:
                           # detection, which is exact (see bracket_samples below)
   bracket_samples: 60    # collision/obstacle_sighted bracket-scan sample count
   crossing_eps: 0.01     # bisection refinement tolerance, time-units
+
+grounding:
+  # This problem is the one the reactive-redescend grounding blowup was
+  # originally diagnosed on (see FUTUREWORK.md and this project's own
+  # conversation log): each redescend re-plans a NEW leg from a position
+  # and starting battery that are continuous functions of the noise
+  # (z/zt/zbatt) an EARLIER leg resolved, so different worlds essentially
+  # never produce an identical new-leg control-point/start-time/start-
+  # battery term for ProbLog's own (otherwise-automatic) proof-sharing to
+  # find. Rounding these three quantities to the grids below, EXACTLY at
+  # the point a NEW leg reads them (see basic_action_theory.pl's own
+  # MERGE-GRID QUANTIZATION note, and leg_start_battery/3 and
+  # do_node(planWith(...)) for where each is applied), makes worlds that
+  # land close enough together merge for real. Every value WITHIN one leg
+  # is still computed at full float precision -- see that same note.
+  #
+  # All three default to 0 (disabled) elsewhere in this project; this
+  # problem opts in deliberately, as a validated demonstration of the
+  # mechanism -- see the conversation log for the before/after grounding
+  # time this produced.
+  position_merge_grid: 0.5   # metres
+  battery_merge_grid: 5      # percent
+  time_merge_grid: 20        # seconds

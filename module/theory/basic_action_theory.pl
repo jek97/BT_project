@@ -180,61 +180,36 @@ safety_margin(M) :- robot_radius(R), safety_buffer(B), M is R + B.
 % moved with -- see the note above dist/5 in section 1.
 
 % ---------------------------------------------------------------
-% 3. SPLINE -- chained cubic Bezier segments, evaluated in
-%    closed form. ControlPoints = [point(X0,Y0), point(X1,Y1),
-%    point(X2,Y2), point(X3,Y3), point(X4,Y4), ...], length must
-%    be 3k+1 for k segments (segment i uses control points
-%    3i..3i+3). A straight line is the degenerate case where the
-%    interior control points are collinear with the endpoints.
+% 3. SPLINE -- chained cubic Bezier segments. ControlPoints =
+%    [point(X0,Y0), point(X1,Y1), point(X2,Y2), point(X3,Y3),
+%    point(X4,Y4), ...], length must be 3k+1 for k segments (segment i
+%    uses control points 3i..3i+3). A straight line is the degenerate
+%    case where the interior control points are collinear with the
+%    endpoints.
+%
+%    NO Bezier/spline arithmetic is implemented in Prolog any more --
+%    it all lives in exactly ONE place, collision_geometry.py's own
+%    _walk_noisy_point (and the walk_noisy_point/8 black-box predicate
+%    it backs, registered by the :- use_module('./collision_geometry.py')
+%    directive in Section 0, same as first_threshold_crossing_time/8
+%    and friends). This file used to carry its OWN, separate
+%    reimplementation (bezier_point/tangent, spline_point/tangent,
+%    perp_unit, tangent_unit) that had to be kept "identical" to
+%    collision_geometry.py's copy by discipline, not by construction --
+%    a real duplication/drift risk, now removed: walk_noisy_point/8
+%    below IS the foreign predicate (no Prolog clause of that name
+%    exists here), and spline_point/4 is a two-line wrapper calling
+%    the SAME predicate with zero deviation.
 % ---------------------------------------------------------------
-bezier_point(P0x,P0y,P1x,P1y,P2x,P2y,P3x,P3y, U, X, Y) :-
-    Mu is 1-U,
-    X is Mu*Mu*Mu*P0x + 3*Mu*Mu*U*P1x + 3*Mu*U*U*P2x + U*U*U*P3x,
-    Y is Mu*Mu*Mu*P0y + 3*Mu*Mu*U*P1y + 3*Mu*U*U*P2y + U*U*U*P3y.
 
-bezier_tangent(P0x,P0y,P1x,P1y,P2x,P2y,P3x,P3y, U, DX, DY) :-
-    Mu is 1-U,
-    DX is 3*Mu*Mu*(P1x-P0x) + 6*Mu*U*(P2x-P1x) + 3*U*U*(P3x-P2x),
-    DY is 3*Mu*Mu*(P1y-P0y) + 6*Mu*U*(P2y-P1y) + 3*U*U*(P3y-P2y).
-
-spline_num_segments(ControlPoints, NSegs) :-
-    length(ControlPoints, N),
-    NSegs is (N - 1) // 3.
-
-% drop_n(+N, +List, -Rest): Rest is List with its first N elements removed
-drop_n(0, List, List).
-drop_n(N, [_|T], Rest) :- N > 0, N1 is N-1, drop_n(N1, T, Rest).
-
-spline_segment_points(ControlPoints, SegIdx, P0,P1,P2,P3) :-
-    Skip is SegIdx*3,
-    drop_n(Skip, ControlPoints, [P0,P1,P2,P3|_]).
-
-% spline_point(+ControlPoints, +U, -X, -Y): U in [0,1] spans the WHOLE spline
+% spline_point(+ControlPoints, +U, -X, -Y): U in [0,1] spans the WHOLE
+% spline -- the deterministic/nominal point, no noise. Delegates to
+% walk_noisy_point/8 with Z=0.0, Zt=0.0 (no deviation) and T0=0.0,
+% Duration=1.0, T=U (so Frac=U exactly) -- the SAME underlying
+% arithmetic walk_noisy_point/8 itself uses, evaluated at zero
+% deviation rather than a second, independent implementation.
 spline_point(ControlPoints, U, X, Y) :-
-    spline_num_segments(ControlPoints, NSegs),
-    NSegs > 0,
-    SegLen is 1.0 / NSegs,
-    SegIdx0 is min(NSegs-1, floor(U / SegLen)),
-    SegIdx is integer(SegIdx0),
-    LocalU0 is (U - SegIdx*SegLen) / SegLen,
-    LocalU is max(0.0, min(1.0, LocalU0)),
-    spline_segment_points(ControlPoints, SegIdx,
-                           point(P0x,P0y),point(P1x,P1y),
-                           point(P2x,P2y),point(P3x,P3y)),
-    bezier_point(P0x,P0y,P1x,P1y,P2x,P2y,P3x,P3y, LocalU, X, Y).
-
-spline_tangent(ControlPoints, U, DX, DY) :-
-    spline_num_segments(ControlPoints, NSegs),
-    NSegs > 0,
-    SegLen is 1.0 / NSegs,
-    SegIdx0 is min(NSegs-1, floor(U / SegLen)),
-    SegIdx is integer(SegIdx0),
-    LocalU0 is (U - SegIdx*SegLen) / SegLen,
-    LocalU is max(0.0, min(1.0, LocalU0)),
-    spline_segment_points(ControlPoints, SegIdx,
-                           point(P0x,P0y),point(P1x,P1y),
-                           point(P2x,P2y),point(P3x,P3y)),
-    bezier_tangent(P0x,P0y,P1x,P1y,P2x,P2y,P3x,P3y, LocalU, DX, DY).
+    walk_noisy_point(ControlPoints, 0.0, 1.0, 0.0, 0.0, U, X, Y).
 
 % arc length via one-time numeric integration (deterministic,
 % computed ONCE per distinct ControlPoints -- not a random draw,
@@ -777,29 +752,21 @@ earliest_of([R1-T1|Rest], Result) :-
 % walk_noisy_point(+CP,+T0,+Duration,+Z,+Zt,+T,-X,-Y): position along
 % the spline at time T, given TWO ALREADY-RESOLVED, INDEPENDENT noise
 % draws (rather than looking them up via z/2 or zt/2 itself): Z (lateral
-% /normal drift, unchanged from before) and Zt (tangential/along-path
-% drift -- a straight metric push along the spline's own tangent
-% direction at each point, NOT a reparametrization of Frac; see
-% collision_geometry.py's _walk_noisy_point for the identical formula
-% and the reasoning for why Option B, a metric offset, was chosen over
-% shifting Frac itself). Factored out of at/4 so the same formula can
-% be reused by first_collision_time's bracket/bisection search below,
-% without re-deriving Z/Zt through a different situation.
-walk_noisy_point(ControlPoints, T0, Duration, Z, Zt, T, X, Y) :-
-    Elapsed0 is T - T0,
-    Elapsed is max(0.0, min(Elapsed0, Duration)),
-    Frac is Elapsed / Duration,
-    spline_point(ControlPoints, Frac, NX, NY),
-    spline_tangent(ControlPoints, Frac, DX, DY),
-    Norm is sqrt(DX*DX + DY*DY),
-    perp_unit(Norm, DX, DY, PerpX, PerpY),
-    tangent_unit(Norm, DX, DY, TanX, TanY),
-    sigma(Sigma),
-    sigma_tangential(SigmaT),
-    Deviation is Z * Sigma * sqrt(Duration) * Frac,
-    TangentDev is Zt * SigmaT * sqrt(Duration) * Frac,
-    X is NX + Deviation*PerpX + TangentDev*TanX,
-    Y is NY + Deviation*PerpY + TangentDev*TanY.
+% /normal drift) and Zt (tangential/along-path drift -- a straight
+% metric push along the spline's own tangent direction at each point,
+% NOT a reparametrization of Frac; see collision_geometry.py's own
+% _walk_noisy_point for the reasoning behind Option B, a metric offset,
+% over shifting Frac itself). NO Prolog clause of this name exists in
+% this file -- this call resolves DIRECTLY against the black-box
+% walk_noisy_point predicate collision_geometry.py registers (see
+% Section 0's own :- use_module directive, and Section 3 above for the
+% full "why this moved" rationale), the SAME way
+% first_threshold_crossing_time/8 below already does for the
+% obstacle-clearance search. Used here so the same formula is reused by
+% first_collision_time's bracket/bisection search below and by at/4,
+% without re-deriving Z/Zt through a different situation, and reused
+% (at Z=Zt=0) by spline_point/4 above -- one formula, one place, both
+% the noisy and the nominal case.
 
 % ---------------------------------------------------------------
 % FIRST-THRESHOLD-CROSSING-TIME -- a NATURAL (not chosen) event: the
@@ -1046,22 +1013,6 @@ at(X,Y,T, do(haltMoveto(T1,_Reason,_Status), S)) :-
 at(X,Y,T, do(interrupt(T1), S)) :-
     Tc is min(T,T1),
     at(X,Y,Tc,S).
-
-% perp_unit(+Norm, +DX, +DY, -PerpX, -PerpY): unit vector perpendicular
-% to tangent (DX,DY); degenerate (near-zero tangent) case gives (0,0)
-perp_unit(Norm, _, _, 0.0, 0.0) :- Norm =< 1.0e-9.
-perp_unit(Norm, DX, DY, PerpX, PerpY) :-
-    Norm > 1.0e-9,
-    PerpX is -DY/Norm, PerpY is DX/Norm.
-
-% tangent_unit(+Norm, +DX, +DY, -TanX, -TanY): unit vector ALONG
-% tangent (DX,DY) itself -- the along-path direction tangential noise
-% is applied in, as opposed to perp_unit's across-path direction;
-% degenerate (near-zero tangent) case gives (0,0), same convention.
-tangent_unit(Norm, _, _, 0.0, 0.0) :- Norm =< 1.0e-9.
-tangent_unit(Norm, DX, DY, TanX, TanY) :-
-    Norm > 1.0e-9,
-    TanX is DX/Norm, TanY is DY/Norm.
 
 % pass-through clause: kept for extensibility, so that additional
 % actions that DON'T affect position (e.g. a future sensing action)

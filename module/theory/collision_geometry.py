@@ -725,6 +725,33 @@ if _HAVE_PROBLOG:
     # does the float() conversion itself. Duration/Z/Zt/Threshold are
     # always the result of `is` arithmetic or float literals in
     # practice, but are taken as "+term" too for the same robustness.
+    # walk_noisy_point(+ControlPoints,+T0,+Duration,+Z,+Zt,+T,-X,-Y):
+    # position along the spline at time T, given two already-resolved
+    # noise draws Z (lateral) and Zt (tangential) -- see this module's
+    # own _walk_noisy_point for the formula. PURE deterministic
+    # arithmetic once Z/Zt are resolved, with no probabilistic content
+    # of its own, same rationale as first_threshold_crossing_time above
+    # for why this lives here rather than as native Prolog: previously
+    # basic_action_theory.pl carried its OWN, separate Bezier/spline/
+    # perp-tangent-unit Prolog reimplementation of this exact formula
+    # (bezier_point/tangent, spline_point/tangent, perp_unit,
+    # tangent_unit), kept "identical" to this file only by discipline,
+    # not by construction -- a real duplication/drift risk. Now
+    # basic_action_theory.pl's own walk_noisy_point/8 IS this predicate
+    # (no Prolog clause of that name exists there any more; ProbLog
+    # resolves the call directly against this module, exactly like
+    # first_threshold_crossing_time/8 already does), and spline_point/4
+    # (the deterministic/nominal-path case) is a two-line Prolog
+    # wrapper calling this SAME predicate with Z=0.0, Zt=0.0 -- there is
+    # only one copy of the spline arithmetic in the whole theory now.
+    # Always succeeds (pure function, no crossing search, no "no
+    # result" case), so always returns exactly one solution.
+    @problog_export_nondet("+list", "+term", "+term", "+term", "+term", "+term", "-float", "-float")
+    def walk_noisy_point(control_points, t0, duration, z, zt, t):
+        cp = [(float(p.args[0]), float(p.args[1])) for p in control_points]
+        x, y = _walk_noisy_point(cp, float(t0), float(duration), float(z), float(zt), float(t))
+        return [(x, y)]
+
     @problog_export_nondet("+list", "+term", "+term", "+term", "+term", "+term", "-float", "-str")
     def first_threshold_crossing_time(control_points, t0, duration, z, zt, threshold):
         cp = [(float(p.args[0]), float(p.args[1])) for p in control_points]

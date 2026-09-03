@@ -81,16 +81,12 @@ noise:
   position:
     sigma: 0.15   # metres per sqrt(time-unit) -- z/2's scale (sigma/1)
     discretized_gaussian:
-      - value: -2.0
-        weight: 0.0606
       - value: -1.0
-        weight: 0.2417
+        weight: 0.25
       - value: 0.0
-        weight: 0.3954
+        weight: 0.5
       - value: 1.0
-        weight: 0.2417
-      - value: 2.0
-        weight: 0.0606
+        weight: 0.25
   tangential:
     # Applied along the spline's own tangent direction at each point
     # (a straight metric push, same Brownian-bridge growth law as
@@ -104,29 +100,21 @@ noise:
     # source actually dominates for your robot.
     sigma: 0.15   # metres per sqrt(time-unit) -- zt/2's scale (sigma_tangential/1)
     discretized_gaussian:
-      - value: -2.0
-        weight: 0.0606
       - value: -1.0
-        weight: 0.2417
+        weight: 0.25
       - value: 0.0
-        weight: 0.3954
+        weight: 0.5
       - value: 1.0
-        weight: 0.2417
-      - value: 2.0
-        weight: 0.0606
+        weight: 0.25
   battery:
     sigma: 0.5   # percent per sqrt(time-unit) -- zbatt/1's scale (sigma_battery/1)
     discretized_gaussian:
-      - value: -2.0
-        weight: 0.0606
       - value: -1.0
-        weight: 0.2417
+        weight: 0.25
       - value: 0.0
-        weight: 0.3954
+        weight: 0.5
       - value: 1.0
-        weight: 0.2417
-      - value: 2.0
-        weight: 0.0606
+        weight: 0.25
 
 battery:
   start: 100                # percent -- battery_start/1
@@ -142,3 +130,23 @@ verification:
                           # detection, which is exact (see bracket_samples below)
   bracket_samples: 60    # collision/obstacle_sighted bracket-scan sample count
   crossing_eps: 0.01     # bisection refinement tolerance, time-units
+
+grounding:
+  # Merge-grid quantization -- rounds the state a NEW leg is SEEDED
+  # with (position via planWith, starting battery, starting time) so
+  # that different noise draws which land close enough together
+  # produce an IDENTICAL ground term for ProbLog's own proof-sharing
+  # to merge, instead of every world dragging its own distinct history
+  # forward forever. See basic_action_theory.pl's own MERGE-GRID
+  # QUANTIZATION note (above dist/5's own section) for the full
+  # mechanism -- WITHIN one leg, every value is still computed at full
+  # float precision; quantization happens exactly once per leg
+  # boundary. All three default to 0 (disabled, exact) if this section
+  # is omitted entirely -- every problem in this project now opts in,
+  # coarsened together with the reduced (3-point) noise tables above,
+  # as a deliberate accuracy/tractability tradeoff for the reactive-
+  # redescend grounding investigation (see FUTUREWORK.md and this
+  # project's own conversation log).
+  position_merge_grid: 2.0   # metres
+  battery_merge_grid: 20     # percent
+  time_merge_grid: 45        # seconds

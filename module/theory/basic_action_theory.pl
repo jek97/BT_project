@@ -2104,57 +2104,22 @@ verify_goal_formula :- final_situation(S), goal_formula(S).
 
 % ============================================================
 % 10. QUERIES
+%
+% Trimmed to exactly the six queries actually needed for the
+% reactive-redescend/merge-grid performance investigation: the
+% problem's own goal_formula.pl verification, whether the plan ever
+% ends via collision or battery depletion, and the BT's own three
+% possible outcomes. hit_by/1, first_hit/1, on_track/1, verify_safe/0,
+% and plan_route_blocked/0 are all still DEFINED above (Section 7/8) --
+% only their query(...) declarations were removed, so they simply stay
+% unground/uncomputed (ProbLog only grounds what a query(...) or
+% something IT depends on actually reaches) rather than being deleted
+% outright. Re-add whichever query(...) line(s) you need if per-sample
+% hazard/drift reporting is wanted again later.
 % ============================================================
 query(verify_goal_formula).
+query(any_collision).
+query(any_battery_depletion).
 query(plan_outcome(true)).
 query(plan_outcome(false)).
 query(plan_outcome(world_too_large)).
-query(any_collision).
-query(any_battery_depletion).
-query(verify_safe).
-query(plan_route_blocked).
-query(hit_by(20)).
-
-query(first_hit(0)).
-query(first_hit(1)).
-query(first_hit(2)).
-query(first_hit(3)).
-query(first_hit(4)).
-query(first_hit(5)).
-query(first_hit(6)).
-query(first_hit(7)).
-query(first_hit(8)).
-query(first_hit(9)).
-query(first_hit(10)).
-query(first_hit(11)).
-query(first_hit(12)).
-query(first_hit(13)).
-query(first_hit(14)).
-query(first_hit(15)).
-query(first_hit(16)).
-query(first_hit(17)).
-query(first_hit(18)).
-query(first_hit(19)).
-query(first_hit(20)).
-
-query(on_track(0)).
-query(on_track(1)).
-query(on_track(2)).
-query(on_track(3)).
-query(on_track(4)).
-query(on_track(5)).
-query(on_track(6)).
-query(on_track(7)).
-query(on_track(8)).
-query(on_track(9)).
-query(on_track(10)).
-query(on_track(11)).
-query(on_track(12)).
-query(on_track(13)).
-query(on_track(14)).
-query(on_track(15)).
-query(on_track(16)).
-query(on_track(17)).
-query(on_track(18)).
-query(on_track(19)).
-query(on_track(20)).

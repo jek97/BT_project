@@ -1,0 +1,77 @@
+<?xml version="1.0"?>
+<!--
+  behavior_tree.xml (problem4)
+
+  Deliberately the SIMPLEST possible reactive-redescend tree this
+  theory can express: no obstacle geometry anywhere, exactly ONE
+  reactive trigger (battery_below), and ONE fallback with two plain
+  branches. Built for the performance investigation into why
+  evaluate_plan/4 blows up ProbLog's exact inference once a
+  fallback_node's branching gets chained across two or more hops:
+  this problem isolates that mechanism from every other variable
+  (obstacle count, polygon-restriction geometry, guard style) that
+  earlier testing already ruled out one at a time.
+
+  Fallback:
+    Sequence (branch 1: battery allows it):
+      BatteryOver threshold=70 : only try the goal leg if battery is
+        currently above 70%, checked FRESH each descent (a live state
+        check, not history-based), so it correctly fails on its own
+        once battery drops below 70% partway through branch 1's walk.
+      PlanStraight goal=22.275;2.075
+      MoveTo triggers=collision;battery;battery_below(70)
+    Sequence (branch 2: go home):
+      PlanStraight goal=2.275;2.075
+      MoveTo triggers=collision;battery
+
+  Branch 1's own battery_below(70) trigger is classified `reactive`
+  (leg_status/8's catch-all: not completed, not crashed, not
+  battery_depleted), so hitting it makes evaluate_plan/4 re-descend
+  this WHOLE tree from the halted situation: on that fresh descent,
+  branch 1's own BatteryOver threshold=70 guard now reads the CURRENT
+  (already-below-70%) battery level and fails immediately, so the
+  fallback correctly falls through to branch 2 (go home) on this SAME
+  re-descent, without needing any history-based guard (unlike
+  problem3's obstacle_on_path, battery level is a simple state fluent
+  that's always meaningfully checkable, live, with no "was there ever
+  a walk in progress" precondition to work around).
+
+  Start position (2.275,2.075, this problem's own config.yaml) IS the
+  "home" this tree returns to; the goal (22.275,2.075) is 20 metres
+  east of it, tuned together with config.yaml's raised
+  moving_drain_rate (5.0%/time-unit, vs. problem0-3's shared 0.5) so
+  the walk crosses the 70% threshold well before reaching the goal.
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Fallback name="BatteryFallback">
+      <Sequence name="TryGoal">
+        <BatteryOver threshold="70"/>
+        <PlanStraight goal="22.275;2.075" control_points="{cp}"/>
+        <MoveTo control_points="{cp}" triggers="collision;battery;battery_below(70)"/>
+      </Sequence>
+      <Sequence name="GoHome">
+        <PlanStraight goal="2.275;2.075" control_points="{cp2}"/>
+        <MoveTo control_points="{cp2}" triggers="collision;battery"/>
+      </Sequence>
+    </Fallback>
+  </BehaviorTree>
+
+  <TreeNodesModel>
+    <Action ID="MoveTo">
+      <input_port name="control_points" type="std::vector&lt;Point&gt;"/>
+      <input_port name="triggers" type="std::vector&lt;std::string&gt;"/>
+      <output_port name="reason" type="std::string"/>
+      <output_port name="status" type="bool"/>
+    </Action>
+    <Action ID="PlanStraight">
+      <input_port name="goal" type="Point"/>
+      <output_port name="control_points" type="std::vector&lt;Point&gt;"/>
+      <output_port name="reason" type="std::string"/>
+      <output_port name="status" type="bool"/>
+    </Action>
+    <Condition ID="BatteryOver">
+      <input_port name="threshold" type="double"/>
+    </Condition>
+  </TreeNodesModel>
+</root>

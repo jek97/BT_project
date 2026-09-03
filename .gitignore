@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+
+# main.py output: output/<problem>/<problem>_<YYYYMMDD>_<HHMMSS>.{log,png},
+# whole subfolder wiped and regenerated fresh every run
+output/
+
+# main.py's per-run bootstrap: absolute, machine-specific consult paths
+# pointing at whichever --problem was last run -- see
+# module/theory/basic_action_theory.pl's Section 0.
+module/theory/problem_data.pl

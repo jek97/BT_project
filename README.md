@@ -5,9 +5,11 @@ action theory to work.
 
 command to run all
 
-python3 occgrid_to_problog.py my_map.yaml --out obstacles_generated.pl --inline moveto_continuous.pl --start X Y --goal X Y
-# hand-edit control_points/1 in moveto_continuous.pl
-python3 run_plan_continuous_safety.py moveto_continuous.pl
+python3 main.py --problem problem0
+# main.py regenerates every generated file (obstacles/config/plan) and
+# validates goal_formula.pl automatically before each run -- see its
+# own module docstring, and module/theory/basic_action_theory.pl's
+# Section 0, for the current problems/<name>/ + module/ layout.
 
 Introduced battery consumption as a linear decreasing model affected by stochastic error where the buttery consumption rate is dependent by the action being executed.
 

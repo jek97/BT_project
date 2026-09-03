@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<!--
+  behavior_tree.xml (problem1)
+
+  Same map, config, and goal as problem0: the ONLY difference is the
+  planner: PlanStraight (a direct straight-line Bezier, no obstacle
+  avoidance at all) instead of PlanAstar. Useful as a baseline that
+  shows what happens when the nominal path is allowed to pass straight
+  through obstacles rather than routing around them: the safety
+  numbers (any_collision especially) should differ from problem0's.
+
+  goal="11.675;11.525" is a LITERAL, matching this same directory's own
+  goal_formula.pl: see problem0/behavior_tree.xml's own header for
+  the full rationale (identical here, only the planner action differs).
+
+  control_points="{cp}" is BT.cpp's standard blackboard wiring: PlanStraight
+  computes ControlPoints at tick time and writes it to key "cp"; MoveTo
+  reads the same key.
+
+  triggers="collision;battery": same as problem0.
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="GoToGoal">
+      <PlanStraight goal="11.675;11.525" control_points="{cp}"/>
+      <MoveTo control_points="{cp}" triggers="collision;battery"/>
+    </Sequence>
+  </BehaviorTree>
+
+  <TreeNodesModel>
+    <Action ID="MoveTo">
+      <input_port name="control_points" type="std::vector&lt;Point&gt;"/>
+      <input_port name="triggers" type="std::vector&lt;std::string&gt;"/>
+      <output_port name="reason" type="std::string"/>
+      <output_port name="status" type="bool"/>
+    </Action>
+    <Action ID="PlanStraight">
+      <input_port name="goal" type="Point"/>
+      <output_port name="control_points" type="std::vector&lt;Point&gt;"/>
+      <output_port name="reason" type="std::string"/>
+      <output_port name="status" type="bool"/>
+    </Action>
+    <Condition ID="AtGoal">
+      <input_port name="goal" type="Point"/>
+      <input_port name="tolerance" type="double"/>
+    </Condition>
+    <Condition ID="HaltedWith">
+      <input_port name="reason" type="std::string"/>
+    </Condition>
+  </TreeNodesModel>
+</root>

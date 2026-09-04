@@ -17,13 +17,14 @@
   computes ControlPoints at tick time and writes it to key "cp"; MoveTo
   reads the same key.
 
-  triggers="collision;battery": same as problem0.
+  No triggers="..." attribute on the MoveTo below: collision/battery
+  are added automatically now, same as problem0.
 -->
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <Sequence name="GoToGoal">
       <PlanStraight goal="11.675;11.525" control_points="{cp}"/>
-      <MoveTo control_points="{cp}" triggers="collision;battery"/>
+      <MoveTo control_points="{cp}"/>
     </Sequence>
   </BehaviorTree>
 

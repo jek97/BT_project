@@ -12,4 +12,4 @@ plan(fallback_node([reactivesequence(rc1),seq_node([planWith(straight,point(2.27
 % theory.pl's own CONTROL-FLOW REDESCEND TARGETS note for why
 % these live as SEPARATE facts rather than being inlined.
 
-reactive_children(rc1, [cond(battery_over(70.0)),planWith(straight,point(22.275,2.075),CP),moveto_leg(CP,[collision,battery,battery_below(70,rc1)])]).
+reactive_children(rc1, [cond(battery_over(70.0)),planWith(straight,point(22.275,2.075),CP),moveto_leg(CP,[collision,battery,guard_break(battery_over(70.0),rc1)])]).

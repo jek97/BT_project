@@ -26,15 +26,19 @@
   header for the full explanation); no coordinates are ever written
   here.
 
-  triggers="collision;battery": no obstacle_sighted for now, per this
-  project's current instruction; add it here (semicolon separated, same
-  attribute) whenever it's wanted.
+  No triggers="..." attribute on the MoveTo below: collision and
+  battery are added to every leg AUTOMATICALLY by bt_to_prolog.py now
+  (battery only when this problem's own config.yaml has
+  battery.enabled: true) - no obstacle_sighted for now, per this
+  project's current instruction; add obstacle_in_bound(Threshold) (or
+  any other extra trigger) here via a triggers="..." attribute
+  whenever it's wanted.
 -->
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <Sequence name="GoToGoal">
       <PlanAstar goal="11.675;11.525" control_points="{cp}"/>
-      <MoveTo control_points="{cp}" triggers="collision;battery"/>
+      <MoveTo control_points="{cp}"/>
     </Sequence>
   </BehaviorTree>
 

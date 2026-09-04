@@ -659,6 +659,27 @@ first_battery_equal_time(CP,T0,Duration,B0,Zb,Threshold,Tcross) :-
 first_battery_over_time(CP,T0,Duration,B0,Zb,Threshold,T0) :-
     B0 > Threshold.
 
+% battery_at_leg(+T0,+Duration,+Zb,+B0,+T,-Level): Level(T) during ONE
+% moveto leg, as a function of T alone -- the EXACT SAME formula as
+% battery/3's own do(startMoveto(...),S) clause above (leg_start_
+% battery(T0,S,B0) resolved to a plain value, not re-derived from S),
+% just without S, for use by holds_leg/9 further down (which only ever
+% has CP/T0/Duration/Z/Zt/Zb/B0 on hand -- the same flat signature
+% every trigger_crossing_time/11 clause already receives, not a full
+% situation term). MUST be kept in sync BY HAND with battery/3's own
+% do(startMoveto(...),S) clause -- there is no single shared definition
+% because that clause additionally resolves B0 from S via
+% leg_start_battery/3, which this one takes already-resolved.
+battery_at_leg(T0,Duration,Zb,B0,T,Level) :-
+    Elapsed0 is T - T0,
+    Elapsed is max(0.0, min(Elapsed0, Duration)),
+    moving_drain_rate(MovingRate),
+    sigma_battery(SigmaB),
+    Deviation is Zb * SigmaB * Elapsed / sqrt(Duration),
+    NominalDrain is MovingRate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B0 - TotalDrain)).
+
 % ---------------------------------------------------------------
 % TRIGGERS -- the TEMPLATE mechanism. A leg's Triggers argument is
 % the COMPLETE list of halting conditions this leg reacts to --
@@ -830,6 +851,26 @@ trigger_crossing_time(line_of_sight_clear(ObstacleId,GX,GY,Code), CP,T0,Duration
 
 trigger_crossing_time(crosses_segment(SX,SY,GX,GY,Code), CP,T0,Duration,Z,Zt,_Zb,_B0, crosses_segment(SX,SY,GX,GY), Tcross, Code) :-
     first_segment_crossing_time(CP,T0,Duration,Z,Zt,SX,SY,GX,GY,Tcross).
+
+% guard_break(Cond,Code): the GENERIC, AUTOMATICALLY-DERIVED trigger
+% bt_to_prolog.py's guard-derivation pass emits for a MoveTo sitting
+% under a ReactiveSequence/ReactiveFallback ancestor with a Condition
+% left sibling (see that file's own CONTROL-FLOW GUARD DERIVATION
+% note) -- Cond is ALREADY the exact term that must stay TRUE for the
+% guard to keep holding: the bare condition itself for a
+% ReactiveSequence-style "left siblings must all SUCCEED" guard, or
+% neg(Condition) for a ReactiveFallback-style "left siblings must all
+% FAIL" guard (bt_to_prolog.py builds this by NEGATING the actual
+% condition per the required polarity -- and per any <Inverter> in the
+% chain -- rather than by looking up a pre-built "opposite" trigger
+% name, so this works uniformly for every condition in schema.yaml's
+% conditions: list with no per-condition crossing-direction table to
+% keep in sync or leave a gap in). Fires at the first instant Cond
+% stops holding -- see first_becomes_false_time/9 and holds_leg/9
+% further down (right after holds/2's own condition clauses, which
+% holds_leg/9 mirrors).
+trigger_crossing_time(guard_break(Cond,Code), CP,T0,Duration,Z,Zt,Zb,B0, guard_break(Cond), Tcross, Code) :-
+    first_becomes_false_time(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Tcross).
 
 % all_trigger_candidates(+Triggers,...,-Candidates): Candidates is a
 % list of Reason-Time-Code TRIPLES now (was Reason-Time pairs), one
@@ -1712,6 +1753,142 @@ holds(battery_equal(Threshold), S) :-
 holds(battery_over(Threshold), S) :-
     now(T, S), battery(Level, T, S),
     Level > Threshold.
+
+% ---------------------------------------------------------------
+% holds_leg/9: the T-PARAMETERIZED twin of holds/2 above, used ONLY by
+% first_becomes_false_time/9 below (in turn used ONLY by the
+% guard_break(Cond,Code) trigger -- see trigger_crossing_time/11) --
+% NOT part of the do_node/cond() interface itself (holds/2 stays the
+% ONLY thing cond(C) ever calls). holds/2 always asks "is C true RIGHT
+% NOW" via now(T,S) -- which, for an IN-PROGRESS leg's own situation
+% term do(startMoveto(...),SPrev), always returns that leg's own START
+% time T0, never a later instant WITHIN the leg (see the "no bracket-
+% scan/bisection here" note above holds(obstacle_in_bound(...)) further
+% up) -- so it cannot be reused as-is to watch a condition CONTINUOUSLY
+% across a leg's own future. holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,T)
+% asks the SAME question at an EXPLICIT T instead, using the SAME flat
+% (CP,T0,Duration,Z,Zt,Zb,B0) signature every trigger_crossing_time/11
+% clause already receives (no situation term needed at all -- X,Y come
+% from walk_noisy_point/8, battery Level from battery_at_leg/6 above,
+% both already pure functions of T within one leg).
+%
+% ONE clause per condition in schema.yaml's conditions: list that can
+% MEANINGFULLY vary within a single leg (i.e. everything except
+% HaltedWith, which is history-based and cannot change mid-leg --
+% bt_to_prolog.py's own guard-derivation pass rejects HaltedWith as an
+% auto-derived guard BEFORE this predicate is ever reached, precisely
+% to avoid a missing clause here silently reading as "already false at
+% T0"). Adding a new schema.yaml condition later needs a matching
+% clause HERE for it to be usable as an automatically-derived reactive
+% guard -- or, if it genuinely can't vary mid-leg either, adding it to
+% _NON_CONTINUOUS_CONDITIONS in bt_to_prolog.py instead, same as
+% HaltedWith.
+holds_leg(and(P,Q), CP,T0,Duration,Z,Zt,Zb,B0,T) :-
+    holds_leg(P,CP,T0,Duration,Z,Zt,Zb,B0,T), holds_leg(Q,CP,T0,Duration,Z,Zt,Zb,B0,T).
+holds_leg(or(P,Q), CP,T0,Duration,Z,Zt,Zb,B0,T) :-
+    holds_leg(P,CP,T0,Duration,Z,Zt,Zb,B0,T) ; holds_leg(Q,CP,T0,Duration,Z,Zt,Zb,B0,T).
+holds_leg(neg(P), CP,T0,Duration,Z,Zt,Zb,B0,T) :-
+    \+ holds_leg(P,CP,T0,Duration,Z,Zt,Zb,B0,T).
+
+holds_leg(at_goal(GX,GY,Tol), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+    walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
+    dist(X,Y,GX,GY,D), D =< Tol.
+
+holds_leg(obstacle_in_bound(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+    walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
+    obstacle_within_threshold(X,Y,Threshold).
+
+holds_leg(obstacle_on_path(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+    walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
+    obstacle_on_path_within_threshold(CP,T0,Duration,Z,Zt,X,Y,Threshold).
+
+holds_leg(line_of_sight_clear(ObstacleId,GX,GY), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+    walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
+    line_of_sight_clear(X,Y,ObstacleId,GX,GY).
+
+holds_leg(battery_below(Threshold), _CP,T0,Duration,_Z,_Zt,Zb,B0,T) :-
+    battery_at_leg(T0,Duration,Zb,B0,T,Level), Level < Threshold.
+holds_leg(battery_equal(Threshold), _CP,T0,Duration,_Z,_Zt,Zb,B0,T) :-
+    battery_at_leg(T0,Duration,Zb,B0,T,Level), Level =:= Threshold.
+holds_leg(battery_over(Threshold), _CP,T0,Duration,_Z,_Zt,Zb,B0,T) :-
+    battery_at_leg(T0,Duration,Zb,B0,T,Level), Level > Threshold.
+
+% first_becomes_false_time(+Cond,+CP,+T0,+Duration,+Z,+Zt,+Zb,+B0,
+% -Tcross): the FIRST instant in (T0,T0+Duration] that Cond (already
+% polarity-adjusted by bt_to_prolog.py -- see guard_break/2's own note
+% in trigger_crossing_time/11 above) stops holding, given it holds at
+% T0 -- the same "already true at T0 / genuine future search" two-shape
+% convention every other first_*_time predicate in this file already
+% follows (two MUTUALLY EXCLUSIVE clauses, on \+holds_leg(...,T0) vs
+% holds_leg(...,T0), no cut needed -- same style as first_battery_
+% below_time above), just GENERIC over any holds_leg/9-recognized Cond
+% instead of one bespoke formula per condition. FAILS (no crossing) if
+% Cond holds for the WHOLE walk -- same "absence, not sentinel"
+% convention as everywhere else in this file.
+%
+% Bracket-scans bracket_samples/1 equal steps (the SAME config knob
+% first_threshold_crossing_time's own black-box search already uses --
+% see Section 0/verification.bracket_samples), then bisects the found
+% bracket down to crossing_eps/1 -- returning the HIGH (verified-FALSE)
+% end of the final bracket, never the low end or the midpoint, so a
+% merge-grid-quantized restart seeded from Tcross is never seeded
+% slightly EARLY (i.e. while Cond might still actually hold) -- same
+% "never let approximation look safer than reality" convention as
+% quantize_down/3.
+first_becomes_false_time(Cond,CP,T0,Duration,Z,Zt,Zb,B0,T0) :-
+    \+ holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,T0).
+first_becomes_false_time(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Tcross) :-
+    holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,T0),
+    bracket_samples(N),
+    TEnd is T0 + Duration,
+    guard_bracket_scan(Cond,CP,T0,Duration,Z,Zt,Zb,B0,N,1,TEnd,T0,Tlo,Thi),
+    crossing_eps(Eps),
+    guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tlo,Thi,Tcross).
+
+% guard_bracket_scan(...,+N,+I,+TEnd,+Tprev,-Tlo,-Thi): walk forward
+% from I=1 to N, one bracket_samples/1-th of the way from T0 to TEnd
+% each step, stopping at the FIRST step where Cond has flipped from
+% true (Tprev) to false (the current sample) -- Tlo/Thi bracket the
+% crossing. Fails (no crossing anywhere in the scan) once I exceeds N,
+% exactly mirroring every other first_*_time predicate's own "fails if
+% it never happens" convention -- Cond held at every single sample.
+% TWO MUTUALLY EXCLUSIVE clauses (on holds_leg(...,Ti) succeeding or
+% failing) rather than if-then-else -- ProbLog's own Prolog dialect
+% doesn't support '->'/2, same reason every other multi-case predicate
+% in this file (e.g. first_battery_below_time above) is written this
+% way instead.
+guard_bracket_scan(Cond,CP,T0,Duration,Z,Zt,Zb,B0,N,I,TEnd,Tprev,Tlo,Thi) :-
+    I =< N,
+    Ti is T0 + (TEnd-T0) * I / N,
+    holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Ti),
+    I1 is I + 1,
+    guard_bracket_scan(Cond,CP,T0,Duration,Z,Zt,Zb,B0,N,I1,TEnd,Ti,Tlo,Thi).
+guard_bracket_scan(Cond,CP,T0,Duration,Z,Zt,Zb,B0,N,I,TEnd,Tprev,Tprev,Ti) :-
+    I =< N,
+    Ti is T0 + (TEnd-T0) * I / N,
+    \+ holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Ti).
+
+% guard_bisect(...,+Eps,+Tlo,+Thi,-Tcross): standard bisection --
+% invariant Cond holds at Tlo, doesn't hold at Thi; narrows until the
+% bracket is under Eps wide, then reports the FALSE end (see
+% first_becomes_false_time's own note on why the high end, not the
+% midpoint or the low end). Same mutually-exclusive-clauses style as
+% guard_bracket_scan above, no '->'/2.
+guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tlo,Thi,Thi) :-
+    Width is Thi - Tlo,
+    Width =< Eps.
+guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tlo,Thi,Tcross) :-
+    Width is Thi - Tlo,
+    Width > Eps,
+    Tmid is (Tlo + Thi) / 2,
+    holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Tmid),
+    guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tmid,Thi,Tcross).
+guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tlo,Thi,Tcross) :-
+    Width is Thi - Tlo,
+    Width > Eps,
+    Tmid is (Tlo + Thi) / 2,
+    \+ holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Tmid),
+    guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tlo,Tmid,Tcross).
 
 % ---------------------------------------------------------------
 % 8. VERIFICATION-TIME SAMPLING (NOT part of the action theory) --

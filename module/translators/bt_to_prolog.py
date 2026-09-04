@@ -68,6 +68,44 @@ port TYPES, not a serialization -- see its own note pointing here):
     double / string     the attribute's own text, parsed by Python's
                          float()/left as-is respectively
 
+CONTROL-FLOW GUARD DERIVATION: a MoveTo's own Triggers list is no
+longer entirely hand-typed. For every <MoveTo>, this file now walks
+UP the tree from it to the root; at each ReactiveSequence/
+ReactiveFallback ancestor, every LEFT SIBLING of the branch leading to
+the MoveTo (optionally wrapped in one or more <Inverter>) that reduces
+to a single Condition leaf becomes an automatically-derived guard --
+a Sequence-shaped ancestor requires its left siblings to stay TRUE
+(interrupts on becoming false), a Fallback-shaped one requires them to
+stay FALSE (interrupts on becoming true; each <Inverter> flips this
+once), and the guard is tagged with THAT SPECIFIC ancestor's own code,
+not necessarily the nearest enclosing reactive composite (two nested
+reactive ancestors contributing guards to the same MoveTo get two
+DIFFERENT codes -- see _reduce_guard_condition's own note). Rather
+than looking up a pre-built "opposite" trigger name per condition
+(which would need both crossing directions hand-implemented for every
+condition, and silently do the wrong thing for any gap), the required
+condition is built by NEGATING the actual Condition term when the
+guard's polarity calls for it (reusing holds/2's own neg/1
+combinator), and basic_action_theory.pl's guard_break(Cond,Code)
+trigger + holds_leg/9 do a GENERIC bracket-scan+bisection search for
+when THAT EXACT term stops holding -- see that file's own note above
+holds_leg/9. A left sibling that is a memory-level (plain Sequence/
+Fallback) guard, or that reduces to a HISTORY-based condition (e.g.
+HaltedWith -- see _NON_CONTINUOUS_CONDITIONS), or that reduces to
+neither a Condition leaf nor an <Inverter> chain over one, produces no
+Triggers entry / a hard BTValidationError respectively -- see
+_reduce_guard_condition.
+
+Every MoveTo also gets `collision` and (when this problem's own
+config.yaml has battery.enabled: true) `battery` ADDED AUTOMATICALLY,
+regardless of what its own triggers="..." attribute says -- these are
+universal physical hazards, not BT-structural guards, so the tree
+author no longer has to spell them out (see _translate_leaf's own
+moveto_leg branch). The triggers port itself is now OPTIONAL and
+purely ADDITIVE: still there for leg-intrinsic termination conditions
+that aren't derivable from tree structure at all (e.g. a Bug-algorithm
+leg's own line_of_sight_clear/crosses_segment stopping rule).
+
 VALIDATION IS A HARD FAILURE, not a warning: an unknown node tag, a
 missing required port, an unrecognized attribute (anything not a
 declared port, other than BT.cpp's own universal `name` display
@@ -143,6 +181,22 @@ _CONTROL_FLOW = {"Sequence": "seq_node", "Fallback": "fallback_node"}
 # reasoning plan(Node) itself already relies on). Handled as its own
 # branch in _translate_node, not via _CONTROL_FLOW's simple lookup.
 _REACTIVE_CONTROL_FLOW = {"ReactiveSequence": "reactivesequence", "ReactiveFallback": "reactivefallback"}
+
+# Condition ids that are HISTORY-based rather than a live, continuous
+# fluent -- they cannot change WHILE a leg is running (nothing appends
+# to the situation history until the CURRENT leg itself halts), so
+# there is nothing for a crossing-search to ever watch: the composite
+# that contains one already checked it, ONCE, before ever descending
+# into this branch. Excluded from automatic guard-trigger derivation
+# (see _reduce_guard_condition) for exactly that reason -- NOT because
+# it's unsupported, but because "make it reactive" would be a no-op at
+# best; basic_action_theory.pl's holds_leg/9 (the generic engine behind
+# guard derivation) deliberately has NO clause for it either, so this
+# exclusion also prevents a missing-clause silently reading as "already
+# false at T0" there. A future condition added to schema.yaml that is
+# similarly history-based (not a function of the CURRENT leg's own
+# position/battery) belongs here too.
+_NON_CONTINUOUS_CONDITIONS = {"HaltedWith"}
 
 # Trigger-list functors that are REACTIVE-classified in leg_status/9
 # (basic_action_theory.pl) -- i.e. everything except the two original,
@@ -303,6 +357,21 @@ def _is_battery_trigger(token):
     return functor == "battery" or functor.startswith("battery_")
 
 
+_BATTERY_CONDITION_RE = re.compile(r"\bbattery_(below|equal|over)\(")
+
+
+def _guard_condition_mentions_battery(cond_term):
+    """True if cond_term (an auto-derived guard's condition text, e.g.
+    "battery_over(70.0)" or "neg(battery_over(70.0))") tests a battery
+    threshold -- the SAME "battery.enabled: false means battery can
+    never halt a walk" rule _is_battery_trigger enforces for manually-
+    typed trigger tokens above, extended to cover auto-derived
+    guard_break(Cond,Code) ones, whose OUTER functor is guard_break/
+    neg, not battery_*, so _is_battery_trigger's own functor-prefix
+    check wouldn't catch it."""
+    return _BATTERY_CONDITION_RE.search(cond_term) is not None
+
+
 def _append_reactive_code(token, reactive_code):
     """token is a Triggers-list entry whose functor is in
     _REACTIVE_TRIGGER_FUNCTORS (e.g. "battery_below(70)" or the bare
@@ -315,7 +384,76 @@ def _append_reactive_code(token, reactive_code):
     return f"{token[:-1]},{reactive_code})"
 
 
-def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, reactive_code):
+def _leaf_condition_term(tag, attrs):
+    """The BARE Prolog condition term for a <Condition> leaf (e.g.
+    "battery_over(70.0)"), WITHOUT the cond(...) wrapper -- shared by
+    _translate_leaf (which wraps it in cond(...) for a genuine, one-
+    shot cond() leaf) and _reduce_guard_condition below (which wraps
+    it in neg(...) instead, or leaves it bare, depending on the
+    required guard polarity). attrs must already be validated (see
+    _validate_ports) against tag's own port_specs."""
+    info = _CONDITION_DISPATCH[tag]
+    if info["kind"] == "single_float_port":
+        value = float(attrs[info["port"]])
+        return f"{info['functor']}({value})"
+    if info["kind"] == "halted_with_cond":
+        reason = attrs["reason"].strip()
+        return f"halted_with_cond({reason})"
+    if info["kind"] == "line_of_sight_clear_cond":
+        obstacle_id = attrs["obstacle_id"].strip()
+        gx, gy = _point_xy(attrs["goal"], tag, "goal")
+        return f"line_of_sight_clear({obstacle_id},{gx},{gy})"
+    if info["kind"] == "at_goal_cond":
+        gx, gy = _point_xy(attrs["goal"], tag, "goal")
+        tolerance = float(attrs["tolerance"])
+        return f"at_goal({gx},{gy},{tolerance})"
+    raise BTValidationError(f"Unhandled condition kind for <{tag}>.")
+
+
+def _reduce_guard_condition(elem, required_polarity, schema_ports):
+    """A left sibling (under a ReactiveSequence/ReactiveFallback) of
+    the branch leading to some reactively-guarded Action, reduced to
+    the SINGLE Prolog condition term that must stay TRUE for the guard
+    to keep holding -- see the module docstring's CONTROL-FLOW GUARD
+    DERIVATION note. required_polarity is what Step 1 (Sequence-shaped
+    ancestor -> left siblings must SUCCEED -> True; Fallback-shaped ->
+    must FAIL -> False) demands BEFORE accounting for any <Inverter>
+    wrapping -- each Inverter layer flips it once, since Inverter(C)
+    succeeds iff C fails.
+
+    Returns None (SKIP -- no guard derived, no error) for a left
+    sibling that can't be automatically watched: an Action (e.g.
+    PlanStraight, a completely ordinary left sibling of a MoveTo -- see
+    problem4's own TryGoal branch) or a composite, because once it has
+    SUCCEEDED it stays succeeded for the rest of the leg (an already-
+    completed action never retroactively fails), so it can never
+    supply the SUCCESS->FAILURE / FAILURE->SUCCESS transition a guard
+    interrupt needs -- there is nothing WRONG with such a sibling, it
+    simply isn't a source of a live interrupt, same as a condition in
+    _NON_CONTINUOUS_CONDITIONS (history-based, e.g. HaltedWith -- it
+    already gated entry into this branch, once, and can't change mid-
+    leg either). Only a (possibly Inverter-wrapped) Condition leaf that
+    CAN vary within a leg produces an actual guard term.
+
+    Still raises BTValidationError for a genuinely MALFORMED <Inverter>
+    (BT.cpp decorators always take exactly one child) -- a real
+    structural bug, independent of guard derivation."""
+    tag = elem.tag
+    if tag == "Inverter":
+        children = list(elem)
+        if len(children) != 1:
+            raise BTValidationError(
+                f"<Inverter> must have exactly one child (found "
+                f"{len(children)}).")
+        return _reduce_guard_condition(children[0], not required_polarity, schema_ports)
+    if tag in _NON_CONTINUOUS_CONDITIONS or tag not in _CONDITION_DISPATCH:
+        return None
+    attrs = _validate_ports(tag, elem, schema_ports[tag])
+    cond_term = _leaf_condition_term(tag, attrs)
+    return cond_term if required_polarity else f"neg({cond_term})"
+
+
+def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, reactive_code, guard_stack):
     attrs = _validate_ports(tag, elem, port_specs)
 
     if tag in _ACTION_DISPATCH:
@@ -332,12 +470,22 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             var_pool.consumers.add(key)
             var_pool.note_key_scope(key, reactive_code)
             cp_var = var_pool.var_for(key)
-            trigger_tokens = [t.strip() for t in attrs["triggers"].split(";") if t.strip()]
+
+            # Manual, EXPLICIT extras only -- collision/battery are no
+            # longer written here (see below); the port itself is now
+            # OPTIONAL (schema.yaml's triggers required: false), so an
+            # absent attribute is just "no extras".
+            manual_tokens = [t.strip() for t in attrs.get("triggers", "").split(";") if t.strip()]
             if not battery_enabled:
-                trigger_tokens = [t for t in trigger_tokens if not _is_battery_trigger(t)]
-            tagged_tokens = []
-            for t in trigger_tokens:
+                manual_tokens = [t for t in manual_tokens if not _is_battery_trigger(t)]
+            tagged_manual = []
+            for t in manual_tokens:
                 functor = t.split("(", 1)[0].strip()
+                if functor in ("collision", "battery"):
+                    # Backward-compatible with older trees that still
+                    # spell these out -- covered by default_tokens
+                    # below either way, so skip rather than duplicate.
+                    continue
                 if functor in _REACTIVE_TRIGGER_FUNCTORS:
                     if reactive_code is None:
                         raise BTValidationError(
@@ -352,10 +500,32 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
                             f"REDESCEND TARGETS note). Wrap this MoveTo (or "
                             f"an ancestor of it) in a ReactiveSequence/"
                             f"ReactiveFallback, or drop '{t}' from triggers.")
-                    tagged_tokens.append(_append_reactive_code(t, reactive_code))
+                    tagged_manual.append(_append_reactive_code(t, reactive_code))
                 else:
-                    tagged_tokens.append(t)
-            triggers = "[" + ",".join(tagged_tokens) + "]"
+                    tagged_manual.append(t)
+
+            # Structural guards, auto-derived from every enclosing
+            # ReactiveSequence/ReactiveFallback's own left siblings --
+            # see the module docstring's CONTROL-FLOW GUARD DERIVATION
+            # note. Each entry in guard_stack is already the exact,
+            # polarity-adjusted condition term (see
+            # _reduce_guard_condition) paired with the SPECIFIC
+            # ancestor level's own code (NOT necessarily the nearest
+            # enclosing one -- two nested reactive ancestors can
+            # contribute two guards with two DIFFERENT codes here).
+            derived_tokens = [
+                f"guard_break({cond_term},{code})"
+                for cond_term, code in guard_stack
+                if battery_enabled or not _guard_condition_mentions_battery(cond_term)
+            ]
+
+            # Universal physical hazards -- ALWAYS collision, battery
+            # (the fixed 0%-depletion one) only if this problem models
+            # battery at all. No longer something the tree author has
+            # to write.
+            default_tokens = ["collision"] + (["battery"] if battery_enabled else [])
+
+            triggers = "[" + ",".join(default_tokens + tagged_manual + derived_tokens) + "]"
             return f"moveto_leg({cp_var},{triggers})"
 
         if info["kind"] == "planWith":
@@ -401,27 +571,13 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             return f"planWith(follow_boarder({obstacle_id},{offset}),point(0.0,0.0),{cp_var})"
 
     if tag in _CONDITION_DISPATCH:
-        info = _CONDITION_DISPATCH[tag]
-        if info["kind"] == "single_float_port":
-            value = float(attrs[info["port"]])
-            return f"cond({info['functor']}({value}))"
-        if info["kind"] == "halted_with_cond":
-            reason = attrs["reason"].strip()
-            return f"cond(halted_with_cond({reason}))"
-        if info["kind"] == "line_of_sight_clear_cond":
-            obstacle_id = attrs["obstacle_id"].strip()
-            gx, gy = _point_xy(attrs["goal"], tag, "goal")
-            return f"cond(line_of_sight_clear({obstacle_id},{gx},{gy}))"
-        if info["kind"] == "at_goal_cond":
-            gx, gy = _point_xy(attrs["goal"], tag, "goal")
-            tolerance = float(attrs["tolerance"])
-            return f"cond(at_goal({gx},{gy},{tolerance}))"
+        return f"cond({_leaf_condition_term(tag, attrs)})"
 
     raise BTValidationError(f"Unhandled schema entry '{tag}' -- add it to "
                              f"_ACTION_DISPATCH/_CONDITION_DISPATCH.")
 
 
-def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code):
+def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code, guard_stack):
     tag = elem.tag
 
     if tag in _CONTROL_FLOW:
@@ -433,12 +589,16 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
         children = list(elem)
         if not children:
             raise BTValidationError(f"<{tag}> has no children.")
-        # Plain Sequence/Fallback -- pass the CURRENT reactive_code
-        # through UNCHANGED (they never catch/redescend on their own,
-        # so they don't start a new reactive scope -- see
+        # Plain Sequence/Fallback -- pass the CURRENT reactive_code AND
+        # guard_stack through UNCHANGED. They never catch/redescend on
+        # their own, so they don't start a new reactive scope (see
         # basic_action_theory.pl's own CONTROL-FLOW REDESCEND TARGETS
-        # note).
-        child_terms = [_translate_node(c, schema_ports, var_pool, battery_enabled, reactive_code)
+        # note); their own left siblings are ONE-SHOT (checked once on
+        # descent, via the cond() already sitting in the tree at that
+        # position) rather than live guards, so they contribute nothing
+        # to guard_stack either -- see the module docstring's CONTROL-
+        # FLOW GUARD DERIVATION note.
+        child_terms = [_translate_node(c, schema_ports, var_pool, battery_enabled, reactive_code, guard_stack)
                        for c in children]
         functor = _CONTROL_FLOW[tag]
         return f"{functor}([{','.join(child_terms)}])"
@@ -458,9 +618,37 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
         # translated and then factored OUT into their own
         # reactive_children/2 fact (see _VarPool's own note) rather
         # than inlined -- the returned term references only the code.
+        #
+        # ALSO: this is exactly where automatic guard derivation
+        # happens (see the module docstring's CONTROL-FLOW GUARD
+        # DERIVATION note). required_polarity is this level's own
+        # baseline: a ReactiveSequence's left siblings must all
+        # SUCCEED (True), a ReactiveFallback's must all FAIL (False).
+        # For each child index i, every EARLIER sibling (index < i) is
+        # reduced to a guard condition and appended to a FRESH
+        # guard_stack used ONLY for translating child i -- siblings
+        # AFTER i are never guards on it (Step 1), and each child's own
+        # guard entries are tagged with THIS level's own_code, added on
+        # top of (not replacing) whatever guard_stack already carried
+        # in from enclosing levels, so a MoveTo nested under two
+        # reactive ancestors accumulates guards -- and codes -- from
+        # BOTH. A sibling that _reduce_guard_condition can't turn into
+        # a live guard (e.g. an ordinary Action like PlanStraight --
+        # see its own note) returns None and is simply skipped, not an
+        # error: most Sequence/ReactiveSequence children are actions,
+        # not conditions, and that's completely normal.
         own_code = var_pool.next_reactive_code()
-        child_terms = [_translate_node(c, schema_ports, var_pool, battery_enabled, own_code)
-                       for c in children]
+        required_polarity = (tag == "ReactiveSequence")
+        child_terms = []
+        for i, child in enumerate(children):
+            own_level_guards = []
+            for sibling in children[:i]:
+                cond_term = _reduce_guard_condition(sibling, required_polarity, schema_ports)
+                if cond_term is not None:
+                    own_level_guards.append((cond_term, own_code))
+            child_terms.append(_translate_node(
+                child, schema_ports, var_pool, battery_enabled, own_code,
+                guard_stack + own_level_guards))
         var_pool.reactive_facts.append((own_code, child_terms))
         functor = _REACTIVE_CONTROL_FLOW[tag]
         return f"{functor}({own_code})"
@@ -471,7 +659,7 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
             f"ReactiveSequence/ReactiveFallback and not an action/condition "
             f"'id' in module/contracts/schema.yaml.")
 
-    return _translate_leaf(tag, elem, None, schema_ports[tag], var_pool, battery_enabled, reactive_code)
+    return _translate_leaf(tag, elem, None, schema_ports[tag], var_pool, battery_enabled, reactive_code, guard_stack)
 
 
 def _find_tree_root(xml_root):
@@ -528,7 +716,7 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
 
     tree_root_elem = _find_tree_root(xml_root)
     var_pool = _VarPool()
-    node_text = _translate_node(tree_root_elem, schema_ports, var_pool, battery_enabled, None)
+    node_text = _translate_node(tree_root_elem, schema_ports, var_pool, battery_enabled, None, [])
 
     # A MoveTo whose control_points key has no PlanAstar/PlanStraight
     # producer anywhere in the tree would silently leave CP unbound --

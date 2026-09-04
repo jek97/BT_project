@@ -783,66 +783,88 @@ first_battery_over_time(CP,T0,Duration,B0,Zb,Threshold,T0) :-
 % own note on why "has my trajectory crossed this segment" doesn't
 % have a meaningful point-in-time reading the way the others do.
 % ---------------------------------------------------------------
-trigger_crossing_time(collision, CP,T0,Duration,Z,Zt,_Zb,_B0, crashed(ObstacleId), Tcross) :-
+% trigger_crossing_time/11's LAST argument, Code, is the REDESCEND-
+% TARGET CODE this specific trigger OCCURRENCE was tagged with by
+% bt_to_prolog.py at translation time -- see the CONTROL-FLOW
+% REDESCEND TARGETS note above do_node(reactivesequence(...)) further
+% down for the full mechanism. collision/battery (never reactive --
+% they classify straight to false in leg_status, never to a
+% reactive(Code) status) always produce Code=none, since nothing ever
+% reads it for them. Every genuinely reactive-classified trigger name
+% below (obstacle_in_bound, obstacle_on_path, battery_below,
+% battery_equal, battery_over, line_of_sight_clear, crosses_segment)
+% now takes Code as an EXTRA trailing argument in the Triggers list
+% ITSELF (e.g. battery_below(70,rc3), not battery_below(70)) -- bt_to_
+% prolog.py appends it automatically to every reactive trigger token,
+% based on which ReactiveSequence/ReactiveFallback (if any) currently
+% encloses that leg, so nothing about how a BT.xml author writes
+% triggers="..." needs to change; Code just rides along as a plain
+% INPUT here, unify-passed straight through to the OUTPUT Reason-Time
+% pair's own third slot (Reason's own shape, e.g. battery_under
+% (Threshold), is UNCHANGED -- Code is carried ALONGSIDE it, not
+% embedded inside it, so halted_with/2 and everything built on it
+% keeps working exactly as before).
+trigger_crossing_time(collision, CP,T0,Duration,Z,Zt,_Zb,_B0, crashed(ObstacleId), Tcross, none) :-
     first_collision_time(CP,T0,Duration,Z,Zt,Tcross,ObstacleId).
 
-trigger_crossing_time(battery, CP,T0,Duration,_Z,_Zt,Zb,B0, battery_depleted, Tcross) :-
+trigger_crossing_time(battery, CP,T0,Duration,_Z,_Zt,Zb,B0, battery_depleted, Tcross, none) :-
     first_battery_depletion_time(CP,T0,Duration,B0,Zb,Tcross).
 
-trigger_crossing_time(obstacle_in_bound(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0, obstacle_in_bound(Threshold,ObstacleId), Tcross) :-
+trigger_crossing_time(obstacle_in_bound(Threshold,Code), CP,T0,Duration,Z,Zt,_Zb,_B0, obstacle_in_bound(Threshold,ObstacleId), Tcross, Code) :-
     first_threshold_crossing_time(CP,T0,Duration,Z,Zt,Threshold,Tcross,ObstacleId).
 
-trigger_crossing_time(obstacle_on_path(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0, obstacle_on_path(Threshold,ObstacleId), Tcross) :-
+trigger_crossing_time(obstacle_on_path(Threshold,Code), CP,T0,Duration,Z,Zt,_Zb,_B0, obstacle_on_path(Threshold,ObstacleId), Tcross, Code) :-
     first_on_path_crossing_time(CP,T0,Duration,Z,Zt,Threshold,Tcross,ObstacleId).
 
-trigger_crossing_time(battery_below(Threshold), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_under(Threshold), Tcross) :-
+trigger_crossing_time(battery_below(Threshold,Code), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_under(Threshold), Tcross, Code) :-
     first_battery_below_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
 
-trigger_crossing_time(battery_equal(Threshold), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_equal(Threshold), Tcross) :-
+trigger_crossing_time(battery_equal(Threshold,Code), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_equal(Threshold), Tcross, Code) :-
     first_battery_equal_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
 
-trigger_crossing_time(battery_over(Threshold), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_over(Threshold), Tcross) :-
+trigger_crossing_time(battery_over(Threshold,Code), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_over(Threshold), Tcross, Code) :-
     first_battery_over_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
 
-trigger_crossing_time(line_of_sight_clear(ObstacleId,GX,GY), CP,T0,Duration,Z,Zt,_Zb,_B0, line_of_sight_clear(ObstacleId,GX,GY), Tcross) :-
+trigger_crossing_time(line_of_sight_clear(ObstacleId,GX,GY,Code), CP,T0,Duration,Z,Zt,_Zb,_B0, line_of_sight_clear(ObstacleId,GX,GY), Tcross, Code) :-
     first_line_of_sight_clear_time(CP,T0,Duration,Z,Zt,ObstacleId,GX,GY,Tcross).
 
-trigger_crossing_time(crosses_segment(SX,SY,GX,GY), CP,T0,Duration,Z,Zt,_Zb,_B0, crosses_segment(SX,SY,GX,GY), Tcross) :-
+trigger_crossing_time(crosses_segment(SX,SY,GX,GY,Code), CP,T0,Duration,Z,Zt,_Zb,_B0, crosses_segment(SX,SY,GX,GY), Tcross, Code) :-
     first_segment_crossing_time(CP,T0,Duration,Z,Zt,SX,SY,GX,GY,Tcross).
 
 % all_trigger_candidates(+Triggers,...,-Candidates): Candidates is a
-% list of Reason-Time pairs, one per trigger in Triggers that ACTUALLY
-% fires in this resolved world (triggers that don't fire contribute
-% nothing -- same "absence, not sentinel" convention as everywhere
-% else). Unrecognized trigger names (no matching
-% trigger_crossing_time/10 clause) are silently skipped, same as "never
-% fires" -- lenient by design, so a typo in a Triggers list doesn't
-% halt the whole theory, just means that trigger never contributes.
+% list of Reason-Time-Code TRIPLES now (was Reason-Time pairs), one
+% per trigger in Triggers that ACTUALLY fires in this resolved world
+% (triggers that don't fire contribute nothing -- same "absence, not
+% sentinel" convention as everywhere else). Unrecognized trigger names
+% (no matching trigger_crossing_time/11 clause) are silently skipped,
+% same as "never fires" -- lenient by design, so a typo in a Triggers
+% list doesn't halt the whole theory, just means that trigger never
+% contributes.
 all_trigger_candidates([], _,_,_,_,_,_,_, []).
-all_trigger_candidates([Trig|Rest], CP,T0,Duration,Z,Zt,Zb,B0, [Reason-Tcross|RestCands]) :-
-    trigger_crossing_time(Trig, CP,T0,Duration,Z,Zt,Zb,B0, Reason, Tcross),
+all_trigger_candidates([Trig|Rest], CP,T0,Duration,Z,Zt,Zb,B0, [Reason-Tcross-Code|RestCands]) :-
+    trigger_crossing_time(Trig, CP,T0,Duration,Z,Zt,Zb,B0, Reason, Tcross, Code),
     all_trigger_candidates(Rest, CP,T0,Duration,Z,Zt,Zb,B0, RestCands).
 all_trigger_candidates([Trig|Rest], CP,T0,Duration,Z,Zt,Zb,B0, RestCands) :-
-    \+ trigger_crossing_time(Trig, CP,T0,Duration,Z,Zt,Zb,B0, _, _),
+    \+ trigger_crossing_time(Trig, CP,T0,Duration,Z,Zt,Zb,B0, _, _, _),
     all_trigger_candidates(Rest, CP,T0,Duration,Z,Zt,Zb,B0, RestCands).
 
-% earliest_of(+PairsList, -ReasonTimePair): generic "minimum by second
-% element" over a non-empty list of Reason-Time pairs. Used to combine
-% natural completion with however many Triggers-derived candidates
-% happen to apply, into ONE earliest-wins choice -- this is the
-% mechanism that makes moveto a genuine template: it works identically
-% whether Triggers is empty, or contains one, or many conditions
-% (including collision/battery themselves now), with no change needed
-% here.
-earliest_of([Pair], Pair).
-earliest_of([R1-T1|Rest], Result) :-
-    earliest_of(Rest, _-T2),
+% earliest_of(+TriplesList, -ReasonTimeCodeTriple): generic "minimum by
+% SECOND element (Time)" over a non-empty list of Reason-Time-Code
+% triples. Used to combine natural completion with however many
+% Triggers-derived candidates happen to apply, into ONE earliest-wins
+% choice -- this is the mechanism that makes moveto a genuine
+% template: it works identically whether Triggers is empty, or
+% contains one, or many conditions (including collision/battery
+% themselves now), with no change needed here.
+earliest_of([Triple], Triple).
+earliest_of([R1-T1-C1|Rest], Result) :-
+    earliest_of(Rest, _-T2-_),
     T1 =< T2,
-    Result = R1-T1.
-earliest_of([R1-T1|Rest], Result) :-
-    earliest_of(Rest, R2-T2),
+    Result = R1-T1-C1.
+earliest_of([R1-T1-C1|Rest], Result) :-
+    earliest_of(Rest, R2-T2-C2),
     T1 > T2,
-    Result = R2-T2.
+    Result = R2-T2-C2.
 
 % walk_noisy_point(+CP,+T0,+Duration,+Z,+Zt,+T,-X,-Y): position along
 % the spline at time T, given TWO ALREADY-RESOLVED, INDEPENDENT noise
@@ -965,18 +987,22 @@ now(T, do(A,S)) :-
 % or running the battery dry without ever noticing, if collision/
 % battery aren't in its own Triggers list.
 %
-% earliest_halt/10 is the SINGLE SHARED definition of "what happens
+% earliest_halt/11 is the SINGLE SHARED definition of "what happens
 % first" -- used here, by Poss(interrupt(...)) below, AND by
 % verify_safe further down (called there with Z=0.0,Zt=0.0,Zb=0.0
 % instead of the resolved noise). Having exactly ONE definition, rather
 % than the same computation duplicated at each call site, is what
 % guarantees every query stays consistent with what Poss(haltMoveto(...))
 % itself actually derives -- see the "SAFETY QUERIES READ THE ACTUAL
-% OUTCOME" note further down for why this matters.
-earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, Reason,T) :-
+% OUTCOME" note further down for why this matters. Code is the winning
+% candidate's own redescend-target code (none for natural completion/
+% collision/battery, since those never classify to reactive(_) --
+% see leg_status/9 further down and the CONTROL-FLOW REDESCEND TARGETS
+% note above do_node(reactivesequence(...)) further down).
+earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, Reason,T,Code) :-
     all_trigger_candidates(Triggers, CP,T0,Duration,Z,Zt,Zb,B0, ExtraCandidates),
     NaturalEnd is T0 + Duration,
-    earliest_of([completed-NaturalEnd], ExtraCandidates, Reason-T).
+    earliest_of([completed-NaturalEnd-none], ExtraCandidates, Reason-T-Code).
 
 poss(haltMoveto(T, Reason, Status), S) :-
     moving(S),
@@ -986,8 +1012,8 @@ poss(haltMoveto(T, Reason, Status), S) :-
     zt(do(startMoveto(CP,Triggers,T0),SPrev), Zt),
     zbatt(Zb),
     leg_start_battery(T0, SPrev, B0),
-    earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, Reason,T),
-    leg_status(Reason, CP, T0, Duration, Z, Zt, T, Status).
+    earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, Reason,T,Code),
+    leg_status(Reason, CP, T0, Duration, Z, Zt, T, Code, Status).
 
 % leg_target(+ControlPoints, -GX,-GY): a leg's own intended endpoint
 % is the LAST point in its OWN control_points list -- NOT necessarily
@@ -1002,57 +1028,63 @@ leg_target(ControlPoints, GX,GY) :-
 last_element([X], X).
 last_element([_|T], X) :- T \= [], last_element(T, X).
 
-% leg_status(+Reason,+CP,+T0,+Duration,+Z,+Zt,+T,-Status): THREE
-% possible outputs now, not two -- true/false/reactive are plain
-% Prolog ATOMS here (there is no built-in boolean type restricting
-% this to two values; true/false are ordinary symbols like any other,
-% same as reactive), so a Sequence/Fallback composite (below) can
-% branch on all three the same way it already branched on two.
+% leg_status(+Reason,+CP,+T0,+Duration,+Z,+Zt,+T,+Code,-Status): THREE
+% possible SHAPES of output now -- true/false are plain Prolog ATOMS
+% (there is no built-in boolean type restricting this to two values),
+% and the third is now the COMPOUND term reactive(Code), not the bare
+% atom reactive -- Code (threaded straight through from earliest_halt/
+% 11's own Code output, itself read off the WINNING trigger's own
+% Triggers-list occurrence -- see trigger_crossing_time/11's own note)
+% is what lets do_node(reactivesequence(...))/do_node(reactivefallback
+% (...)) further down decide whether THEY are the redescend target for
+% THIS particular reactive halt, instead of every enclosing composite
+% unconditionally redescending the way evaluate_plan/4 used to.
 %
-%   true     -- Reason=completed AND the actual (noisy) final position
-%                lands within goal_tolerance of the leg's OWN endpoint.
-%                Deliberately DISTINCT from Reason=completed alone,
-%                which only means the walk wasn't cut short before its
-%                nominal duration elapsed -- it says nothing about
-%                whether noise carried the robot far enough off course
-%                to miss the target despite "completing".
-%   false    -- a genuine, unrecoverable failure: crashed(ObstacleId)
-%                or battery_depleted. Nothing downstream can react to
-%                these and continue; the leg (and, per Sequence/
-%                Fallback's own do_node rules, quite possibly the
-%                whole plan) is simply done.
-%   reactive -- every OTHER trigger (obstacle_in_bound(...),
+%   true         -- Reason=completed AND the actual (noisy) final
+%                position lands within goal_tolerance of the leg's OWN
+%                endpoint. Deliberately DISTINCT from Reason=completed
+%                alone, which only means the walk wasn't cut short
+%                before its nominal duration elapsed -- it says
+%                nothing about whether noise carried the robot far
+%                enough off course to miss the target despite
+%                "completing".
+%   false        -- a genuine, unrecoverable failure: crashed
+%                (ObstacleId) or battery_depleted. Nothing downstream
+%                can react to these and continue; the leg (and, per
+%                Sequence/Fallback's own do_node rules, quite possibly
+%                the whole plan) is simply done.
+%   reactive(Code) -- every OTHER trigger (obstacle_in_bound(...),
 %                obstacle_on_path(...), battery_under/equal/over(...),
 %                line_of_sight_clear(...), crosses_segment(...), and
 %                any future trigger name not explicitly listed as a
 %                hard failure above): the walk was cut short by a
 %                condition that's meant to be REACTED to, not treated
-%                as outright success or failure -- see
-%                evaluate_plan/4's own header, further down, for what
-%                happens when a do_node/4 call anywhere in the tree
-%                returns this.
-leg_status(completed, CP, T0, Duration, Z, Zt, T, true) :-
+%                as outright success or failure -- see the CONTROL-
+%                FLOW REDESCEND TARGETS note above do_node(reactive
+%                sequence(...)) further down for what happens when a
+%                do_node/4 call anywhere in the tree returns this.
+leg_status(completed, CP, T0, Duration, Z, Zt, T, _Code, true) :-
     walk_noisy_point(CP, T0, Duration, Z, Zt, T, X, Y),
     leg_target(CP, GX, GY),
     dist(X, Y, GX, GY, D),
     goal_tolerance(Tol),
     D =< Tol.
-leg_status(completed, CP, T0, Duration, Z, Zt, T, false) :-
+leg_status(completed, CP, T0, Duration, Z, Zt, T, _Code, false) :-
     walk_noisy_point(CP, T0, Duration, Z, Zt, T, X, Y),
     leg_target(CP, GX, GY),
     dist(X, Y, GX, GY, D),
     goal_tolerance(Tol),
     D > Tol.
-leg_status(crashed(_), _,_,_,_,_,_, false).
-leg_status(battery_depleted, _,_,_,_,_,_, false).
-leg_status(Reason, _,_,_,_,_,_, reactive) :-
+leg_status(crashed(_), _,_,_,_,_,_, _Code, false).
+leg_status(battery_depleted, _,_,_,_,_,_, _Code, false).
+leg_status(Reason, _,_,_,_,_,_, Code, reactive(Code)) :-
     Reason \= completed,
     Reason \= crashed(_),
     Reason \= battery_depleted.
 
 % earliest_of/3: like earliest_of/2, but takes a fixed head list
-% (currently just [completed-NaturalEnd]) and a (possibly empty) list
-% of Triggers-derived candidates separately, and combines them --
+% (currently just [completed-NaturalEnd-none]) and a (possibly empty)
+% list of Triggers-derived candidates separately, and combines them --
 % kept as a distinct small wrapper so call sites read as "natural
 % completion ++ whatever this leg's Triggers produced," the intent,
 % at a glance.
@@ -1083,7 +1115,7 @@ poss(interrupt(T), S) :-
     zt(do(startMoveto(CP,Triggers,T0),SPrev), Zt),
     zbatt(Zb),
     leg_start_battery(T0, SPrev, B0),
-    earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, _Reason,Tend),
+    earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, _Reason,Tend,_Code),
     T >= T0, T < Tend.
 
 % ---------------------------------------------------------------
@@ -1411,20 +1443,24 @@ planned_with(Algorithm, Reason, do(_A, S)) :- planned_with(Algorithm, Reason, S)
 
 % -- SEQUENCE composite: stop and FAIL at the first failing child; --
 %    succeed only if every child succeeds, in order. A REACTIVE child
-%    (see leg_status/8's own note on the three-valued Status) stops
+%    (see leg_status/9's own note on the three-valued Status) stops
 %    the sequence too, same as false -- but is NOT the same as false:
-%    it propagates straight through, UNCHANGED, to whatever node
-%    contains THIS seq_node -- see the block comment above
-%    evaluate_plan/4, further down, for the full picture of why and
-%    where this eventually gets caught.
+%    it propagates straight through, UNCHANGED (Code and all -- this
+%    clause never inspects WHICH code it is, unlike reactivesequence/
+%    reactivefallback below), to whatever node contains THIS seq_node
+%    -- see the CONTROL-FLOW REDESCEND TARGETS note below for the full
+%    picture of why and where this eventually gets caught. A plain
+%    seq_node NEVER catches/redescends on its own, by design -- exactly
+%    matching real BT.cpp's own plain Sequence, which a ReactiveSequence
+%    is a genuinely DIFFERENT node type from, not a special case of.
 do_node(seq_node([]), S, S, true).
 do_node(seq_node([Child|Rest]), S, S1, Outcome) :-
     do_node(Child, S, S2, true),
     do_node(seq_node(Rest), S2, S1, Outcome).
 do_node(seq_node([Child|_]), S, S1, false) :-
     do_node(Child, S, S1, false).
-do_node(seq_node([Child|_]), S, S1, reactive) :-
-    do_node(Child, S, S1, reactive).
+do_node(seq_node([Child|_]), S, S1, reactive(Code)) :-
+    do_node(Child, S, S1, reactive(Code)).
 
 % -- FALLBACK (Selector) composite: stop and SUCCEED at the first ---
 %    succeeding child; fail only if every child fails, in order.
@@ -1437,16 +1473,123 @@ do_node(seq_node([Child|_]), S, S1, reactive) :-
 %    wherever the failed attempt left us," not "rewind and try the
 %    next option from the start." A REACTIVE child does NOT try the
 %    next sibling this way -- same as seq_node above, it propagates
-%    straight through unchanged instead (see evaluate_plan/4's own
-%    header further down).
+%    straight through unchanged instead (see the CONTROL-FLOW
+%    REDESCEND TARGETS note below).
 do_node(fallback_node([]), S, S, false).
 do_node(fallback_node([Child|_]), S, S1, true) :-
     do_node(Child, S, S1, true).
 do_node(fallback_node([Child|Rest]), S, S1, Outcome) :-
     do_node(Child, S, S2, false),
     do_node(fallback_node(Rest), S2, S1, Outcome).
-do_node(fallback_node([Child|_]), S, S1, reactive) :-
-    do_node(Child, S, S1, reactive).
+do_node(fallback_node([Child|_]), S, S1, reactive(Code)) :-
+    do_node(Child, S, S1, reactive(Code)).
+
+% ---------------------------------------------------------------
+% CONTROL-FLOW REDESCEND TARGETS -- reactivesequence(Code) and
+% reactivefallback(Code) are the ONLY two node types that ever catch a
+% reactive(_) status and act on it; plain seq_node/fallback_node above
+% NEVER do (they just pass it straight up, unconditionally, forever).
+% This is the direct Prolog analogue of BT.cpp's own real distinction
+% between Sequence/Fallback (checked once, never re-monitored) and
+% ReactiveSequence/ReactiveFallback (continuously re-ticked) -- see
+% this project's own conversation log for the fuller discussion this
+% design came out of.
+%
+% Code is a plain atom (bt_to_prolog.py assigns one, e.g. rc1, rc2,
+% ..., to each ReactiveSequence/ReactiveFallback it translates,
+% uniquely across the whole tree) IDENTIFYING one specific reactive
+% composite. Every reactive-classified trigger name in the Triggers
+% list of every MoveTo leg underneath it (obstacle_in_bound(Threshold,
+% Code), battery_below(Threshold,Code), etc. -- see trigger_crossing_
+% time/11's own note) is tagged, at translation time, with THIS SAME
+% Code -- the code of its own NEAREST enclosing ReactiveSequence/
+% ReactiveFallback (an intervening plain seq_node/fallback_node
+% doesn't matter, since it never inspects Code at all -- reactive(Code)
+% passes straight through it unchanged either way). So when a leg
+% halts reactively, reactive(Code) bubbles up through zero or more
+% plain composites, completely inert, until it reaches the ONE
+% composite whose own Code matches -- which is, by construction,
+% always its own nearest enclosing reactive composite -- and THAT one
+% catches it.
+%
+% "Catching" means: instead of propagating further, re-run this same
+% composite's own children FRESH -- see reactive_children/2 (a
+% SEPARATE fact per reactive composite, one row per Code, generated by
+% bt_to_prolog.py) and why it has to be a separately-resolved fact,
+% not the SAME children term reused across restarts: exactly the
+% "planWith inside a fallback_node" gotcha documented above (a second
+% pass's own planWith would try to unify a genuinely different control-
+% point list against an ALREADY-BOUND CP left over from the first
+% pass, and fail outright) -- reactive_children/2 resolved as a FRESH
+% goal each time gives genuinely unbound variables on every pass,
+% exactly mirroring how plan(Node) itself already works for the
+% (now removed) whole-tree redescend evaluate_plan/4 used to do.
+%
+% Each reactive composite carries its OWN budget, read fresh from
+% replan_budget/1 on first entry (see reactivesequence_budgeted/5
+% below) and decremented on every restart -- exhausting it resolves to
+% world_too_large right there rather than continuing to restart or
+% propagating upward (mirrors evaluate_plan/4's own former clause 3,
+% just localized). This budget is what stands between a degenerate
+% zero-duration leg and an infinite restart loop -- see this project's
+% own conversation log for why a PER-composite budget is needed now
+% that redescend can happen below the root, not just at it.
+%
+% A reactive(_) that reaches THE ROOT of the whole tree without any
+% composite's own Code ever matching means bt_to_prolog.py tagged a
+% leg's own reactive trigger with a Code that no enclosing
+% ReactiveSequence/ReactiveFallback actually carries -- a TRANSLATOR
+% BUG (that generator also validates this at translation time, as a
+% hard failure, so this should never actually happen at runtime) --
+% see plan_outcome/1's own reactive_escaped clause further down for
+% how this is reported if it somehow does.
+do_node(reactivesequence(Code), S, S1, Outcome) :-
+    replan_budget(Budget),
+    reactivesequence_budgeted(Code, Budget, S, S1, Outcome).
+
+reactivesequence_budgeted(Code, Budget, S, S1, Outcome) :-
+    Budget > 0,
+    reactive_children(Code, Children),
+    do_node(seq_node(Children), S, S2, reactive(Code)),
+    Budget1 is Budget - 1,
+    reactivesequence_budgeted(Code, Budget1, S2, S1, Outcome).
+reactivesequence_budgeted(Code, 0, S, S, world_too_large) :-
+    reactive_children(Code, Children),
+    do_node(seq_node(Children), S, _, reactive(Code)).
+reactivesequence_budgeted(Code, Budget, S, S1, reactive(OtherCode)) :-
+    Budget > 0,
+    reactive_children(Code, Children),
+    do_node(seq_node(Children), S, S1, reactive(OtherCode)),
+    OtherCode \= Code.
+reactivesequence_budgeted(Code, Budget, S, S1, Outcome) :-
+    Budget > 0,
+    reactive_children(Code, Children),
+    do_node(seq_node(Children), S, S1, Outcome),
+    Outcome \= reactive(_).
+
+do_node(reactivefallback(Code), S, S1, Outcome) :-
+    replan_budget(Budget),
+    reactivefallback_budgeted(Code, Budget, S, S1, Outcome).
+
+reactivefallback_budgeted(Code, Budget, S, S1, Outcome) :-
+    Budget > 0,
+    reactive_children(Code, Children),
+    do_node(fallback_node(Children), S, S2, reactive(Code)),
+    Budget1 is Budget - 1,
+    reactivefallback_budgeted(Code, Budget1, S2, S1, Outcome).
+reactivefallback_budgeted(Code, 0, S, S, world_too_large) :-
+    reactive_children(Code, Children),
+    do_node(fallback_node(Children), S, _, reactive(Code)).
+reactivefallback_budgeted(Code, Budget, S, S1, reactive(OtherCode)) :-
+    Budget > 0,
+    reactive_children(Code, Children),
+    do_node(fallback_node(Children), S, S1, reactive(OtherCode)),
+    OtherCode \= Code.
+reactivefallback_budgeted(Code, Budget, S, S1, Outcome) :-
+    Budget > 0,
+    reactive_children(Code, Children),
+    do_node(fallback_node(Children), S, S1, Outcome),
+    Outcome \= reactive(_).
 
 % ---------------------------------------------------------------
 % holds/2: minimal condition language for cond(C) leaves -- standard
@@ -1584,92 +1727,63 @@ holds(battery_over(Threshold), S) :-
 
 sample_frac(I, Frac) :- num_samples(N), Frac is I / N.
 
-% evaluate_plan(+S0,-S,-Outcome,+Budget): drives plan/1's WHOLE
-% tree to a genuine true/false conclusion, re-descending it from its
-% own ROOT -- not from wherever a trigger fired -- every time do_node
-% comes back `reactive`. This is what "the plan re-evaluates itself
-% once a reactive condition changes" actually means in a one-shot
-% Golog theory like this one, where do_node/4 has no notion of ticking
-% or re-entering from partway through: a REACTIVE outcome propagates
-% UNCHANGED through every enclosing seq_node/fallback_node (see their
-% own do_node clauses above -- neither one applies its normal
-% Sequence/Fallback logic to `reactive`, it's just passed straight up,
-% exactly like an exception passing untouched through stack frames
-% that don't catch it) until it escapes the ENTIRE do_node(Node,...)
-% call for the whole tree and lands here. THIS predicate is the only
-% place a `reactive` outcome is ever actually acted on -- and what it
-% does is call do_node on the SAME root Node again, starting from S1
-% (wherever the just-halted walk left the robot), so the WHOLE tree --
-% including any condition nearer the root than where the trigger fired
-% -- gets a fresh chance to decide what happens next, potentially
-% taking a completely different branch than last time.
+% final_situation(+S)/plan_outcome(-Outcome): drive plan/1's tree to a
+% genuine true/false/world_too_large conclusion with a SINGLE do_node
+% call, from s0 -- NOT the redescend-from-root loop this predicate
+% used to be (see git history for that version, and this project's own
+% conversation log for why it was replaced). Redescending on a
+% reactive(_) halt is now entirely reactivesequence/reactivefallback's
+% own job (see the CONTROL-FLOW REDESCEND TARGETS note above
+% do_node(reactivesequence(...))) -- every reactive-classified trigger
+% is tagged, at translation time, with the code of its own nearest
+% enclosing reactive composite, which catches and locally restarts it,
+% so a bare reactive(_) should never reach THIS call at all.
 %
-% BUDGET: a hard cap on how many times this may re-descend before
-% giving up. This exists for ProbLog's own sake, not the robot's: this
-% predicate's recursion depth is driven by a PROBABILISTIC condition
-% (whether a given resolved world's noise draws make some trigger fire
-% again), not by the plan's own static structure the way seq_node/
-% fallback_node's list-recursion is -- Prolog (and so ProbLog's
-% grounding, which is the same SLD engine run once per resolved world)
-% handles that kind of recursion fine as long as it's GUARANTEED to
-% terminate for every world, and nothing here structurally guarantees
-% that on its own. It is tempting to assume battery depletion alone
-% would always eventually force a hard `false` and stop this -- it
-% doesn't, reliably: a degenerate zero-duration leg (e.g. a freshly
-% re-planned straight line whose start already equals its own target)
-% drains zero battery no matter how many times it's retried, and even
-% for ordinary legs the argument depends on config.yaml's own
-% moving_drain_rate/idle_drain_rate staying nonzero, which is a tuning
-% choice, not a theory-level invariant. Hence an explicit, unconditional
-% bound instead of relying on either of those. The bound is
-% deliberately large -- this is a safety net for a pathological world,
-% not a value meant to bind in any of this project's own problems; if
-% it ever does, world_too_large is a signal that something about the
-% plan or the map genuinely doesn't terminate, not something to fix by
-% casually raising the number.
-% Re-fetches plan(Node) FRESH on every attempt below, rather than
-% taking Node as a parameter reused across retries -- this matters,
-% not just style: plan/1's own term has FREE VARIABLES embedded in it
-% (e.g. problem3's own PathS/Obst1/PathFB, bound by planWith/cond calls
-% AS do_node descends it), and Prolog only gives you a FRESH, unbound
-% copy of a fact's own variables each time that fact is RESOLVED AS ITS
-% OWN GOAL. Passing an already-resolved Node into a second do_node call
-% reuses whatever THOSE variables got bound to on the FIRST attempt
-% (e.g. PathS already bound to leg 1's own control points) -- a SECOND
-% attempt's planWith(...,PathS) would then try to UNIFY its own freshly
-% computed (and generally DIFFERENT) control points against that stale
-% binding instead of producing a new one, which fails outright for any
-% plan whose reactive retry actually needs to re-plan. Re-querying
-% plan(Node) on each attempt is what gives every retry its own clean
-% set of variables, exactly as if do_node were being run for the very
-% first time.
-evaluate_plan(S0, S, Outcome, Budget) :-
-    Budget > 0,
-    plan(Node),
-    do_node(Node, S0, S1, reactive),
-    Budget1 is Budget - 1,
-    evaluate_plan(S1, S, Outcome, Budget1).
-evaluate_plan(S0, S1, Outcome, _Budget) :-
-    plan(Node),
-    do_node(Node, S0, S1, Outcome),
-    Outcome \== reactive.
-evaluate_plan(S0, S0, world_too_large, 0) :-
-    plan(Node),
-    do_node(Node, S0, _, reactive).
-
-replan_budget(1000).
-
+% If it somehow does (a translator bug -- bt_to_prolog.py is supposed
+% to catch this at translation time as a hard failure, so this is a
+% defense-in-depth check, not the primary guard), final_situation/1
+% simply has no solution in that world (the first clause's own
+% Outcome \= reactive(_) guard fails), and plan_outcome/1's OWN second
+% clause reports it explicitly as reactive_escaped rather than silently
+% folding it into any of the three legitimate outcomes -- P(plan_
+% outcome(reactive_escaped)) > 0 in a report is the signal that
+% something is structurally wrong with the translated plan, and is
+% never expected to be nonzero for a plan that translated cleanly.
 final_situation(S) :-
-    replan_budget(B), evaluate_plan(s0, S, _, B).
+    plan(Node),
+    do_node(Node, s0, S, Outcome),
+    Outcome \= reactive(_).
 
-% plan_outcome(Outcome): the WHOLE tree's true/false outcome, a
-% first-class query -- P(plan_outcome(true)) is the BT-level analogue
-% of verify_goal_formula, but based on Status/Outcome rather than an
-% explicit goal formula. Outcome is now one of true/false/world_too_large
-% (never reactive -- evaluate_plan/4 never returns that, by
-% construction; see its own header).
+% plan_outcome(Outcome): the WHOLE tree's own outcome, a first-class
+% query -- P(plan_outcome(true)) is the BT-level analogue of verify_
+% goal_formula, but based on Status/Outcome rather than an explicit
+% goal formula. Outcome is one of true/false/world_too_large (the
+% three legitimate outcomes; world_too_large now comes from a LOCAL
+% reactivesequence/reactivefallback exhausting its own budget, see
+% that note again) or reactive_escaped (a translator-bug signal, see
+% final_situation/1's own note just above -- should never actually be
+% nonzero).
 plan_outcome(Outcome) :-
-    replan_budget(B), evaluate_plan(s0, _, Outcome, B).
+    plan(Node),
+    do_node(Node, s0, _, Outcome),
+    Outcome \= reactive(_).
+plan_outcome(reactive_escaped) :-
+    plan(Node),
+    do_node(Node, s0, _, reactive(_)).
+
+% replan_budget/1: the STARTING budget every reactivesequence/
+% reactivefallback occurrence reads (fresh, independently) on its own
+% first entry -- see reactivesequence_budgeted/5 and
+% reactivefallback_budgeted/5 above. Previously this bounded ONE
+% global whole-tree redescend loop; now each reactive composite gets
+% its OWN counter seeded from this SAME shared value, decremented
+% independently as THAT composite restarts. Still exists for
+% ProbLog's own sake, not the robot's -- see the CONTROL-FLOW
+% REDESCEND TARGETS note's own discussion of why nothing guarantees
+% termination on its own (a degenerate zero-duration leg can restart
+% forever without this bound, same reasoning as before, now just
+% localized to whichever composite it's under).
+replan_budget(1000).
 
 % plan_time_span(+S, -T0, -TEnd): T0 is when the (most recent) walk
 % started; TEnd is the wall-clock time the PLAN actually ends at --
@@ -1814,20 +1928,26 @@ battery_over_threshold(Threshold, S) :- halted_with(battery_over(Threshold), S).
 % direct unification against S's own OUTERMOST layer: do_node(moveto_
 % leg(...),...) always ends with do_action(haltMoveto(_T,Reason,
 % Status), S2, S1) as its very last step (see moveto_leg's own do_node
-% clause above), and every seq_node/fallback_node `reactive` clause
-% passes that S1 straight through, UNCHANGED, all the way up to
-% evaluate_plan/4 -- no do_node level in between ever layers another
-% action on top of it. So whatever S evaluate_plan/4 re-descends from
-% is STRUCTURALLY GUARANTEED to be exactly do(haltMoveto(_,Reason,_),
-% _) at its outermost layer, and reading Reason back off it is a
-% single deterministic unification, not a search -- unlike halted_with
-% /2 above (which walks S's WHOLE history and can match more than one
-% past action), this can only ever produce the ONE most recent halt,
-% so it stays a single ProbLog world instead of branching into one
-% world per historical match. Fails outright (no solution) if S isn't
-% shaped like a just-halted moveto at all (e.g. S=s0, before any walk
-% has ever run) -- same "absence, not sentinel" convention as
-% everywhere else.
+% clause above), and every seq_node/fallback_node `reactive(Code)`
+% clause passes that S1 straight through, UNCHANGED -- as does
+% reactivesequence_budgeted/reactivefallback_budgeted's own "different
+% code, pass upward" clause, and the S2 a MATCHING code restarts FROM
+% is exactly that same unchanged S1 too (see the CONTROL-FLOW
+% REDESCEND TARGETS note above do_node(reactivesequence(...))) -- no
+% do_node level, reactive composite or plain, ever layers another
+% action on top of it. So whatever S a cond(last_halt(...)) leaf is
+% actually checked against (whether that's immediately after a
+% reactive composite's own restart, or partway through a still-
+% propagating reactive(_)) is STRUCTURALLY GUARANTEED to be exactly
+% do(haltMoveto(_,Reason,_),_) at its outermost layer, and reading
+% Reason back off it is a single deterministic unification, not a
+% search -- unlike halted_with/2 above (which walks S's WHOLE history
+% and can match more than one past action), this can only ever produce
+% the ONE most recent halt, so it stays a single ProbLog world instead
+% of branching into one world per historical match. Fails outright (no
+% solution) if S isn't shaped like a just-halted moveto at all (e.g.
+% S=s0, before any walk has ever run) -- same "absence, not sentinel"
+% convention as everywhere else.
 %
 % NOT YET GENERIC across leaf/action types -- a caveat for whoever adds
 % the next reactive-capable leaf (e.g. a robotic-arm action halting via
@@ -1841,12 +1961,13 @@ battery_over_threshold(Threshold, S) :- halted_with(battery_over(Threshold), S).
 % added here (or all leaves funneled through one shared halt-action
 % functor with a Kind tag, instead of a differently-named action per
 % leaf type), and (2) every future composite/decorator node's own
-% `reactive` do_node clause has to keep passing S through UNCHANGED, on
-% the way up, the same way seq_node/fallback_node already do -- a
-% future composite that layers so much as one more action on top of S1
-% before reactive reaches evaluate_plan/4 would break the "S's
-% outermost layer IS the most recent halt" guarantee this whole
-% predicate rests on.
+% `reactive(Code)` do_node clause has to keep passing S through
+% UNCHANGED, on the way up (or into a restart), the same way seq_node/
+% fallback_node/reactivesequence_budgeted/reactivefallback_budgeted
+% already do -- a future composite that layers so much as one more
+% action on top of S1 before it's read would break the "S's outermost
+% layer IS the most recent halt" guarantee this whole predicate rests
+% on.
 holds(last_halt(Reason), do(haltMoveto(_T,Reason,_Status),_SPrev)).
 
 % recover_obstacle(-ObstacleId): a cond() leaf that RETRIEVES which
@@ -1971,7 +2092,7 @@ verify_safe :-
     current_walk(S, CP, Triggers, T0, SPrev),
     walk_duration(CP, Duration),
     leg_start_battery(T0, SPrev, B0),
-    earliest_halt(CP,Triggers,T0,Duration,0.0,0.0,0.0,B0, completed,_).
+    earliest_halt(CP,Triggers,T0,Duration,0.0,0.0,0.0,B0, completed,_,_).
 
 plan_route_blocked :- \+ verify_safe.
 
@@ -2126,9 +2247,17 @@ verify_goal_formula :- final_situation(S), goal_formula(S).
 % generator's own header for why: a problem-independent theory file
 % can't itself vary per-problem, but the generated config_generated.pl
 % it consults can).
+%
+% query(plan_outcome(reactive_escaped)) is the runtime safety net for
+% the "a reactive trigger's own code matched no enclosing reactive
+% composite" translator-bug case -- see final_situation/1 and
+% plan_outcome/1's own notes just above. Always expected to be exactly
+% 0 for a correctly-translated plan; a nonzero value here is a bug
+% report, not a legitimate outcome.
 % ============================================================
 query(verify_goal_formula).
 query(any_collision).
 query(plan_outcome(true)).
 query(plan_outcome(false)).
 query(plan_outcome(world_too_large)).
+query(plan_outcome(reactive_escaped)).

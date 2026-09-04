@@ -7,10 +7,17 @@ The BT.cpp XML tree -> Prolog do_node term translator flagged as
 BehaviorTree.cpp v4 XML tree (a problem's own behavior_tree.xml),
 validates it against module/contracts/schema.yaml (every leaf node must
 be a known, correctly-instantiated schema action/condition; every
-control-flow node must be Sequence or Fallback -- the two BT.cpp
-built-ins basic_action_theory.pl's seq_node/fallback_node already map
-to 1:1), and translates it into the nested do_node/4 term text
-basic_action_theory.pl's plan/1 expects.
+control-flow node must be one of the four BT.cpp built-ins this project
+supports -- Sequence/Fallback, which map 1:1 to basic_action_theory.pl's
+seq_node/fallback_node and never catch/redescend a reactive(_) status on
+their own, and ReactiveSequence/ReactiveFallback, which map to
+reactivesequence(Code)/reactivefallback(Code) and DO catch/locally
+redescend one whose own code matches -- see _REACTIVE_CONTROL_FLOW's own
+note and basic_action_theory.pl's own CONTROL-FLOW REDESCEND TARGETS
+note for the full mechanism), and translates it into the nested
+do_node/4 term text basic_action_theory.pl's plan/1 expects, plus one
+reactive_children/2 fact per ReactiveSequence/ReactiveFallback (see
+generate_plan_pl's own note on why those live separately).
 
 WHERE THE RESULT GOES: generate_plan_pl() writes the problem's own
 plan_generated.pl, a single plan/1 FACT (not a clause with a body --
@@ -123,6 +130,34 @@ _CONDITION_DISPATCH = {
     "LineOfSightClear": {"kind": "line_of_sight_clear_cond"},
 }
 _CONTROL_FLOW = {"Sequence": "seq_node", "Fallback": "fallback_node"}
+# ReactiveSequence/ReactiveFallback are NOT simple functor-renames like
+# Sequence/Fallback above -- translating one means assigning it a fresh,
+# unique code, recursing into its OWN children with that code as the
+# "current enclosing reactive composite" for anything underneath (so
+# every reactive-classified trigger inside gets tagged with it -- see
+# _REACTIVE_TRIGGER_FUNCTORS below), and factoring those children OUT
+# into their own reactive_children/2 fact rather than inlining them --
+# see basic_action_theory.pl's own CONTROL-FLOW REDESCEND TARGETS note
+# (above do_node(reactivesequence(...))) for why a separately-resolved
+# fact is required (the SAME "fresh variables on every resolution"
+# reasoning plan(Node) itself already relies on). Handled as its own
+# branch in _translate_node, not via _CONTROL_FLOW's simple lookup.
+_REACTIVE_CONTROL_FLOW = {"ReactiveSequence": "reactivesequence", "ReactiveFallback": "reactivefallback"}
+
+# Trigger-list functors that are REACTIVE-classified in leg_status/9
+# (basic_action_theory.pl) -- i.e. everything except the two original,
+# unparametrized, never-reactive names 'collision' and 'battery' (which
+# classify straight to false, via crashed(_)/battery_depleted). Every
+# token using one of THESE functors, in a MoveTo's own triggers list,
+# gets the current enclosing reactive composite's own code appended as
+# an extra trailing argument (e.g. "battery_below(70)" in the XML
+# becomes battery_below(70,rc3) in the generated Prolog) -- see
+# trigger_crossing_time/11's own note in basic_action_theory.pl.
+_REACTIVE_TRIGGER_FUNCTORS = {
+    "obstacle_in_bound", "obstacle_on_path",
+    "battery_below", "battery_equal", "battery_over",
+    "line_of_sight_clear", "crosses_segment",
+}
 
 # BT.cpp's own universal attribute, present on any node purely for
 # display/debugging -- never a real port, always allowed, never
@@ -163,12 +198,28 @@ def _blackboard_key(value):
 class _VarPool:
     """Maps each distinct blackboard key to ONE Prolog variable name,
     reused every time that key is seen again -- see the module
-    docstring's "BLACKBOARD -> PROLOG VARIABLE TRANSLATION" section."""
+    docstring's "BLACKBOARD -> PROLOG VARIABLE TRANSLATION" section.
+
+    ALSO tracks everything needed for ReactiveSequence/ReactiveFallback
+    translation: a counter for assigning each one a fresh, unique code;
+    the accumulated (code, children_terms) pairs to emit as separate
+    reactive_children/2 facts (see _REACTIVE_CONTROL_FLOW's own note);
+    and, per blackboard key, EVERY reactive-scope it was touched
+    (produced or consumed) under -- a key touched under more than one
+    distinct scope (including plain "outside any reactive composite",
+    recorded as None) would mean a producer/consumer pair straddles a
+    reactive_children/2 boundary, which breaks the SAME way reusing one
+    CP across two fallback_node branches already does (see
+    basic_action_theory.pl's own "IMPORTANT GOTCHA" note) -- checked
+    once, after the whole tree is translated, in translate_tree."""
 
     def __init__(self):
         self._map = {}
         self.producers = set()   # blackboard keys with an OUTPUT-port producer
         self.consumers = set()   # blackboard keys read by an INPUT port
+        self._reactive_counter = 0
+        self.reactive_facts = []       # [(code, [child_term, ...]), ...]
+        self.key_scopes = {}           # key -> set of codes (None = outside any)
 
     def var_for(self, key):
         if key not in self._map:
@@ -180,6 +231,13 @@ class _VarPool:
                     f"alphanumeric/underscore key starting with a letter.")
             self._map[key] = var
         return self._map[key]
+
+    def note_key_scope(self, key, reactive_code):
+        self.key_scopes.setdefault(key, set()).add(reactive_code)
+
+    def next_reactive_code(self):
+        self._reactive_counter += 1
+        return f"rc{self._reactive_counter}"
 
 
 def _validate_ports(tag, elem, port_specs):
@@ -245,7 +303,19 @@ def _is_battery_trigger(token):
     return functor == "battery" or functor.startswith("battery_")
 
 
-def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled):
+def _append_reactive_code(token, reactive_code):
+    """token is a Triggers-list entry whose functor is in
+    _REACTIVE_TRIGGER_FUNCTORS (e.g. "battery_below(70)" or the bare
+    "obstacle_in_bound(0.6)") -- append reactive_code as an extra
+    trailing argument (e.g. "battery_below(70,rc3)"). Every one of
+    these functors already takes at least one argument (see
+    _REACTIVE_TRIGGER_FUNCTORS's own note), so this is always "insert
+    before the final close-paren", never "wrap a bare atom in ()"."""
+    assert token.endswith(")"), token
+    return f"{token[:-1]},{reactive_code})"
+
+
+def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, reactive_code):
     attrs = _validate_ports(tag, elem, port_specs)
 
     if tag in _ACTION_DISPATCH:
@@ -260,11 +330,32 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled):
                     f"module's own header).")
             key = _blackboard_key(cp_value)
             var_pool.consumers.add(key)
+            var_pool.note_key_scope(key, reactive_code)
             cp_var = var_pool.var_for(key)
             trigger_tokens = [t.strip() for t in attrs["triggers"].split(";") if t.strip()]
             if not battery_enabled:
                 trigger_tokens = [t for t in trigger_tokens if not _is_battery_trigger(t)]
-            triggers = "[" + ",".join(trigger_tokens) + "]"
+            tagged_tokens = []
+            for t in trigger_tokens:
+                functor = t.split("(", 1)[0].strip()
+                if functor in _REACTIVE_TRIGGER_FUNCTORS:
+                    if reactive_code is None:
+                        raise BTValidationError(
+                            f"<MoveTo>'s triggers port includes '{t}', a "
+                            f"reactive-classified trigger, but this MoveTo is "
+                            f"not enclosed by any <ReactiveSequence>/"
+                            f"<ReactiveFallback> -- there is nowhere for its "
+                            f"reactive(_) halt to ever be caught, so it would "
+                            f"redescend all the way to the root and be "
+                            f"reported as plan_outcome(reactive_escaped) "
+                            f"(see basic_action_theory.pl's own CONTROL-FLOW "
+                            f"REDESCEND TARGETS note). Wrap this MoveTo (or "
+                            f"an ancestor of it) in a ReactiveSequence/"
+                            f"ReactiveFallback, or drop '{t}' from triggers.")
+                    tagged_tokens.append(_append_reactive_code(t, reactive_code))
+                else:
+                    tagged_tokens.append(t)
+            triggers = "[" + ",".join(tagged_tokens) + "]"
             return f"moveto_leg({cp_var},{triggers})"
 
         if info["kind"] == "planWith":
@@ -277,6 +368,7 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled):
                     f"node's own OUTPUT, never a literal.")
             key = _blackboard_key(cp_value)
             var_pool.producers.add(key)
+            var_pool.note_key_scope(key, reactive_code)
             cp_var = var_pool.var_for(key)
             return f"planWith({info['algorithm']},{goal_point},{cp_var})"
 
@@ -297,6 +389,7 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled):
                     f"node's own OUTPUT, never a literal.")
             key = _blackboard_key(cp_value)
             var_pool.producers.add(key)
+            var_pool.note_key_scope(key, reactive_code)
             cp_var = var_pool.var_for(key)
             # planWith/3's Goal slot is part of the SHARED template
             # every planner sits inside (do_node(planWith(Algorithm,
@@ -328,7 +421,7 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled):
                              f"_ACTION_DISPATCH/_CONDITION_DISPATCH.")
 
 
-def _translate_node(elem, schema_ports, var_pool, battery_enabled):
+def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code):
     tag = elem.tag
 
     if tag in _CONTROL_FLOW:
@@ -340,17 +433,45 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled):
         children = list(elem)
         if not children:
             raise BTValidationError(f"<{tag}> has no children.")
-        child_terms = [_translate_node(c, schema_ports, var_pool, battery_enabled)
+        # Plain Sequence/Fallback -- pass the CURRENT reactive_code
+        # through UNCHANGED (they never catch/redescend on their own,
+        # so they don't start a new reactive scope -- see
+        # basic_action_theory.pl's own CONTROL-FLOW REDESCEND TARGETS
+        # note).
+        child_terms = [_translate_node(c, schema_ports, var_pool, battery_enabled, reactive_code)
                        for c in children]
         functor = _CONTROL_FLOW[tag]
         return f"{functor}([{','.join(child_terms)}])"
 
+    if tag in _REACTIVE_CONTROL_FLOW:
+        if elem.attrib.keys() - _ALWAYS_ALLOWED_ATTRS:
+            raise BTValidationError(
+                f"<{tag}> takes no ports of its own (it's a BT.cpp "
+                f"built-in control node) -- unexpected attribute(s) "
+                f"{sorted(elem.attrib.keys() - _ALWAYS_ALLOWED_ATTRS)}.")
+        children = list(elem)
+        if not children:
+            raise BTValidationError(f"<{tag}> has no children.")
+        # A NEW reactive scope starts here -- fresh code, and every
+        # descendant (until a NESTED ReactiveSequence/ReactiveFallback
+        # starts its own) gets tagged with THIS one. Children are
+        # translated and then factored OUT into their own
+        # reactive_children/2 fact (see _VarPool's own note) rather
+        # than inlined -- the returned term references only the code.
+        own_code = var_pool.next_reactive_code()
+        child_terms = [_translate_node(c, schema_ports, var_pool, battery_enabled, own_code)
+                       for c in children]
+        var_pool.reactive_facts.append((own_code, child_terms))
+        functor = _REACTIVE_CONTROL_FLOW[tag]
+        return f"{functor}({own_code})"
+
     if tag not in schema_ports:
         raise BTValidationError(
-            f"<{tag}> is not a recognized node -- not Sequence/Fallback and "
-            f"not an action/condition 'id' in module/contracts/schema.yaml.")
+            f"<{tag}> is not a recognized node -- not Sequence/Fallback/"
+            f"ReactiveSequence/ReactiveFallback and not an action/condition "
+            f"'id' in module/contracts/schema.yaml.")
 
-    return _translate_leaf(tag, elem, None, schema_ports[tag], var_pool, battery_enabled)
+    return _translate_leaf(tag, elem, None, schema_ports[tag], var_pool, battery_enabled, reactive_code)
 
 
 def _find_tree_root(xml_root):
@@ -385,8 +506,11 @@ def _find_tree_root(xml_root):
 def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
                     battery_enabled=True):
     """Parse + validate + translate the BT XML into ONE Prolog term
-    (Node's own text, e.g. "seq_node([planWith(...),moveto_leg(...)])").
-    Raises BTValidationError on any structural problem.
+    (Node's own text, e.g. "seq_node([planWith(...),moveto_leg(...)])")
+    PLUS the separate reactive_children/2 facts any ReactiveSequence/
+    ReactiveFallback in the tree needs -- returns (node_text,
+    reactive_facts), where reactive_facts is [(code, [child_term,...]),
+    ...]. Raises BTValidationError on any structural problem.
 
     battery_enabled=False strips every battery-related trigger name
     (battery, battery_below(...), battery_over(...), battery_equal(...)
@@ -404,7 +528,7 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
 
     tree_root_elem = _find_tree_root(xml_root)
     var_pool = _VarPool()
-    node_text = _translate_node(tree_root_elem, schema_ports, var_pool, battery_enabled)
+    node_text = _translate_node(tree_root_elem, schema_ports, var_pool, battery_enabled, None)
 
     # A MoveTo whose control_points key has no PlanAstar/PlanStraight
     # producer anywhere in the tree would silently leave CP unbound --
@@ -416,12 +540,31 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
             f"by a MoveTo node but never produced by any PlanAstar/"
             f"PlanStraight node in the tree -- CP would be unbound.")
 
-    return node_text
+    # A blackboard key produced/consumed under more than one reactive
+    # scope (including "outside any ReactiveSequence/ReactiveFallback",
+    # recorded as None) would straddle a reactive_children/2 boundary --
+    # see _VarPool's own note on why that silently breaks the same way
+    # reusing one CP across two fallback_node branches already does.
+    straddling = {key: scopes for key, scopes in var_pool.key_scopes.items()
+                  if len(scopes) > 1}
+    if straddling:
+        def _label(scope):
+            return scope or "outside any reactive composite"
+        details = "; ".join(
+            f"'{key}' touched under {sorted(_label(s) for s in scopes)}"
+            for key, scopes in straddling.items())
+        raise BTValidationError(
+            f"control_points blackboard key(s) cross a ReactiveSequence/"
+            f"ReactiveFallback boundary -- a producer/consumer pair must "
+            f"live ENTIRELY inside the same reactive composite (or entirely "
+            f"outside all of them): {details}.")
+
+    return node_text, var_pool.reactive_facts
 
 
 def generate_plan_pl(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
                       output_path=DEFAULT_OUTPUT_PATH, battery_enabled=True):
-    node_text = translate_tree(xml_path, schema_path, battery_enabled=battery_enabled)
+    node_text, reactive_facts = translate_tree(xml_path, schema_path, battery_enabled=battery_enabled)
     lines = [
         "% AUTO-GENERATED by module/translators/bt_to_prolog.py from",
         f"% {os.path.relpath(xml_path, os.path.dirname(output_path))} -- DO NOT HAND-EDIT,",
@@ -441,6 +584,19 @@ def generate_plan_pl(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
         f"plan({node_text}).",
         "",
     ]
+    if reactive_facts:
+        lines += [
+            "% One reactive_children/2 fact per <ReactiveSequence>/",
+            "% <ReactiveFallback> in the tree, keyed by the same code",
+            "% embedded in plan/1's own reactivesequence(Code)/",
+            "% reactivefallback(Code) markers above -- see basic_action_",
+            "% theory.pl's own CONTROL-FLOW REDESCEND TARGETS note for why",
+            "% these live as SEPARATE facts rather than being inlined.",
+            "",
+        ]
+        for code, child_terms in reactive_facts:
+            lines.append(f"reactive_children({code}, [{','.join(child_terms)}]).")
+        lines.append("")
     with open(output_path, "w") as f:
         f.write("\n".join(lines))
     return output_path

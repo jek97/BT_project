@@ -25,13 +25,18 @@
 %
 % No third "resume to goal" leg is hand-chained after branch 3 -- it
 % doesn't need one. Every trigger above is classified `reactive` (see
-% leg_status/8), so EITHER branch halting via its own trigger makes
-% evaluate_plan/4 re-descend this SAME tree from the halted situation:
-% once line of sight clears, branch 2 (straight to goal) gets tried
-% again from the new position, this time (assuming the geometry
-% allows it) reaching the goal without re-triggering obstacle_on_path
-% at all -- resumption falls out of the reactive mechanism itself,
-% for free.
+% leg_status/9) and tagged with the SAME code, rc1, identifying the
+% outer fallback_node itself (now reactivefallback(rc1)) as the
+% nearest enclosing reactive composite for both of them -- matching
+% what the translator would assign, since neither trigger has a
+% reactive composite any closer than the tree's own root. So EITHER
+% branch halting via its own trigger makes reactivefallback(rc1)
+% restart its own children (fresh, via reactive_children(rc1,...)
+% below) from the halted situation: once line of sight clears, branch
+% 2 (straight to goal) gets tried again from the new position, this
+% time (assuming the geometry allows it) reaching the goal without
+% re-triggering obstacle_on_path at all -- resumption falls out of the
+% reactive mechanism itself, for free.
 %
 % Branch 2's guard, cond(neg(last_halt(obstacle_on_path(_,_)))), is
 % what actually makes that resumption (and the initial descent) work,
@@ -55,16 +60,18 @@
 %     by construction, held within threshold of the obstacle for its
 %     whole length), permanently blocking branch 2 from ever being
 %     retried after a successful recovery.
-plan(fallback_node([
+plan(reactivefallback(rc1)).
+
+reactive_children(rc1, [
     cond(at_goal(11.675,11.525,0.3)),
     seq_node([
         cond(neg(last_halt(obstacle_on_path(_,_)))),
         planWith(straight, point(11.675,11.525), PathS),
-        moveto_leg(PathS, [collision,battery,obstacle_on_path(0.6)])
+        moveto_leg(PathS, [collision,battery,obstacle_on_path(0.6,rc1)])
     ]),
     seq_node([
         cond(recover_obstacle(Obst1)),
         planWith(follow_boarder(Obst1,0.6), point(0.0,0.0), PathFB),
-        moveto_leg(PathFB, [collision,battery,line_of_sight_clear(Obst1,11.675,11.525)])
+        moveto_leg(PathFB, [collision,battery,line_of_sight_clear(Obst1,11.675,11.525,rc1)])
     ])
-])).
+]).

@@ -13,15 +13,22 @@ polygons" (as produced by module/translators/occgrid_to_problog.py).
 Prints a COMPACT summary (the problem's own goal_formula.pl, plus a
 small probability table) rather than the earlier verbose per-sample
 report -- trimmed together with basic_action_theory.pl's own Section
-10 QUERIES list to exactly six queries, for the reactive-redescend/
-merge-grid grounding-performance investigation (see FUTUREWORK.md and
-this project's own conversation log):
+10 QUERIES list to a small, fixed set of queries, for the reactive-
+redescend/merge-grid grounding-performance investigation (see
+FUTUREWORK.md and this project's own conversation log):
   - verify_goal_formula: P(the problem's own goal_formula.pl holds at
     the final situation)
   - any_collision / any_battery_depletion: P(the plan ends via that
     cause)
   - plan_outcome(true) / plan_outcome(false) / plan_outcome
     (world_too_large): the BT's own three possible outcomes
+  - plan_outcome(reactive_escaped): safety net for the localized
+    reactive-redescend mechanism (reactivesequence(Code)/
+    reactivefallback(Code) in basic_action_theory.pl) -- a `reactive(_)`
+    status escaping all the way to the root is always a translator bug,
+    so this should read 0.00% on every problem; a nonzero reading here
+    means some reactive-classified trigger's code has no matching
+    enclosing reactivesequence/reactivefallback in the tree.
 
 hit_by/1, first_hit/1, on_track/1, verify_safe/0, and plan_route_
 blocked/0 are all still DEFINED in basic_action_theory.pl -- only their
@@ -164,6 +171,7 @@ SUMMARY_QUERIES = [
     "plan_outcome(true)",
     "plan_outcome(false)",
     "plan_outcome(world_too_large)",
+    "plan_outcome(reactive_escaped)",
 ]
 
 

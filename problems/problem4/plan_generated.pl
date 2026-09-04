@@ -3,4 +3,13 @@
 % edit the XML tree instead and regenerate (main.py does this
 % automatically before every run).
 
-plan(fallback_node([seq_node([cond(battery_over(70.0)),planWith(straight,point(22.275,2.075),CP),moveto_leg(CP,[collision,battery,battery_below(70)])]),seq_node([planWith(straight,point(2.275,2.075),CP2),moveto_leg(CP2,[collision,battery])])])).
+plan(fallback_node([reactivesequence(rc1),seq_node([planWith(straight,point(2.275,2.075),CP2),moveto_leg(CP2,[collision,battery])])])).
+
+% One reactive_children/2 fact per <ReactiveSequence>/
+% <ReactiveFallback> in the tree, keyed by the same code
+% embedded in plan/1's own reactivesequence(Code)/
+% reactivefallback(Code) markers above -- see basic_action_
+% theory.pl's own CONTROL-FLOW REDESCEND TARGETS note for why
+% these live as SEPARATE facts rather than being inlined.
+
+reactive_children(rc1, [cond(battery_over(70.0)),planWith(straight,point(22.275,2.075),CP),moveto_leg(CP,[collision,battery,battery_below(70,rc1)])]).

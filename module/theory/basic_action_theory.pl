@@ -79,8 +79,8 @@
 %        sigma_tangential/1, sigma_battery/1, battery_start/1,
 %        idle_drain_rate/1, moving_drain_rate/1, goal_tolerance/1,
 %        tolerance/1, num_samples/1, bracket_samples/1, crossing_eps/1,
-%        z/2, zt/2, zbatt/1, position_merge_grid/1, battery_merge_grid/1,
-%        time_merge_grid/1 (see the MERGE-GRID QUANTIZATION note above
+%        z/2, zt/2, zbatt/1, disc_step_position/1, disc_step_battery/1,
+%        disc_step_time/1 (see the MERGE-GRID QUANTIZATION note above
 %        dist/5's own section)
 %                              from config_generated.pl, itself
 %                              generated from config.yaml by
@@ -153,8 +153,8 @@ dist(X1,Y1,X2,Y2,D) :- D is sqrt((X2-X1)**2 + (Y2-Y1)**2).
 % MERGE-GRID QUANTIZATION -- three rounding primitives used ONLY at
 % the specific "seam" where a NEW leg (a fresh startMoveto) reads its
 % own starting condition from wherever the PREVIOUS leg's actual halt
-% left things. See position_merge_grid/1, battery_merge_grid/1, and
-% time_merge_grid/1 (config facts, from the problem's own config.yaml
+% left things. See disc_step_position/1, disc_step_battery/1, and
+% disc_step_time/1 (config facts, from the problem's own config.yaml
 % -- see that file's own "grounding:" section) for what actually
 % enables this, and leg_start_battery/3, poss(startMoveto(...)), and
 % do_node(planWith(...)) further down for where each is applied.
@@ -472,7 +472,7 @@ battery(Level, T, s0) :-
     Level is max(0, min(100, B0 - TotalDrain)).
 
 % leg_start_battery(+T0, +SPrev, -B0): a NEW leg's own starting
-% battery level, rounded DOWN to battery_merge_grid/1's own
+% battery level, rounded DOWN to disc_step_battery/1's own
 % granularity (see the MERGE-GRID QUANTIZATION note above dist/5's own
 % section) -- the SINGLE shared definition used both here (the MOVING-
 % phase clause just below) and by poss(haltMoveto(...))/poss(interrupt
@@ -485,7 +485,7 @@ battery(Level, T, s0) :-
 % coarsened, once, at the seam.
 leg_start_battery(T0, SPrev, B0) :-
     battery(B0Exact, T0, SPrev),
-    battery_merge_grid(Grid),
+    disc_step_battery(Grid),
     quantize_down(B0Exact, Grid, B0).
 
 % MOVING phase keeps the Duration-normalized scaling (Elapsed/sqrt(D),
@@ -988,7 +988,7 @@ first_collision_time(CP,T0,Duration,Z,Zt,Tcross,ObstacleId) :-
 % produces a well-formed, immediately-halted situation with the
 % correct Reason, consistent with every other halting cause, rather
 % than a special-cased blocking precondition for battery alone.
-% T0 is rounded UP to time_merge_grid/1's own granularity (see the
+% T0 is rounded UP to disc_step_time/1's own granularity (see the
 % MERGE-GRID QUANTIZATION note above dist/5's own section) -- the
 % previous leg's own recorded halt instant (embedded in ITS OWN
 % haltMoveto/interrupt term, read by REPORTING queries) stays exact;
@@ -998,7 +998,7 @@ first_collision_time(CP,T0,Duration,Z,Zt,Tcross,ObstacleId) :-
 poss(startMoveto(_,_Triggers,T0), S) :-
     \+ moving(S),
     now(T0Exact, S),
-    time_merge_grid(Grid),
+    disc_step_time(Grid),
     quantize_up(T0Exact, Grid, T0).
 
 % now(-T,+S): current wall-clock time -- needed above only to know
@@ -1456,7 +1456,7 @@ plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, [], no_path, false) 
 %    CP to its own (non-empty) result then fails to unify, breaking
 %    the fallback in a confusing way that looks unrelated to variable
 %    scoping. This was hit directly while testing this exact feature.
-% SX,SY are rounded to position_merge_grid/1's own granularity (see
+% SX,SY are rounded to disc_step_position/1's own granularity (see
 % the MERGE-GRID QUANTIZATION note above dist/5's own section) before
 % being handed to plan_call/plan straight/plan_astar/... -- this is
 % what actually makes CP (hence the NEW leg's own startMoveto(CP,...)
@@ -1470,7 +1470,7 @@ plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, [], no_path, false) 
 % a NEW leg gets planned FROM is coarsened.
 do_node(planWith(Algorithm, point(GX,GY), CP), S, do(planned(Algorithm,Reason), S), Status) :-
     now(T, S), at(SXExact,SYExact,T,S),
-    position_merge_grid(Grid),
+    disc_step_position(Grid),
     quantize(SXExact, Grid, SX), quantize(SYExact, Grid, SY),
     plan_call(Algorithm, SX,SY,GX,GY, CP, Reason, Status).
 
@@ -1523,6 +1523,25 @@ do_node(fallback_node([Child|Rest]), S, S1, Outcome) :-
     do_node(Child, S, S2, false),
     do_node(fallback_node(Rest), S2, S1, Outcome).
 do_node(fallback_node([Child|_]), S, S1, reactive(Code)) :-
+    do_node(Child, S, S1, reactive(Code)).
+
+% -- INVERTER decorator: BT.cpp's built-in single-child negation ------
+%    node (<Inverter>C</Inverter>). Flips true<->false; a REACTIVE
+%    child's reactive(Code) status passes straight through UNCHANGED,
+%    same "never inspects, never catches" passthrough seq_node/
+%    fallback_node's own reactive clauses already do -- an interrupt
+%    signal isn't a true/false outcome to negate, it's a request to be
+%    caught by a MATCHING reactivesequence(Code)/reactivefallback(Code)
+%    further up, wherever that is; an Inverter never IS one (it takes
+%    no Code of its own -- see _REACTIVE_CONTROL_FLOW's own note in
+%    bt_to_prolog.py for why the guard-derivation machinery already
+%    treats Inverter as fully transparent for that purpose too, not
+%    just for do_node's own control flow).
+do_node(inverter(Child), S, S1, false) :-
+    do_node(Child, S, S1, true).
+do_node(inverter(Child), S, S1, true) :-
+    do_node(Child, S, S1, false).
+do_node(inverter(Child), S, S1, reactive(Code)) :-
     do_node(Child, S, S1, reactive(Code)).
 
 % ---------------------------------------------------------------

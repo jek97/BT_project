@@ -7,17 +7,20 @@ The BT.cpp XML tree -> Prolog do_node term translator flagged as
 BehaviorTree.cpp v4 XML tree (a problem's own behavior_tree.xml),
 validates it against module/contracts/schema.yaml (every leaf node must
 be a known, correctly-instantiated schema action/condition; every
-control-flow node must be one of the four BT.cpp built-ins this project
+control-flow node must be one of the BT.cpp built-ins this project
 supports -- Sequence/Fallback, which map 1:1 to basic_action_theory.pl's
 seq_node/fallback_node and never catch/redescend a reactive(_) status on
-their own, and ReactiveSequence/ReactiveFallback, which map to
+their own; ReactiveSequence/ReactiveFallback, which map to
 reactivesequence(Code)/reactivefallback(Code) and DO catch/locally
 redescend one whose own code matches -- see _REACTIVE_CONTROL_FLOW's own
 note and basic_action_theory.pl's own CONTROL-FLOW REDESCEND TARGETS
-note for the full mechanism), and translates it into the nested
-do_node/4 term text basic_action_theory.pl's plan/1 expects, plus one
-reactive_children/2 fact per ReactiveSequence/ReactiveFallback (see
-generate_plan_pl's own note on why those live separately).
+note for the full mechanism; and Inverter, BT.cpp's single-child
+negation decorator, which maps to inverter(Child) -- flips true/false,
+passes a reactive(_) status straight through unchanged, never itself
+reactive), and translates it into the nested do_node/4 term text
+basic_action_theory.pl's plan/1 expects, plus one reactive_children/2
+fact per ReactiveSequence/ReactiveFallback (see generate_plan_pl's own
+note on why those live separately).
 
 WHERE THE RESULT GOES: generate_plan_pl() writes the problem's own
 plan_generated.pl, a single plan/1 FACT (not a clause with a body --
@@ -580,6 +583,35 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
 def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code, guard_stack):
     tag = elem.tag
 
+    if tag == "Inverter":
+        # BT.cpp's built-in single-child negation decorator ->
+        # inverter(ChildTerm) (see basic_action_theory.pl's own
+        # do_node(inverter(Child),...) clauses). Like plain Sequence/
+        # Fallback -- NOT a new reactive scope, and it never itself
+        # contributes a guard -- reactive_code and guard_stack pass
+        # through to its one child UNCHANGED. This is a SEPARATE code
+        # path from _reduce_guard_condition's own <Inverter> handling
+        # (which unwraps one around a left-sibling CONDITION into a
+        # polarity flip, for guard derivation specifically); this one
+        # instead produces a REAL do_node term for <Inverter> appearing
+        # anywhere else in the tree (wrapping an action, a whole
+        # branch, another composite, ...). The two coexist without
+        # conflict: guard derivation only ever calls the other one, on
+        # left siblings, before this function ever sees them.
+        if elem.attrib.keys() - _ALWAYS_ALLOWED_ATTRS:
+            raise BTValidationError(
+                f"<Inverter> takes no ports of its own (it's a BT.cpp "
+                f"built-in decorator node) -- unexpected attribute(s) "
+                f"{sorted(elem.attrib.keys() - _ALWAYS_ALLOWED_ATTRS)}.")
+        children = list(elem)
+        if len(children) != 1:
+            raise BTValidationError(
+                f"<Inverter> must have exactly one child (found "
+                f"{len(children)}).")
+        child_term = _translate_node(children[0], schema_ports, var_pool, battery_enabled,
+                                      reactive_code, guard_stack)
+        return f"inverter({child_term})"
+
     if tag in _CONTROL_FLOW:
         if elem.attrib.keys() - _ALWAYS_ALLOWED_ATTRS:
             raise BTValidationError(
@@ -656,8 +688,8 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
     if tag not in schema_ports:
         raise BTValidationError(
             f"<{tag}> is not a recognized node -- not Sequence/Fallback/"
-            f"ReactiveSequence/ReactiveFallback and not an action/condition "
-            f"'id' in module/contracts/schema.yaml.")
+            f"ReactiveSequence/ReactiveFallback/Inverter and not an "
+            f"action/condition 'id' in module/contracts/schema.yaml.")
 
     return _translate_leaf(tag, elem, None, schema_ports[tag], var_pool, battery_enabled, reactive_code, guard_stack)
 

@@ -50,7 +50,7 @@
 # battery: holds EVERYTHING about battery (the enabled/disabled flag,
 # drain rates, noise, and its own merge-grid knob) in one place, rather
 # than the same physical quantity's settings being scattered across
-# three top-level sections. time_merge_grid stays in its own small
+# three top-level sections. disc_step_time stays in its own small
 # grounding: section since it isn't position- or battery-specific (see
 # basic_action_theory.pl's own MERGE-GRID QUANTIZATION note, above
 # dist/5's own section, for the full mechanism all three merge-grid
@@ -92,7 +92,7 @@ position:
   # already. The generator checks each table's sum separately and
   # warns (but does not hard-fail, consistent with this project's
   # existing choice not to hard-stop ProbLog loads) if any is off.
-  merge_grid: 1.0   # metres -- rounds the position handed to planWith()
+  disc_step_position: 1.0   # metres -- rounds the position handed to planWith()
                      # when planning a NEW leg's own control points, so
                      # different noise draws that land close enough
                      # together produce an IDENTICAL ground term for
@@ -151,7 +151,7 @@ battery:
   idle_drain_rate: 0.05     # percent/time-unit while not moving
   moving_drain_rate: 0.5    # percent/time-unit while moving
   sigma: 0.5   # percent per sqrt(time-unit) -- zbatt/1's scale (sigma_battery/1)
-  merge_grid: 10   # percent -- rounds a NEW leg's own starting battery
+  disc_step_battery: 10   # percent -- rounds a NEW leg's own starting battery
                     # (floor, never overestimating remaining charge --
                     # see basic_action_theory.pl's own MERGE-GRID
                     # QUANTIZATION note). 0 disables this (exact).
@@ -174,9 +174,9 @@ verification:
   crossing_eps: 0.01     # bisection refinement tolerance, time-units
 
 grounding:
-  # time_merge_grid is the one merge-grid knob that ISN'T position- or
+  # disc_step_time is the one discretization-step knob that ISN'T position- or
   # battery-specific -- it rounds a NEW leg's own start time (ceiling,
   # since a leg can never plausibly start before the previous one
   # actually ended -- see basic_action_theory.pl's own MERGE-GRID
   # QUANTIZATION note). 0 disables this (exact).
-  time_merge_grid: 20   # seconds
+  disc_step_time: 20   # seconds

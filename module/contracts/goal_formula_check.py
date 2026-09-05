@@ -52,6 +52,7 @@ specifically because the two steps always run back-to-back as one unit
 in main.py's own pipeline.
 """
 import os
+import re
 import sys
 
 import yaml
@@ -234,7 +235,19 @@ def generate_safety_queries(reason_patterns_by_action, output_path):
     generate_plan_pl second return value. Pass {} (e.g. for a hand-
     written plan_generated.pl that bypasses translation entirely --
     see diagnose_pipeline.py) to still get the five ALWAYS queries with
-    no per-reason breakdown."""
+    no per-reason breakdown.
+
+    ALSO emits, for every (pattern, action) pair whose own pattern
+    contains the 'wild' marker somewhere, a companion query(any_reason_
+    pattern_detail_by_action(...)) with 'wild' replaced by a genuine
+    Prolog variable ('_') -- see basic_action_theory.pl's own
+    halted_with_pattern_detail/3 for why THIS query is deliberately
+    non-ground: ProbLog enumerates one result row per distinct
+    grounding for it, which is exactly what turns e.g.
+    "crashed(wild) on a1 = 30%" into its own further breakdown by
+    WHICH concrete obstacle. A pattern with no 'wild' in it at all
+    (battery_under(20), guard_break(Cond), completed, ...) has nothing
+    runtime-only to enumerate, so gets no companion query."""
     all_patterns = sorted(set(
         pattern
         for patterns in reason_patterns_by_action.values()
@@ -254,6 +267,9 @@ def generate_safety_queries(reason_patterns_by_action, output_path):
     for action_code in sorted(reason_patterns_by_action):
         for pattern in reason_patterns_by_action[action_code]:
             lines.append(f"query(any_reason_pattern_by_action({pattern},{action_code})).")
+            if re.search(r"\bwild\b", pattern):
+                detail_pattern = re.sub(r"\bwild\b", "_", pattern)
+                lines.append(f"query(any_reason_pattern_detail_by_action({detail_pattern},{action_code})).")
     lines.append("")
 
     with open(output_path, "w") as f:

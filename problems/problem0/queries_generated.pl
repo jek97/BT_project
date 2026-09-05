@@ -15,4 +15,5 @@ query(any_reason_pattern(crashed(wild))).
 
 query(any_reason_pattern_by_action(completed,a1)).
 query(any_reason_pattern_by_action(crashed(wild),a1)).
+query(any_reason_pattern_detail_by_action(crashed(_),a1)).
 query(any_reason_pattern_by_action(battery_depleted,a1)).

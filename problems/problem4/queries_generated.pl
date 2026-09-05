@@ -16,8 +16,10 @@ query(any_reason_pattern(guard_break(battery_over(70.0)))).
 
 query(any_reason_pattern_by_action(completed,a1)).
 query(any_reason_pattern_by_action(crashed(wild),a1)).
+query(any_reason_pattern_detail_by_action(crashed(_),a1)).
 query(any_reason_pattern_by_action(battery_depleted,a1)).
 query(any_reason_pattern_by_action(guard_break(battery_over(70.0)),a1)).
 query(any_reason_pattern_by_action(completed,a2)).
 query(any_reason_pattern_by_action(crashed(wild),a2)).
+query(any_reason_pattern_detail_by_action(crashed(_),a2)).
 query(any_reason_pattern_by_action(battery_depleted,a2)).

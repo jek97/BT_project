@@ -2244,6 +2244,43 @@ any_reason_pattern(GroundPattern) :-
 any_reason_pattern_by_action(GroundPattern, ActionCode) :-
     final_situation(S), halted_with_pattern(GroundPattern, ActionCode, S).
 
+% halted_with_pattern_detail(+Pattern, +ActionCode, +S): the DELIBERATE
+% OPPOSITE of halted_with_pattern/3's own ground-only discipline --
+% Pattern here is expected to contain a genuine UNBOUND Prolog variable
+% at whichever position halted_with_pattern's own GroundPattern would
+% have written as the atom 'wild' (e.g. crashed(_) rather than
+% crashed(wild)). Plain unification via =.. does the matching, with NO
+% match_wild/2 involved -- this is intentional: a query built on THIS
+% predicate is exactly the non-ground case halted_with_pattern/3's own
+% note warns about, and that's the whole point here, not a bug to
+% avoid -- ProbLog reports one result row PER DISTINCT GROUNDING of a
+% non-ground query, so any_reason_pattern_detail_by_action(crashed(_),
+% a1) is what actually ENUMERATES every concrete obstacle a1 could
+% have crashed into, each with its own probability, as the sub-rows
+% underneath any_reason_pattern_by_action(crashed(wild),a1)'s own
+% single aggregated total -- see main.py's print_reason_breakdown for
+% how the two are nested together in the report.
+halted_with_pattern_detail(Pattern, ActionCode, S) :-
+    halted_with(Reason, S),
+    Reason =.. [Functor|Args],
+    append(Args0, [ActionCode], Args),
+    Pattern =.. [Functor|Args0].
+
+% any_reason_pattern_detail_by_action(+Pattern, +ActionCode): see
+% halted_with_pattern_detail/3's own note -- one query(...) declaration
+% here (Pattern containing a genuine variable, e.g. crashed(_)) yields
+% MANY result rows, one per obstacle/whatever-was-runtime-only actually
+% observed, each already showing its own CONCRETE value substituted in
+% (e.g. any_reason_pattern_detail_by_action(crashed(obs5),a1)) --
+% module/contracts/goal_formula_check.py's generate_safety_queries only
+% emits this companion query for a (Pattern,ActionCode) pair whose own
+% GroundPattern actually contains 'wild' somewhere; a Pattern with
+% nothing runtime-only in it (battery_under(20), guard_break(Cond),
+% completed, ...) has no meaningful detail level beyond its own
+% aggregate and gets no companion query at all.
+any_reason_pattern_detail_by_action(Pattern, ActionCode) :-
+    final_situation(S), halted_with_pattern_detail(Pattern, ActionCode, S).
+
 % last_halt(-Reason): a cond() leaf that reads off WHY the MOST RECENT
 % moveto_leg halted, without searching S's history at all. Works by
 % direct unification against S's own OUTERMOST layer: do_node(moveto_

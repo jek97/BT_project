@@ -234,15 +234,40 @@ def print_reason_breakdown(tee, results):
     merging them into one number that would hide which guard actually
     broke -- see basic_action_theory.pl's own halted_with_pattern/3 and
     match_wild/2 for why the underlying query is exact-pattern-based,
-    not merely functor-based, in the first place."""
-    prefix = "any_reason_pattern_by_action("
+    not merely functor-based, in the first place.
+
+    Beneath EACH (Pattern, ActionCode) row, further nests every
+    any_reason_pattern_detail_by_action result sharing that same
+    functor+action -- the per-concrete-configuration breakdown (e.g.
+    WHICH obstacle, under "crashed"/a1's own 20%) generate_safety_
+    queries only emits a detail query for when the aggregate Pattern
+    actually contains 'wild' somewhere (see basic_action_theory.pl's
+    own halted_with_pattern_detail/3) -- a Pattern with nothing
+    runtime-only in it (battery_under(20), completed, ...) simply has
+    no detail rows to nest, and none are printed for it. Matched by
+    (functor, action_code) rather than the exact Pattern text -- exact
+    for every problem this project currently has (each functor+action
+    combination has exactly one Pattern in practice); a tree where the
+    SAME functor produced two genuinely different Patterns for the
+    SAME action would see both patterns' detail rows nested together,
+    since there is no query-level ambiguity to resolve that finely
+    without a real per-pattern detail key -- not a concern for any
+    tree this project can currently generate."""
     by_pattern = {}   # pattern_text -> {action_code: probability}
+    by_functor_action_detail = {}   # (functor, action_code) -> {detail_pattern_text: probability}
+
+    agg_prefix = "any_reason_pattern_by_action("
+    detail_prefix = "any_reason_pattern_detail_by_action("
     for key, prob in results.items():
-        if not (key.startswith(prefix) and key.endswith(")")):
-            continue
-        inner = key[len(prefix):-1]
-        pattern_text, action_code = _split_last_top_level_arg(inner)
-        by_pattern.setdefault(pattern_text, {})[action_code] = prob
+        if key.startswith(agg_prefix) and key.endswith(")"):
+            inner = key[len(agg_prefix):-1]
+            pattern_text, action_code = _split_last_top_level_arg(inner)
+            by_pattern.setdefault(pattern_text, {})[action_code] = prob
+        elif key.startswith(detail_prefix) and key.endswith(")"):
+            inner = key[len(detail_prefix):-1]
+            detail_pattern_text, action_code = _split_last_top_level_arg(inner)
+            functor = detail_pattern_text.split("(", 1)[0].strip()
+            by_functor_action_detail.setdefault((functor, action_code), {})[detail_pattern_text] = prob
 
     if not by_pattern:
         return
@@ -261,6 +286,20 @@ def print_reason_breakdown(tee, results):
             tee(f"  {label:<40} {total*100:6.2f}%")
             for action_code in sorted(per_action):
                 tee(f"    {action_code:<38} {per_action[action_code]*100:6.2f}%")
+                details = by_functor_action_detail.get((functor, action_code))
+                if not details:
+                    continue
+                # A detail pattern that never actually resolved in ANY
+                # world (probability 0) leaves ProbLog's own internal
+                # placeholder variable name in its argument (e.g.
+                # "crashed(X2)") instead of a real obstacle -- filter
+                # these out, they carry no diagnostic information (the
+                # 0.00% is already fully represented by the per-action
+                # row just above, which is never itself omitted).
+                for detail_pattern_text in sorted(details):
+                    if details[detail_pattern_text] <= 0.0:
+                        continue
+                    tee(f"      {detail_pattern_text:<36} {details[detail_pattern_text]*100:6.2f}%")
 
 
 # -----------------------------------------------------------------------

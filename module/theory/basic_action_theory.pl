@@ -345,7 +345,7 @@ walk_duration(ControlPoints, Duration) :-
 %    (an interrupt can only fire while a walk IS in progress).
 %    Pure regression, exactly on the same footing as at/4.
 % ---------------------------------------------------------------
-moving(do(startMoveto(_,_,_), _)).
+moving(do(startMoveto(_,_,_,_), _)).
 moving(do(A,S)) :-
     A \= haltMoveto(_,_,_), A \= interrupt(_),
     moving(S).
@@ -369,13 +369,26 @@ current_walk(S, CP, T0, SPrev) :- current_walk(S, CP, _Triggers, T0, SPrev).
 % current_walk/5 additionally exposes Triggers -- the leg's own list
 % of EXTRA halting conditions -- needed wherever the earliest-wins
 % computation over Triggers has to run (Poss(haltMoveto(...)),
-% interrupt's Poss). This is now the PRIMARY definition; /3 and /4
-% above are thin wrappers over it, same pattern as when SPrev was
-% added to /3 earlier.
-current_walk(do(startMoveto(CP,Triggers,T0),SPrev), CP, Triggers, T0, SPrev).
-current_walk(do(A,S), CP, Triggers, T0, SPrev) :-
-    A \= startMoveto(_,_,_),
-    current_walk(S, CP, Triggers, T0, SPrev).
+% interrupt's Poss). UNCHANGED signature/behaviour for every one of
+% its own (many) existing callers -- now a thin wrapper dropping
+% ActionCode from current_walk/6 below, exactly the same "/3 and /4
+% are thin wrappers" pattern as when SPrev was added to /3 earlier.
+current_walk(S, CP, Triggers, T0, SPrev) :-
+    current_walk(S, CP, Triggers, _ActionCode, T0, SPrev).
+
+% current_walk/6 -- the REAL base fact/recursion, over startMoveto/4
+% (CP,Triggers,ActionCode,T0) now instead of startMoveto/3. ActionCode
+% is the per-MoveTo-OCCURRENCE code bt_to_prolog.py assigns (mirrors
+% next_reactive_code()'s own per-reactive-composite code -- see that
+% file's own _VarPool note), embedded into the action term by
+% poss(startMoveto(...)) below and carried straight through by do_node
+% (moveto_leg(...)) -- ONLY poss(haltMoveto(...)) actually needs the
+% real value (to tag the final halt Reason with it -- see tag_reason/3
+% further down); every other current_walk/5 caller is unaffected.
+current_walk(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), CP, Triggers, ActionCode, T0, SPrev).
+current_walk(do(A,S), CP, Triggers, ActionCode, T0, SPrev) :-
+    A \= startMoveto(_,_,_,_),
+    current_walk(S, CP, Triggers, ActionCode, T0, SPrev).
 
 % ---------------------------------------------------------------
 % 4b. THE BATTERY FLUENT -- a second clock fluent, on the exact same
@@ -496,7 +509,7 @@ leg_start_battery(T0, SPrev, B0) :-
 % Structurally this is now the SAME "nominal drain minus a signed
 % deviation, clamped at zero" pattern as the idle phases -- only the
 % Deviation formula's normalization differs, for the reason above.
-battery(Level, T, do(startMoveto(CP,Triggers,T0), S)) :-
+battery(Level, T, do(startMoveto(CP,_Triggers,_ActionCode,T0), S)) :-
     leg_start_battery(T0, S, B0),
     walk_duration(CP, Duration),
     Elapsed0 is T - T0,
@@ -550,7 +563,7 @@ battery(Level, T, do(interrupt(T1), S)) :-
 % startMoveto/haltMoveto/interrupt anchors exist in the history, same
 % principle as at/4's own pass-through clause.
 battery(Level, T, do(A,S)) :-
-    A \= startMoveto(_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
+    A \= startMoveto(_,_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
     battery(Level, T, S).
 
 % first_battery_depletion_time(+CP,+T0,+Duration,+B0,+Zb,-Tcross):
@@ -995,7 +1008,7 @@ first_collision_time(CP,T0,Duration,Z,Zt,Tcross,ObstacleId) :-
 % only the value THIS new leg treats as its own start time is
 % coarsened, and CEILING (never floor/round) guarantees a new leg can
 % never appear to start before the previous one actually ended.
-poss(startMoveto(_,_Triggers,T0), S) :-
+poss(startMoveto(_,_Triggers,_ActionCode,T0), S) :-
     \+ moving(S),
     now(T0Exact, S),
     disc_step_time(Grid),
@@ -1009,11 +1022,11 @@ poss(startMoveto(_,_Triggers,T0), S) :-
 % out-of-convention accessors were fixed; fixed here too, along with
 % every one of its own call sites throughout this file).
 now(0, s0).
-now(T, do(startMoveto(_,_,T),_)).
+now(T, do(startMoveto(_,_,_,T),_)).
 now(T, do(haltMoveto(T,_,_),_)).
 now(T, do(interrupt(T),_)).
 now(T, do(A,S)) :-
-    A \= startMoveto(_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
+    A \= startMoveto(_,_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
     now(T, S).
 
 % haltMoveto(T,Reason): the ways a walk stops other than an interrupt.
@@ -1045,16 +1058,45 @@ earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, Reason,T,Code) :-
     NaturalEnd is T0 + Duration,
     earliest_of([completed-NaturalEnd-none], ExtraCandidates, Reason-T-Code).
 
+% poss(haltMoveto(...)) is the ONE place a leg's own ActionCode
+% (read off the SAME startMoveto term current_walk/6 already resolves
+% CP/Triggers/T0/SPrev from -- see that predicate's own note) gets
+% baked into the RECORDED Reason, via tag_reason/3 further down --
+% leg_status/9 itself still decides Status from the UNTAGGED Reason0
+% (it needs to recognize completed/crashed(_)/battery_depleted in
+% their ORIGINAL shapes), so tagging happens strictly AFTER Status is
+% already settled, on the value that actually gets written into S1's
+% own haltMoveto term.
 poss(haltMoveto(T, Reason, Status), S) :-
     moving(S),
-    current_walk(S, CP, Triggers, T0, SPrev),
+    current_walk(S, CP, Triggers, ActionCode, T0, SPrev),
     walk_duration(CP, Duration),
-    z(do(startMoveto(CP,Triggers,T0),SPrev), Z),
-    zt(do(startMoveto(CP,Triggers,T0),SPrev), Zt),
+    z(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Z),
+    zt(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Zt),
     zbatt(Zb),
     leg_start_battery(T0, SPrev, B0),
-    earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, Reason,T,Code),
-    leg_status(Reason, CP, T0, Duration, Z, Zt, T, Code, Status).
+    earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, Reason0,T,Code),
+    leg_status(Reason0, CP, T0, Duration, Z, Zt, T, Code, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+
+% tag_reason(+Reason0, +ActionCode, -Reason): appends ActionCode as
+% Reason0's own new TRAILING argument -- crashed(ObstacleId) becomes
+% crashed(ObstacleId,ActionCode), completed becomes completed
+% (ActionCode), guard_break(Cond) becomes guard_break(Cond,ActionCode),
+% and so on for every Reason shape trigger_crossing_time/11 or
+% earliest_halt/11 can ever produce -- GENERICALLY, via univ (=..),
+% rather than one clause per Reason functor (the same "one generic
+% mechanism instead of a per-case table" choice as holds_leg/9's own
+% design). This is what lets a safety query check
+% halted_with_cond(crashed(Obst1,ActionCode)) -- Obst1 unbound to match
+% ANY obstacle, or bound to ask about a specific one, and ActionCode
+% likewise -- to distinguish WHICH MoveTo occurrence in the tree
+% produced a given halt, using the ordinary cond()/halted_with_cond
+% machinery, no new query predicate needed.
+tag_reason(Reason0, ActionCode, Reason) :-
+    Reason0 =.. [Functor|Args0],
+    append(Args0, [ActionCode], Args),
+    Reason =.. [Functor|Args].
 
 % leg_target(+ControlPoints, -GX,-GY): a leg's own intended endpoint
 % is the LAST point in its OWN control_points list -- NOT necessarily
@@ -1152,8 +1194,8 @@ poss(interrupt(T), S) :-
     moving(S),
     current_walk(S, CP, Triggers, T0, SPrev),
     walk_duration(CP, Duration),
-    z(do(startMoveto(CP,Triggers,T0),SPrev), Z),
-    zt(do(startMoveto(CP,Triggers,T0),SPrev), Zt),
+    z(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Z),
+    zt(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Zt),
     zbatt(Zb),
     leg_start_battery(T0, SPrev, B0),
     earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, _Reason,Tend,_Code),
@@ -1177,10 +1219,10 @@ poss(interrupt(T), S) :-
 % ---------------------------------------------------------------
 at(X,Y,_,s0) :- start(X,Y).
 
-at(X,Y,T, do(startMoveto(ControlPoints,Triggers,T0), S)) :-
+at(X,Y,T, do(startMoveto(ControlPoints,Triggers,ActionCode,T0), S)) :-
     walk_duration(ControlPoints, Duration),
-    z(do(startMoveto(ControlPoints,Triggers,T0),S), Z),
-    zt(do(startMoveto(ControlPoints,Triggers,T0),S), Zt),
+    z(do(startMoveto(ControlPoints,Triggers,ActionCode,T0),S), Z),
+    zt(do(startMoveto(ControlPoints,Triggers,ActionCode,T0),S), Zt),
     walk_noisy_point(ControlPoints, T0, Duration, Z, Zt, T, X, Y).
 
 at(X,Y,T, do(haltMoveto(T1,_Reason,_Status), S)) :-
@@ -1195,7 +1237,7 @@ at(X,Y,T, do(interrupt(T1), S)) :-
 % actions that DON'T affect position (e.g. a future sensing action)
 % can be appended without breaking the regression.
 at(X,Y,T, do(A,S)) :-
-    A \= startMoveto(_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
+    A \= startMoveto(_,_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
     at(X,Y,T,S).
 
 % nominal (zero-noise) position -- for Feature-1-style deterministic
@@ -1270,7 +1312,7 @@ nominal_at(X,Y,Frac,ControlPoints) :- spline_point(ControlPoints, Frac, X, Y).
 %                                  in order; stop and succeed as soon
 %                                  as one succeeds; fail if all do.
 % ============================================================
-primitive_action(startMoveto(_,_,_)).
+primitive_action(startMoveto(_,_,_,_)).
 primitive_action(haltMoveto(_,_,_)).
 primitive_action(interrupt(_)).
 
@@ -1288,8 +1330,8 @@ do_node(cond(C), S, S, false) :- \+ holds(C, S).
 % for a genuinely unprotected leg. Status flows straight through as
 % Outcome -- no translation predicate needed, since both already speak
 % true/false.
-do_node(moveto_leg(CP,Triggers), S, S1, Status) :-
-    do_action(startMoveto(CP,Triggers,_T0), S, S2),
+do_node(moveto_leg(CP,Triggers,ActionCode), S, S1, Status) :-
+    do_action(startMoveto(CP,Triggers,ActionCode,_T0), S, S2),
     do_action(haltMoveto(_T,_Reason,Status), S2, S1).
 
 % -- PLANNING actions: deliberately NOT part of the full action theory
@@ -1740,8 +1782,8 @@ holds(line_of_sight_clear(ObstacleId,GX,GY), S) :-
 holds(obstacle_on_path(Threshold), S) :-
     current_walk(S, CP, Triggers, T0, SPrev),
     walk_duration(CP, Duration),
-    z(do(startMoveto(CP,Triggers,T0),SPrev), Z),
-    zt(do(startMoveto(CP,Triggers,T0),SPrev), Zt),
+    z(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Z),
+    zt(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Zt),
     now(T, S), at(X,Y,T,S),
     obstacle_on_path_within_threshold(CP,T0,Duration,Z,Zt,X,Y,Threshold).
 
@@ -1992,11 +2034,11 @@ plan_time_span(S, T0, TEnd) :-
 
 last_action_time(do(haltMoveto(T,_,_),_), _, _, T).
 last_action_time(do(interrupt(T),_), _, _, T).
-last_action_time(do(startMoveto(_,_,_),_), CP, T0, TEnd) :-
+last_action_time(do(startMoveto(_,_,_,_),_), CP, T0, TEnd) :-
     walk_duration(CP, Duration),
     TEnd is T0 + Duration.
 last_action_time(do(A,S), CP, T0, TEnd) :-
-    A \= haltMoveto(_,_,_), A \= interrupt(_), A \= startMoveto(_,_,_),
+    A \= haltMoveto(_,_,_), A \= interrupt(_), A \= startMoveto(_,_,_,_),
     last_action_time(S, CP, T0, TEnd).
 
 sample_time(I, S, T) :-
@@ -2074,7 +2116,7 @@ halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 % visited/2 on just the LAST waypoint already logically entails every
 % earlier one was visited too; only worth checking each individually
 % once a Fallback sits somewhere before the waypoint you care about.
-visited(point(GX,GY), do(haltMoveto(_T,completed,true), S)) :-
+visited(point(GX,GY), do(haltMoveto(_T,completed(_ActionCode),true), S)) :-
     current_walk(S, CP, _Triggers, _T0, _SPrev),
     leg_target(CP, GX, GY).
 visited(Loc, do(_A, S)) :- visited(Loc, S).
@@ -2089,13 +2131,17 @@ visited(Loc, do(_A, S)) :- visited(Loc, S).
 %    its Threshold. Any FUTURE trigger's own "did it actually fire"
 %    diagnostic is exactly this same one-liner pattern -- no
 %    trigger-specific re-derivation logic to get wrong.
-crashed_in(S) :- halted_with(crashed(_), S).
-battery_depleted_in(S) :- halted_with(battery_depleted, S).
-obstacle_in_bound_in(S) :- halted_with(obstacle_in_bound(_,_), S).
-obstacle_on_path_in(S) :- halted_with(obstacle_on_path(_,_), S).
-battery_under_in(S) :- halted_with(battery_under(_), S).
-battery_equal_in(S) :- halted_with(battery_equal(_), S).
-battery_over_in(S) :- halted_with(battery_over(_), S).
+% Every Reason shape below now carries an extra TRAILING ActionCode
+% argument (see tag_reason/3, above poss(haltMoveto(...))) -- one more
+% wildcard per functor, same "regardless of which" convention as the
+% obstacle/threshold wildcards already here.
+crashed_in(S) :- halted_with(crashed(_,_), S).
+battery_depleted_in(S) :- halted_with(battery_depleted(_), S).
+obstacle_in_bound_in(S) :- halted_with(obstacle_in_bound(_,_,_), S).
+obstacle_on_path_in(S) :- halted_with(obstacle_on_path(_,_,_), S).
+battery_under_in(S) :- halted_with(battery_under(_,_), S).
+battery_equal_in(S) :- halted_with(battery_equal(_,_), S).
+battery_over_in(S) :- halted_with(battery_over(_,_), S).
 
 % -- crashed_obstacle(ObstacleId,S) / obstacle_in_bound_obstacle
 %    (Threshold,ObstacleId,S) / obstacle_on_path_obstacle(Threshold,
@@ -2112,12 +2158,17 @@ battery_over_in(S) :- halted_with(battery_over(_), S).
 %    /2, at/4, and battery/3 above, all of which already had S last;
 %    fixed here since nothing outside this file's own definitions
 %    referenced the old argument order).
-crashed_obstacle(ObstacleId, S) :- halted_with(crashed(ObstacleId), S).
-obstacle_in_bound_obstacle(Threshold, ObstacleId, S) :- halted_with(obstacle_in_bound(Threshold,ObstacleId), S).
-obstacle_on_path_obstacle(Threshold, ObstacleId, S) :- halted_with(obstacle_on_path(Threshold,ObstacleId), S).
-battery_under_threshold(Threshold, S) :- halted_with(battery_under(Threshold), S).
-battery_equal_threshold(Threshold, S) :- halted_with(battery_equal(Threshold), S).
-battery_over_threshold(Threshold, S) :- halted_with(battery_over(Threshold), S).
+% One more trailing wildcard each, same reason as the *_in(S) family
+% above -- ActionCode itself isn't exposed as an argument HERE (these
+% predicates' own job is "which obstacle/threshold", unchanged); query
+% halted_with_cond(crashed(ObstacleId,ActionCode)) directly (see
+% tag_reason/3's own note) when ActionCode itself is what's wanted.
+crashed_obstacle(ObstacleId, S) :- halted_with(crashed(ObstacleId,_), S).
+obstacle_in_bound_obstacle(Threshold, ObstacleId, S) :- halted_with(obstacle_in_bound(Threshold,ObstacleId,_), S).
+obstacle_on_path_obstacle(Threshold, ObstacleId, S) :- halted_with(obstacle_on_path(Threshold,ObstacleId,_), S).
+battery_under_threshold(Threshold, S) :- halted_with(battery_under(Threshold,_), S).
+battery_equal_threshold(Threshold, S) :- halted_with(battery_equal(Threshold,_), S).
+battery_over_threshold(Threshold, S) :- halted_with(battery_over(Threshold,_), S).
 
 % last_halt(-Reason): a cond() leaf that reads off WHY the MOST RECENT
 % moveto_leg halted, without searching S's history at all. Works by
@@ -2192,7 +2243,7 @@ holds(last_halt(Reason), do(haltMoveto(_T,Reason,_Status),_SPrev)).
 % guarded by cond(recover_obstacle(Obst)) simply doesn't apply unless
 % there really is one to recover.
 holds(recover_obstacle(ObstacleId), S) :-
-    holds(last_halt(obstacle_on_path(_Threshold,ObstacleId)), S).
+    holds(last_halt(obstacle_on_path(_Threshold,ObstacleId,_ActionCode)), S).
 
 % -- overall collision probability (exact) --------------------------
 any_collision :- final_situation(S), crashed_in(S).
@@ -2222,7 +2273,7 @@ sample_index_for_time(T,T0,Duration,I) :-
 %    final_situation(S) for a specific resolved situation.
 first_hit(I) :-
     final_situation(S),
-    S = do(haltMoveto(Tcross,crashed(_ObstacleId),_), _),
+    S = do(haltMoveto(Tcross,crashed(_ObstacleId,_ActionCode),_), _),
     current_walk(S, CP, _Triggers, T0, _SPrev),
     walk_duration(CP, Duration),
     sample_index_for_time(Tcross,T0,Duration,I).
@@ -2231,7 +2282,7 @@ first_hit(I) :-
 %    before reporting sample N) ----------------------------------
 hit_by(N) :-
     final_situation(S),
-    S = do(haltMoveto(Tcross,crashed(_ObstacleId),_), _),
+    S = do(haltMoveto(Tcross,crashed(_ObstacleId,_ActionCode),_), _),
     current_walk(S, CP, _Triggers, T0, _SPrev),
     walk_duration(CP, Duration),
     sample_index_for_time(Tcross,T0,Duration,I),

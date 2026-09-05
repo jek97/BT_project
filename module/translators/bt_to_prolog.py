@@ -277,6 +277,7 @@ class _VarPool:
         self._reactive_counter = 0
         self.reactive_facts = []       # [(code, [child_term, ...]), ...]
         self.key_scopes = {}           # key -> set of codes (None = outside any)
+        self._action_counter = 0
 
     def var_for(self, key):
         if key not in self._map:
@@ -295,6 +296,19 @@ class _VarPool:
     def next_reactive_code(self):
         self._reactive_counter += 1
         return f"rc{self._reactive_counter}"
+
+    def next_action_code(self):
+        """A fresh, unique code for one <MoveTo> OCCURRENCE -- embedded
+        by basic_action_theory.pl's do_node(moveto_leg(CP,Triggers,
+        ActionCode),...) into startMoveto's own action term, and from
+        there tagged onto the leg's own final halt Reason (see
+        tag_reason/3) so a safety query can distinguish WHICH MoveTo in
+        the tree produced a given halt (e.g. halted_with_cond(crashed
+        (ObstacleId,a1)) vs. (...,a2)) -- same per-occurrence-counter
+        pattern as next_reactive_code() above, just for actions rather
+        than reactive composites."""
+        self._action_counter += 1
+        return f"a{self._action_counter}"
 
 
 def _validate_ports(tag, elem, port_specs):
@@ -529,7 +543,8 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             default_tokens = ["collision"] + (["battery"] if battery_enabled else [])
 
             triggers = "[" + ",".join(default_tokens + tagged_manual + derived_tokens) + "]"
-            return f"moveto_leg({cp_var},{triggers})"
+            action_code = var_pool.next_action_code()
+            return f"moveto_leg({cp_var},{triggers},{action_code})"
 
         if info["kind"] == "planWith":
             goal_point = _point_literal(attrs["goal"], tag, "goal")

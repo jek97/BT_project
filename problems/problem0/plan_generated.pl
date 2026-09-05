@@ -3,4 +3,4 @@
 % edit the XML tree instead and regenerate (main.py does this
 % automatically before every run).
 
-plan(seq_node([planWith(astar,point(11.675,11.525),CP),moveto_leg(CP,[collision,battery])])).
+plan(seq_node([planWith(astar,point(11.675,11.525),CP),moveto_leg(CP,[collision,battery],a1)])).

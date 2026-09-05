@@ -65,13 +65,13 @@ plan(reactivefallback(rc1)).
 reactive_children(rc1, [
     cond(at_goal(11.675,11.525,0.3)),
     seq_node([
-        cond(neg(last_halt(obstacle_on_path(_,_)))),
+        cond(neg(last_halt(obstacle_on_path(_,_,_)))),
         planWith(straight, point(11.675,11.525), PathS),
-        moveto_leg(PathS, [collision,battery,obstacle_on_path(0.6,rc1)])
+        moveto_leg(PathS, [collision,battery,obstacle_on_path(0.6,rc1)], a1)
     ]),
     seq_node([
         cond(recover_obstacle(Obst1)),
         planWith(follow_boarder(Obst1,0.6), point(0.0,0.0), PathFB),
-        moveto_leg(PathFB, [collision,battery,line_of_sight_clear(Obst1,11.675,11.525,rc1)])
+        moveto_leg(PathFB, [collision,battery,line_of_sight_clear(Obst1,11.675,11.525,rc1)], a2)
     ])
 ]).

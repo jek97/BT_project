@@ -23,13 +23,13 @@ bracket_samples(60).
 crossing_eps(0.01).
 disc_step_time(20).
 
-0.25::z(do(startMoveto(CP,Triggers,T0),S), -1.0) ;
-0.5::z(do(startMoveto(CP,Triggers,T0),S), 0.0) ;
-0.25::z(do(startMoveto(CP,Triggers,T0),S), 1.0).
+0.25::z(do(startMoveto(CP,Triggers,ActionCode,T0),S), -1.0) ;
+0.5::z(do(startMoveto(CP,Triggers,ActionCode,T0),S), 0.0) ;
+0.25::z(do(startMoveto(CP,Triggers,ActionCode,T0),S), 1.0).
 
-0.25::zt(do(startMoveto(CP,Triggers,T0),S), -1.0) ;
-0.5::zt(do(startMoveto(CP,Triggers,T0),S), 0.0) ;
-0.25::zt(do(startMoveto(CP,Triggers,T0),S), 1.0).
+0.25::zt(do(startMoveto(CP,Triggers,ActionCode,T0),S), -1.0) ;
+0.5::zt(do(startMoveto(CP,Triggers,ActionCode,T0),S), 0.0) ;
+0.25::zt(do(startMoveto(CP,Triggers,ActionCode,T0),S), 1.0).
 
 0.25::zbatt(-1.0) ;
 0.5::zbatt(0.0) ;

@@ -94,9 +94,9 @@ def _format_number(x):
 
 def _gaussian_disjunction(functor, args_prefix, discretized_gaussian):
     """Build one annotated-disjunction block, e.g.:
-        0.0606::z(do(startMoveto(CP,Triggers,T0),S), -2.0) ;
+        0.0606::z(do(startMoveto(CP,Triggers,ActionCode,T0),S), -2.0) ;
         ...
-        0.0606::z(do(startMoveto(CP,Triggers,T0),S),  2.0).
+        0.0606::z(do(startMoveto(CP,Triggers,ActionCode,T0),S),  2.0).
     or, for a zero-argument functor like zbatt/1:
         0.0606::zbatt(-2.0) ;
         ...
@@ -132,11 +132,17 @@ def render_prolog(config):
 
     battery_enabled = battery_cfg.get("enabled", True)
 
+    # ActionCode is a free variable here, same as CP/Triggers/T0 --
+    # z/zt's own key doesn't need its ACTUAL value (CP+T0+S already
+    # uniquely pin down "this leg"), it just has to be PRESENT so the
+    # key's arity matches startMoveto/4 (see basic_action_theory.pl's
+    # own poss(haltMoveto(...))/tag_reason note for why startMoveto
+    # gained this 4th argument).
     z_block = _gaussian_disjunction(
-        "z", "do(startMoveto(CP,Triggers,T0),S), ",
+        "z", "do(startMoveto(CP,Triggers,ActionCode,T0),S), ",
         position_cfg["lateral"]["discretized_gaussian"])
     zt_block = _gaussian_disjunction(
-        "zt", "do(startMoveto(CP,Triggers,T0),S), ",
+        "zt", "do(startMoveto(CP,Triggers,ActionCode,T0),S), ",
         position_cfg["tangential"]["discretized_gaussian"])
     zbatt_block = _gaussian_disjunction(
         "zbatt", "", battery_cfg["discretized_gaussian"])

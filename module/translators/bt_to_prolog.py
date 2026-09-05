@@ -278,6 +278,7 @@ class _VarPool:
         self.reactive_facts = []       # [(code, [child_term, ...]), ...]
         self.key_scopes = {}           # key -> set of codes (None = outside any)
         self._action_counter = 0
+        self.reason_patterns_by_action = {}   # action_code -> [reason_pattern_text, ...]
 
     def var_for(self, key):
         if key not in self._map:
@@ -399,6 +400,71 @@ def _append_reactive_code(token, reactive_code):
     before the final close-paren", never "wrap a bare atom in ()"."""
     assert token.endswith(")"), token
     return f"{token[:-1]},{reactive_code})"
+
+
+def _trigger_args(token):
+    """Parse a SIMPLE (non-nested-paren) trigger token's own argument
+    list as raw text, e.g. "obstacle_in_bound(0.6)" -> ["0.6"],
+    "collision" -> []. Safe for every one of the fixed trigger names
+    below -- none of them ever nest parens in their OWN arguments
+    (unlike guard_break, whose Cond argument can nest arbitrarily and
+    is handled separately, directly from its own already-known pieces,
+    never by re-parsing formatted text)."""
+    if "(" not in token:
+        return []
+    inner = token[token.index("(") + 1:-1]
+    return [a.strip() for a in inner.split(",")]
+
+
+def _reason_pattern_for_manual_trigger(token):
+    """The UNTAGGED Reason shape (see tag_reason/3 in basic_action_
+    theory.pl) a manually-typed Triggers-list token (BEFORE any
+    reactive Code got appended -- see _append_reactive_code) produces
+    when it actually fires -- mirrors trigger_crossing_time/11's own
+    Reason construction exactly, functor-for-functor (note
+    battery_below's own Reason functor is battery_under, not
+    battery_below -- the one place a trigger name and its own Reason
+    functor genuinely differ). Any part of the Reason that's only ever
+    known at RUNTIME (an argmin ObstacleId for collision/obstacle_in_
+    bound/obstacle_on_path) is written as the GROUND ATOM 'wild' here,
+    NOT a genuine Prolog variable ('_') -- basic_action_theory.pl's own
+    match_wild/2 unwraps 'wild' internally; a real free variable here
+    would instead make the resulting query(...) declaration itself
+    non-ground, and ProbLog reports one result row PER DISTINCT
+    GROUNDING of a non-ground query rather than aggregating them into
+    one probability (verified directly against ProbLog's own engine),
+    silently turning e.g. "P(crashed on a1)" into a separate row per
+    obstacle ID instead of one combined number. Everything else (a
+    Threshold, a literal ObstacleId/GX/GY the tree author wrote) is
+    already known at translation time and kept LITERAL, so
+    module/contracts/goal_formula_check.py's generate_safety_queries
+    can match it exactly. Used ONLY to build the safety-query universe
+    ahead of time -- has no bearing on run-time correctness of
+    anything trigger_crossing_time itself computes."""
+    functor = token.split("(", 1)[0].strip()
+    args = _trigger_args(token)
+    if functor == "collision":
+        return "crashed(wild)"
+    if functor == "battery":
+        return "battery_depleted"
+    if functor == "obstacle_in_bound":
+        return f"obstacle_in_bound({args[0]},wild)"
+    if functor == "obstacle_on_path":
+        return f"obstacle_on_path({args[0]},wild)"
+    if functor == "battery_below":
+        return f"battery_under({args[0]})"
+    if functor == "battery_equal":
+        return f"battery_equal({args[0]})"
+    if functor == "battery_over":
+        return f"battery_over({args[0]})"
+    if functor == "line_of_sight_clear":
+        return f"line_of_sight_clear({args[0]},{args[1]},{args[2]})"
+    if functor == "crosses_segment":
+        return f"crosses_segment({args[0]},{args[1]},{args[2]},{args[3]})"
+    raise BTValidationError(
+        f"Unknown trigger '{token}' -- no known Reason-pattern mapping "
+        f"for safety-query generation; add one to "
+        f"_reason_pattern_for_manual_trigger.")
 
 
 def _leaf_condition_term(tag, attrs):
@@ -544,6 +610,40 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
 
             triggers = "[" + ",".join(default_tokens + tagged_manual + derived_tokens) + "]"
             action_code = var_pool.next_action_code()
+
+            # The FULL universe of untagged Reason shapes this leg can
+            # possibly halt with -- see module/contracts/goal_formula_
+            # check.py's own generate_safety_queries, which turns this
+            # into query(any_reason_pattern_by_action(Pattern,
+            # ActionCode)) facts for every problem automatically,
+            # instead of anyone hand-picking which reasons are worth
+            # asking about. "completed" (natural end, no trigger fired)
+            # is always possible for every leg, regardless of Triggers.
+            reason_patterns = ["completed"]
+            reason_patterns += [_reason_pattern_for_manual_trigger(t) for t in default_tokens]
+            reason_patterns += [_reason_pattern_for_manual_trigger(t) for t in manual_tokens
+                                 if t.split("(", 1)[0].strip() not in ("collision", "battery")]
+            # guard_break's own pattern embeds cond_term VERBATIM,
+            # whatever text _reduce_guard_condition already built for
+            # it -- unlike a functor-only grouping, this needs no
+            # separate unwrapping step to tell two different guards
+            # apart (guard_break(battery_over(70.0)) and guard_break
+            # (neg(obstacle_in_bound(0.6))) are already two distinct
+            # patterns here, not one shared "guard_break" bucket).
+            # Scope caveat, stated plainly: this handles everything the
+            # guard-derivation translator can actually produce today (a
+            # bare condition or one neg(...) around it -- never and/or,
+            # since _reduce_guard_condition never emits those). If
+            # guard derivation is later extended to combine conditions,
+            # this line still needs no change (it just embeds whatever
+            # cond_term text exists), but that's a coincidence of using
+            # the whole pattern rather than a functor -- not a
+            # guarantee this scope note should be taken to extend to
+            # every future consumer of cond_term.
+            reason_patterns += [f"guard_break({cond_term})" for cond_term, _code in guard_stack
+                                 if battery_enabled or not _guard_condition_mentions_battery(cond_term)]
+            var_pool.reason_patterns_by_action[action_code] = reason_patterns
+
             return f"moveto_leg({cp_var},{triggers},{action_code})"
 
         if info["kind"] == "planWith":
@@ -743,9 +843,14 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
     """Parse + validate + translate the BT XML into ONE Prolog term
     (Node's own text, e.g. "seq_node([planWith(...),moveto_leg(...)])")
     PLUS the separate reactive_children/2 facts any ReactiveSequence/
-    ReactiveFallback in the tree needs -- returns (node_text,
-    reactive_facts), where reactive_facts is [(code, [child_term,...]),
-    ...]. Raises BTValidationError on any structural problem.
+    ReactiveFallback in the tree needs, PLUS the full per-action Reason
+    universe for safety-query generation -- returns (node_text,
+    reactive_facts, reason_patterns_by_action), where reactive_facts is
+    [(code, [child_term,...]), ...] and reason_patterns_by_action is
+    {action_code: [reason_pattern_text, ...]} (see _VarPool's own note
+    and module/contracts/goal_formula_check.py's generate_safety_
+    queries, the actual consumer). Raises BTValidationError on any
+    structural problem.
 
     battery_enabled=False strips every battery-related trigger name
     (battery, battery_below(...), battery_over(...), battery_equal(...)
@@ -794,12 +899,17 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
             f"live ENTIRELY inside the same reactive composite (or entirely "
             f"outside all of them): {details}.")
 
-    return node_text, var_pool.reactive_facts
+    return node_text, var_pool.reactive_facts, var_pool.reason_patterns_by_action
 
 
 def generate_plan_pl(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
                       output_path=DEFAULT_OUTPUT_PATH, battery_enabled=True):
-    node_text, reactive_facts = translate_tree(xml_path, schema_path, battery_enabled=battery_enabled)
+    """Returns (output_path, reason_patterns_by_action) -- the second
+    element is what main.py hands to module/contracts/goal_formula_
+    check.py's generate_safety_queries right after goal_formula.pl's
+    own validation, to build this problem's own queries_generated.pl."""
+    node_text, reactive_facts, reason_patterns_by_action = translate_tree(
+        xml_path, schema_path, battery_enabled=battery_enabled)
     lines = [
         "% AUTO-GENERATED by module/translators/bt_to_prolog.py from",
         f"% {os.path.relpath(xml_path, os.path.dirname(output_path))} -- DO NOT HAND-EDIT,",
@@ -834,9 +944,9 @@ def generate_plan_pl(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
         lines.append("")
     with open(output_path, "w") as f:
         f.write("\n".join(lines))
-    return output_path
+    return output_path, reason_patterns_by_action
 
 
 if __name__ == "__main__":
-    out = generate_plan_pl()
+    out, _reason_patterns_by_action = generate_plan_pl()
     print(f"Wrote {out}")

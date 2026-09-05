@@ -10,16 +10,18 @@ re-indexed from "discrete grid step N" to "sampled instant I along the
 one continuous walk", and from "grid obstacle cells" to "obstacle
 polygons" (as produced by module/translators/occgrid_to_problog.py).
 
-Prints a COMPACT summary (the problem's own goal_formula.pl, plus a
-small probability table) rather than the earlier verbose per-sample
-report -- trimmed together with basic_action_theory.pl's own Section
-10 QUERIES list to a small, fixed set of queries, for the reactive-
-redescend/merge-grid grounding-performance investigation (see
-FUTUREWORK.md and this project's own conversation log):
+Prints a COMPACT summary (the problem's own goal_formula.pl, plus TWO
+probability tables) rather than the earlier verbose per-sample report.
+basic_action_theory.pl's own Section 10 no longer hardcodes a QUERIES
+list at all -- module/contracts/goal_formula_check.py's
+generate_safety_queries writes this problem's own queries_generated.pl
+automatically, right after goal_formula.pl's own validation (see that
+module's own header), from the per-action Reason universe module/
+translators/bt_to_prolog.py worked out while translating behavior_
+tree.xml. Table 1 (print_compact_summary) is the five ALWAYS-relevant,
+tree-shape-independent queries:
   - verify_goal_formula: P(the problem's own goal_formula.pl holds at
     the final situation)
-  - any_collision / any_battery_depletion: P(the plan ends via that
-    cause)
   - plan_outcome(true) / plan_outcome(false) / plan_outcome
     (world_too_large): the BT's own three possible outcomes
   - plan_outcome(reactive_escaped): safety net for the localized
@@ -29,6 +31,13 @@ FUTUREWORK.md and this project's own conversation log):
     so this should read 0.00% on every problem; a nonzero reading here
     means some reactive-classified trigger's code has no matching
     enclosing reactivesequence/reactivefallback in the tree.
+Table 2 (print_reason_breakdown) is the auto-generated, per-action
+breakdown of EVERY OTHER Reason this problem's own tree can actually
+produce (the old hand-picked any_collision/any_battery_depletion are
+now just two rows of this table, generated the same way as every other
+Reason instead of being hand-maintained specially) -- e.g. a leg-a1/
+leg-a2 tree with 30% total collision probability shows "crashed 30%"
+with "a1 20.00%" / "a2 10.00%" indented beneath it.
 
 hit_by/1, first_hit/1, on_track/1, verify_safe/0, and plan_route_
 blocked/0 are all still DEFINED in basic_action_theory.pl -- only their
@@ -159,15 +168,15 @@ def extract_goal_formula_text(goal_formula_path):
     return "\n".join(lines) if lines else "(no clause found)"
 
 
-# query(...) names this report covers -- kept in sync with
-# basic_action_theory.pl's own Section 10 QUERIES list by hand (there
-# are only six now, trimmed specifically to what this reactive-
-# redescend/merge-grid investigation needs -- see that section's own
-# comment for what else is still DEFINED but no longer queried).
+# The five ALWAYS-relevant, tree-shape-independent queries -- kept in
+# sync BY CONSTRUCTION with module/contracts/goal_formula_check.py's
+# own generate_safety_queries (_ALWAYS_QUERIES there), not by hand:
+# every OTHER safety query (any_reason_pattern/1, any_reason_pattern_
+# by_action/2 -- Table 2, see print_reason_breakdown below) is derived
+# automatically from the problem's own behavior_tree.xml instead of
+# being a fixed list anyone maintains here.
 SUMMARY_QUERIES = [
     "verify_goal_formula",
-    "any_collision",
-    "any_battery_depletion",
     "plan_outcome(true)",
     "plan_outcome(false)",
     "plan_outcome(world_too_large)",
@@ -187,16 +196,71 @@ def print_compact_summary(tee, results, goal_formula_path):
     tee(f"  {'-'*label_w}   -----------")
     for name in SUMMARY_QUERIES:
         if name not in results:
-            # any_battery_depletion specifically: absent (not just 0)
-            # when this problem's own config.yaml has battery.enabled:
-            # false -- config_to_prolog.py then never declares that
-            # query at all (see its own header). Reporting 0.00% here
-            # would misleadingly read as "verified never happens"
-            # rather than "not modeled for this problem".
             tee(f"  {name:<{label_w}}   N/A (not queried)")
             continue
         p = results[name]
         tee(f"  {name:<{label_w}}   {p*100:6.2f}%")
+
+    print_reason_breakdown(tee, results)
+
+
+def _split_last_top_level_arg(inner_text):
+    """Given the text INSIDE a 2-arg call's own parens (e.g.
+    "guard_break(battery_over(70.0)),a1"), split off the LAST
+    top-level argument (ActionCode) from everything before it
+    (the Pattern), respecting nested parens -- a naive split(",") would
+    break on a Pattern that itself contains commas, e.g.
+    line_of_sight_clear(obs1,11.675,11.525)."""
+    depth = 0
+    for i in range(len(inner_text) - 1, -1, -1):
+        ch = inner_text[i]
+        if ch == ")":
+            depth += 1
+        elif ch == "(":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            return inner_text[:i], inner_text[i + 1:]
+    raise ValueError(f"no top-level comma found in {inner_text!r}")
+
+
+def print_reason_breakdown(tee, results):
+    """Table 2: every any_reason_pattern_by_action(Pattern,ActionCode)
+    result, grouped by Pattern's own outer functor. A functor with only
+    ONE distinct Pattern anywhere in the tree (the common case --
+    "crashed", "battery_depleted", ...) gets a clean bare-functor
+    header; a functor with SEVERAL distinct Patterns (e.g. guard_break
+    firing on two genuinely different underlying conditions) gets each
+    Pattern its OWN, fully-distinguishing header instead of silently
+    merging them into one number that would hide which guard actually
+    broke -- see basic_action_theory.pl's own halted_with_pattern/3 and
+    match_wild/2 for why the underlying query is exact-pattern-based,
+    not merely functor-based, in the first place."""
+    prefix = "any_reason_pattern_by_action("
+    by_pattern = {}   # pattern_text -> {action_code: probability}
+    for key, prob in results.items():
+        if not (key.startswith(prefix) and key.endswith(")")):
+            continue
+        inner = key[len(prefix):-1]
+        pattern_text, action_code = _split_last_top_level_arg(inner)
+        by_pattern.setdefault(pattern_text, {})[action_code] = prob
+
+    if not by_pattern:
+        return
+
+    by_functor = {}
+    for pattern_text in by_pattern:
+        functor = pattern_text.split("(", 1)[0].strip()
+        by_functor.setdefault(functor, []).append(pattern_text)
+
+    section(tee, "Safety query breakdown (per action)")
+    for functor in sorted(by_functor):
+        for pattern_text in sorted(by_functor[functor]):
+            label = functor if len(by_functor[functor]) == 1 else pattern_text
+            per_action = by_pattern[pattern_text]
+            total = sum(per_action.values())
+            tee(f"  {label:<40} {total*100:6.2f}%")
+            for action_code in sorted(per_action):
+                tee(f"    {action_code:<38} {per_action[action_code]*100:6.2f}%")
 
 
 # -----------------------------------------------------------------------
@@ -310,7 +374,7 @@ def main():
         # see bt_to_prolog.py's own generate_plan_pl/_is_battery_trigger.
         try:
             from bt_to_prolog import generate_plan_pl, BTValidationError
-            generated_plan_path = generate_plan_pl(
+            generated_plan_path, reason_patterns_by_action = generate_plan_pl(
                 xml_path=os.path.join(problem_dir, "behavior_tree.xml"),
                 schema_path=os.path.join(CONTRACTS_DIR, "schema.yaml"),
                 output_path=os.path.join(problem_dir, "plan_generated.pl"),
@@ -332,7 +396,8 @@ def main():
         if CONTRACTS_DIR not in sys.path:
             sys.path.insert(0, CONTRACTS_DIR)
         try:
-            from goal_formula_check import validate_goal_formula, GoalFormulaValidationError
+            from goal_formula_check import (validate_goal_formula, generate_safety_queries,
+                                             GoalFormulaValidationError)
             goal_formula_path = os.path.join(problem_dir, "goal_formula.pl")
             validate_goal_formula(
                 goal_formula_path=goal_formula_path,
@@ -344,6 +409,22 @@ def main():
             sys.exit(1)
         except Exception as e:
             tee(f"\n  [ERROR] Could not validate goal_formula.pl: {e}")
+            sys.exit(1)
+
+        # Generate <problem>/queries_generated.pl -- every safety
+        # query this problem's own tree can actually produce, derived
+        # from reason_patterns_by_action above (see bt_to_prolog.py's
+        # own generate_plan_pl) -- called right after goal_formula.pl's
+        # own validation since the two always run back-to-back (see
+        # module/contracts/goal_formula_check.py's own header).
+        try:
+            generated_queries_path = generate_safety_queries(
+                reason_patterns_by_action,
+                output_path=os.path.join(problem_dir, "queries_generated.pl"))
+            tee(f"  Queries     : {generated_queries_path} (auto-generated from "
+                f"this tree's own per-action Reason universe)")
+        except Exception as e:
+            tee(f"\n  [ERROR] Could not generate queries_generated.pl: {e}")
             sys.exit(1)
 
         # Rewrite module/theory/problem_data.pl -- the small bootstrap

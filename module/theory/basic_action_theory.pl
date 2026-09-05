@@ -2170,6 +2170,80 @@ battery_under_threshold(Threshold, S) :- halted_with(battery_under(Threshold,_),
 battery_equal_threshold(Threshold, S) :- halted_with(battery_equal(Threshold,_), S).
 battery_over_threshold(Threshold, S) :- halted_with(battery_over(Threshold,_), S).
 
+% -- GENERIC per-action safety-query machinery -----------------------
+% match_wild(+PatternArgs, +ActualArgs): PatternArgs unifies against
+% ActualArgs position-by-position, where the GROUND ATOM 'wild' in
+% PatternArgs matches ANY value at that position (an argmin ObstacleId
+% that's only known at RUNTIME, never at translation time) while every
+% OTHER PatternArgs element must match EXACTLY (a Threshold/GX/GY/Cond
+% already known when the query itself was generated). 'wild' is a
+% plain ATOM here, deliberately NOT a genuine unbound Prolog variable
+% (e.g. '_') -- see halted_with_pattern/3's own note on why that
+% distinction is exactly what keeps a query(...) declaration reporting
+% ONE aggregated probability instead of ProbLog silently splitting it
+% into one row per distinct grounding.
+match_wild([], []).
+match_wild([wild|Ws], [_|As]) :-
+    match_wild(Ws, As).
+match_wild([W|Ws], [W|As]) :-
+    W \= wild,
+    match_wild(Ws, As).
+
+% halted_with_pattern(+GroundPattern, +ActionCode, +S): true iff S's
+% history contains a halt whose Reason, once ActionCode (tag_reason/3's
+% own trailing argument -- see poss(haltMoveto(...))'s note) is
+% stripped back off, MATCHES GroundPattern -- i.e. GroundPattern is the
+% UNTAGGED Reason0 shape (crashed(wild), guard_break(battery_over
+% (70.0)), battery_under(20), completed, ...), with any part that's
+% only known at RUNTIME (an argmin ObstacleId for crashed/obstacle_
+% in_bound/obstacle_on_path) written as the literal atom 'wild' by
+% whoever constructs it, and any part that's ALREADY known at
+% TRANSLATION time (a guard's own Cond, a trigger's own Threshold/
+% GX/GY) kept LITERAL -- this is what correctly distinguishes e.g.
+% guard_break(battery_over(70.0)) from guard_break(neg(obstacle_in_
+% bound(0.6))) as two separate rows, rather than collapsing every
+% guard into one combined "guard_break" total (a bare-functor grouping
+% would lose exactly that distinction, since guard_break's own
+% semantic identity lives entirely in its first argument, not its
+% functor name). GroundPattern MUST be fully ground (every position
+% either 'wild' or a literal, never a bare Prolog variable) -- a real
+% unbound variable here would make query(any_reason_pattern_by_action
+% (Pattern,ActionCode)) itself non-ground, and ProbLog reports ONE
+% result row per distinct GROUNDING of a non-ground query rather than
+% aggregating them (verified directly against ProbLog's own engine
+% before writing this) -- 'wild' avoids that entirely by keeping the
+% query term itself ground, while match_wild/2 still supplies the
+% "any value here" matching semantics internally, never exposed to the
+% query's own outer term. module/contracts/goal_formula_check.py's
+% generate_safety_queries builds exactly this GroundPattern per
+% (MoveTo, trigger) pair at translation time, mirroring bt_to_prolog.py
+% 's own trigger-name -> Reason-functor mapping (e.g. battery_below ->
+% battery_under).
+halted_with_pattern(GroundPattern, ActionCode, S) :-
+    halted_with(Reason, S),
+    Reason =.. [Functor|Args],
+    append(Args0, [ActionCode], Args),
+    GroundPattern =.. [Functor|WildArgs],
+    match_wild(WildArgs, Args0).
+
+% any_reason_pattern(+GroundPattern): P(GroundPattern occurred, from
+% ANY action) -- the auto-generated replacement for hand-picked
+% aggregates like the old any_collision/any_battery_depletion (now
+% any_reason_pattern(crashed(wild)) / any_reason_pattern(battery_
+% depleted), generated automatically for every reason this problem's
+% own tree can actually produce, not just the two someone thought to
+% hand-write).
+any_reason_pattern(GroundPattern) :-
+    final_situation(S), halted_with_pattern(GroundPattern, _ActionCode, S).
+
+% any_reason_pattern_by_action(+GroundPattern, +ActionCode): the SAME
+% probability, split by WHICH MoveTo occurrence produced it -- e.g.
+% any_reason_pattern_by_action(crashed(wild), a1) vs. (..., a2) is
+% exactly "20% on the goto-goal leg, 10% on the goto-home leg" for a
+% combined any_reason_pattern(crashed(wild)) of 30%.
+any_reason_pattern_by_action(GroundPattern, ActionCode) :-
+    final_situation(S), halted_with_pattern(GroundPattern, ActionCode, S).
+
 % last_halt(-Reason): a cond() leaf that reads off WHY the MOST RECENT
 % moveto_leg halted, without searching S's history at all. Works by
 % direct unification against S's own OUTERMOST layer: do_node(moveto_
@@ -2475,36 +2549,30 @@ verify_goal_formula :- final_situation(S), goal_formula(S).
 % ============================================================
 % 10. QUERIES
 %
-% Trimmed to exactly the queries actually needed for the reactive-
-% redescend/merge-grid performance investigation: the problem's own
-% goal_formula.pl verification, whether the plan ever ends via
-% collision, and the BT's own three possible outcomes. hit_by/1,
-% first_hit/1, on_track/1, verify_safe/0, and plan_route_blocked/0 are
-% all still DEFINED above (Section 7/8) -- only their query(...)
-% declarations were removed, so they simply stay unground/uncomputed
-% (ProbLog only grounds what a query(...) or something IT depends on
-% actually reaches) rather than being deleted outright. Re-add
-% whichever query(...) line(s) you need if per-sample hazard/drift
-% reporting is wanted again later.
+% NONE hardcoded here anymore -- every query(...) this problem needs
+% (verify_goal_formula, plan_outcome(true/false/world_too_large),
+% plan_outcome(reactive_escaped), and one any_reason_pattern(...)/
+% any_reason_pattern_by_action(...,ActionCode) pair per Reason this
+% problem's own tree can actually produce) is written into this
+% problem's own queries_generated.pl by module/contracts/
+% goal_formula_check.py's generate_safety_queries, called right after
+% goal_formula.pl's own validation (see main.py) -- a problem-
+% independent theory file can't itself vary per-problem, but the
+% generated file it consults (via problem_data.pl -- see Section 0)
+% can, and now ALL of it does, not just the one any_battery_depletion
+% special case this used to carry by hand.
 %
-% query(any_battery_depletion) is NOT declared here, on purpose --
-% it's the one query about "finishing the battery", so it's emitted
-% instead by module/translators/config_to_prolog.py, conditionally on
-% this problem's own config.yaml battery.enabled flag (see that
-% generator's own header for why: a problem-independent theory file
-% can't itself vary per-problem, but the generated config_generated.pl
-% it consults can).
+% hit_by/1, first_hit/1, on_track/1, verify_safe/0, and
+% plan_route_blocked/0 are all still DEFINED above (Section 7/8) --
+% simply never queried by the generator, so they stay ungrounded
+% (ProbLog only grounds what a query(...) or something it depends on
+% actually reaches), not deleted. Add them to generate_safety_queries'
+% own output if per-sample hazard/drift reporting is wanted again.
 %
-% query(plan_outcome(reactive_escaped)) is the runtime safety net for
+% plan_outcome(reactive_escaped) remains the runtime safety net for
 % the "a reactive trigger's own code matched no enclosing reactive
 % composite" translator-bug case -- see final_situation/1 and
-% plan_outcome/1's own notes just above. Always expected to be exactly
-% 0 for a correctly-translated plan; a nonzero value here is a bug
+% plan_outcome/1's own notes above. Always expected to be exactly 0
+% for a correctly-translated plan; a nonzero value here is a bug
 % report, not a legitimate outcome.
 % ============================================================
-query(verify_goal_formula).
-query(any_collision).
-query(plan_outcome(true)).
-query(plan_outcome(false)).
-query(plan_outcome(world_too_large)).
-query(plan_outcome(reactive_escaped)).

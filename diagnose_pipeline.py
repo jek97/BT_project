@@ -130,7 +130,8 @@ def main():
     if CONTRACTS_DIR not in sys.path:
         sys.path.insert(0, CONTRACTS_DIR)
     try:
-        from goal_formula_check import validate_goal_formula, GoalFormulaValidationError
+        from goal_formula_check import (validate_goal_formula, generate_safety_queries,
+                                         GoalFormulaValidationError)
         validate_goal_formula(
             goal_formula_path=goal_formula_path,
             vocab_path=os.path.join(CONTRACTS_DIR, "vocabulary.yaml"))
@@ -140,6 +141,20 @@ def main():
         sys.exit(1)
     except Exception as e:
         tee(f"  [ERROR] Could not validate goal_formula.pl: {e}")
+        sys.exit(1)
+
+    # behavior_tree.xml is SKIPPED here (see this script's own header),
+    # so there's no bt_to_prolog.py-derived reason_patterns_by_action
+    # to build a per-action breakdown from -- generate the five ALWAYS
+    # queries only (see generate_safety_queries' own {} note); the
+    # hand-written plan_generated.pl's own Triggers lists just won't
+    # get a Table 2 breakdown here.
+    try:
+        generate_safety_queries({}, output_path=os.path.join(problem_dir, "queries_generated.pl"))
+        tee(f"  [STAGE] queries_generated.pl written (universal queries only -- "
+            f"no BT translation happened to derive a per-action breakdown from): done")
+    except Exception as e:
+        tee(f"  [ERROR] Could not generate queries_generated.pl: {e}")
         sys.exit(1)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")

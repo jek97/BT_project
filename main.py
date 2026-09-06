@@ -185,11 +185,34 @@ SUMMARY_QUERIES = [
 ]
 
 
-def print_compact_summary(tee, results, goal_formula_path):
+def print_action_legend(tee, action_labels):
+    """Small "which action has which code" table -- action_labels
+    ({action_code: label_text}) comes straight from bt_to_prolog.py's
+    own generate_plan_pl (see that function's own note); label_text
+    already carries the action's own kind/args (e.g.
+    "PlanWith(straight, goal=point(22.275,2.075))") and, when it sits
+    under a named Sequence/Fallback/ReactiveSequence/ReactiveFallback,
+    that ancestor's own name in brackets (e.g. "[TryGoal]") -- printed
+    here so a code like a3 in Table 2 below is traceable back to WHERE
+    in the tree it came from without re-reading plan_generated.pl by
+    hand. Skipped entirely (no section header either) if this problem's
+    plan wasn't translated from behavior_tree.xml at all (e.g.
+    diagnose_pipeline.py's own hand-written-plan path never calls this)."""
+    if not action_labels:
+        return
+    section(tee, "Action codes")
+    code_w = max(len(code) for code in action_labels)
+    for code in sorted(action_labels):
+        tee(f"  {code:<{code_w}}   {action_labels[code]}")
+
+
+def print_compact_summary(tee, results, goal_formula_path, action_labels=None):
     section(tee, "Goal formula")
     tee(f"  {goal_formula_path}")
     for line in extract_goal_formula_text(goal_formula_path).split("\n"):
         tee(f"    {line}")
+
+    print_action_legend(tee, action_labels or {})
 
     section(tee, "Query results")
     label_w = max(len(name) for name in SUMMARY_QUERIES)
@@ -431,7 +454,7 @@ def main():
         # see bt_to_prolog.py's own generate_plan_pl/_is_battery_trigger.
         try:
             from bt_to_prolog import generate_plan_pl, BTValidationError
-            generated_plan_path, reason_patterns_by_action = generate_plan_pl(
+            generated_plan_path, reason_patterns_by_action, action_labels = generate_plan_pl(
                 xml_path=os.path.join(problem_dir, "behavior_tree.xml"),
                 schema_path=os.path.join(CONTRACTS_DIR, "schema.yaml"),
                 output_path=os.path.join(problem_dir, "plan_generated.pl"),
@@ -517,7 +540,7 @@ def main():
                 "file has query(...) declarations.")
             sys.exit(1)
 
-        print_compact_summary(tee, results, goal_formula_path)
+        print_compact_summary(tee, results, goal_formula_path, action_labels)
 
         tee("")
         banner(tee, f"Log : {log_path}")

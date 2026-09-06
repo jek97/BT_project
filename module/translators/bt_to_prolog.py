@@ -289,6 +289,11 @@ class _VarPool:
         self.key_scopes = {}           # key -> set of codes (None = outside any)
         self._action_counter = 0
         self.reason_patterns_by_action = {}   # action_code -> [reason_pattern_text, ...]
+        self.action_labels = {}   # action_code -> human-readable "what/where" label,
+                                   # e.g. "MoveTo [TryGoal]" or "PlanWith(straight, goal=point(22.275,2.075)) [TryGoal]"
+                                   # -- see next_action_code()'s own note; purely for
+                                   # main.py's printed action-code legend, never
+                                   # consulted by anything Prolog-side.
 
     def var_for(self, key):
         if key not in self._map:
@@ -398,6 +403,18 @@ def _guard_condition_mentions_battery(cond_term):
     neg, not battery_*, so _is_battery_trigger's own functor-prefix
     check wouldn't catch it."""
     return _BATTERY_CONDITION_RE.search(cond_term) is not None
+
+
+def _with_branch_suffix(label, branch_name):
+    """Appends " [BranchName]" to an action's own human-readable label
+    (see _VarPool.action_labels's own note) when it sits under a named
+    Sequence/Fallback/ReactiveSequence/ReactiveFallback ancestor --
+    branch_name is the NEAREST such name, threaded down through
+    _translate_node (an unnamed ancestor doesn't override an outer
+    named one -- see that function's own note). Purely cosmetic, for
+    main.py's printed action-code legend -- never affects the
+    generated Prolog term itself."""
+    return f"{label} [{branch_name}]" if branch_name else label
 
 
 def _append_reactive_code(token, reactive_code):
@@ -546,7 +563,7 @@ def _reduce_guard_condition(elem, required_polarity, schema_ports):
     return cond_term if required_polarity else f"neg({cond_term})"
 
 
-def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, reactive_code, guard_stack):
+def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, reactive_code, guard_stack, branch_name):
     attrs = _validate_ports(tag, elem, port_specs)
 
     if tag in _ACTION_DISPATCH:
@@ -653,6 +670,7 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             reason_patterns += [f"guard_break({cond_term})" for cond_term, _code in guard_stack
                                  if battery_enabled or not _guard_condition_mentions_battery(cond_term)]
             var_pool.reason_patterns_by_action[action_code] = reason_patterns
+            var_pool.action_labels[action_code] = _with_branch_suffix(f"MoveTo({cp_var})", branch_name)
 
             return f"moveto_leg({cp_var},{triggers},{action_code})"
 
@@ -736,6 +754,9 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
                 f"completed({algorithm_term},{reason_goal_text})",
                 f"no_path({algorithm_term},{reason_goal_text})",
             ]
+            plan_label = (f"PlanWith({algorithm_term})" if algorithm == "follow_boarder"
+                          else f"PlanWith({algorithm_term}, goal={reason_goal_text})")
+            var_pool.action_labels[action_code] = _with_branch_suffix(plan_label, branch_name)
 
             return f"planWith({algorithm_term},{goal_term},{cp_var},{action_code})"
 
@@ -746,7 +767,7 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
                              f"_ACTION_DISPATCH/_CONDITION_DISPATCH.")
 
 
-def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code, guard_stack):
+def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code, guard_stack, branch_name=None):
     tag = elem.tag
 
     if tag == "Inverter":
@@ -775,7 +796,7 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
                 f"<Inverter> must have exactly one child (found "
                 f"{len(children)}).")
         child_term = _translate_node(children[0], schema_ports, var_pool, battery_enabled,
-                                      reactive_code, guard_stack)
+                                      reactive_code, guard_stack, branch_name)
         return f"inverter({child_term})"
 
     if tag in _CONTROL_FLOW:
@@ -795,8 +816,14 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
         # descent, via the cond() already sitting in the tree at that
         # position) rather than live guards, so they contribute nothing
         # to guard_stack either -- see the module docstring's CONTROL-
-        # FLOW GUARD DERIVATION note.
-        child_terms = [_translate_node(c, schema_ports, var_pool, battery_enabled, reactive_code, guard_stack)
+        # FLOW GUARD DERIVATION note. own_branch_name: THIS node's own
+        # name="..." attribute if it has one, else whatever named
+        # ancestor was already in scope -- see _with_branch_suffix's
+        # own note; purely cosmetic (main.py's action-code legend),
+        # never affects the generated Prolog term.
+        own_branch_name = elem.attrib.get("name", branch_name)
+        child_terms = [_translate_node(c, schema_ports, var_pool, battery_enabled, reactive_code,
+                                        guard_stack, own_branch_name)
                        for c in children]
         functor = _CONTROL_FLOW[tag]
         return f"{functor}([{','.join(child_terms)}])"
@@ -810,6 +837,7 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
         children = list(elem)
         if not children:
             raise BTValidationError(f"<{tag}> has no children.")
+        own_branch_name = elem.attrib.get("name", branch_name)
         # A NEW reactive scope starts here -- fresh code, and every
         # descendant (until a NESTED ReactiveSequence/ReactiveFallback
         # starts its own) gets tagged with THIS one. Children are
@@ -846,7 +874,7 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
                     own_level_guards.append((cond_term, own_code))
             child_terms.append(_translate_node(
                 child, schema_ports, var_pool, battery_enabled, own_code,
-                guard_stack + own_level_guards))
+                guard_stack + own_level_guards, own_branch_name))
         var_pool.reactive_facts.append((own_code, child_terms))
         functor = _REACTIVE_CONTROL_FLOW[tag]
         return f"{functor}({own_code})"
@@ -857,7 +885,7 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
             f"ReactiveSequence/ReactiveFallback/Inverter and not an "
             f"action/condition 'id' in module/contracts/schema.yaml.")
 
-    return _translate_leaf(tag, elem, None, schema_ports[tag], var_pool, battery_enabled, reactive_code, guard_stack)
+    return _translate_leaf(tag, elem, None, schema_ports[tag], var_pool, battery_enabled, reactive_code, guard_stack, branch_name)
 
 
 def _find_tree_root(xml_root):
@@ -895,12 +923,16 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
     (Node's own text, e.g. "seq_node([planWith(...),moveto_leg(...)])")
     PLUS the separate reactive_children/2 facts any ReactiveSequence/
     ReactiveFallback in the tree needs, PLUS the full per-action Reason
-    universe for safety-query generation -- returns (node_text,
-    reactive_facts, reason_patterns_by_action), where reactive_facts is
-    [(code, [child_term,...]), ...] and reason_patterns_by_action is
+    universe for safety-query generation, PLUS a human-readable label
+    per action code -- returns (node_text, reactive_facts,
+    reason_patterns_by_action, action_labels), where reactive_facts is
+    [(code, [child_term,...]), ...], reason_patterns_by_action is
     {action_code: [reason_pattern_text, ...]} (see _VarPool's own note
     and module/contracts/goal_formula_check.py's generate_safety_
-    queries, the actual consumer). Raises BTValidationError on any
+    queries, the actual consumer), and action_labels is {action_code:
+    label_text} (see _VarPool.action_labels's own note -- main.py
+    prints this as a small "which action has which code" legend, purely
+    cosmetic, no Prolog-side consumer). Raises BTValidationError on any
     structural problem.
 
     battery_enabled=False strips every battery-related trigger name
@@ -950,16 +982,19 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
             f"live ENTIRELY inside the same reactive composite (or entirely "
             f"outside all of them): {details}.")
 
-    return node_text, var_pool.reactive_facts, var_pool.reason_patterns_by_action
+    return node_text, var_pool.reactive_facts, var_pool.reason_patterns_by_action, var_pool.action_labels
 
 
 def generate_plan_pl(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
                       output_path=DEFAULT_OUTPUT_PATH, battery_enabled=True):
-    """Returns (output_path, reason_patterns_by_action) -- the second
-    element is what main.py hands to module/contracts/goal_formula_
-    check.py's generate_safety_queries right after goal_formula.pl's
-    own validation, to build this problem's own queries_generated.pl."""
-    node_text, reactive_facts, reason_patterns_by_action = translate_tree(
+    """Returns (output_path, reason_patterns_by_action, action_labels)
+    -- reason_patterns_by_action is what main.py hands to module/
+    contracts/goal_formula_check.py's generate_safety_queries right
+    after goal_formula.pl's own validation, to build this problem's own
+    queries_generated.pl; action_labels ({action_code: label_text}) is
+    what main.py prints as its own action-code legend -- see
+    translate_tree's own note for both."""
+    node_text, reactive_facts, reason_patterns_by_action, action_labels = translate_tree(
         xml_path, schema_path, battery_enabled=battery_enabled)
     lines = [
         "% AUTO-GENERATED by module/translators/bt_to_prolog.py from",
@@ -975,6 +1010,9 @@ def generate_plan_pl(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
             "% every leg's own Triggers list below (see bt_to_prolog.py's",
             "% own _is_battery_trigger).",
         ]
+    if action_labels:
+        lines += ["%", "% Action code legend (see main.py's own printed copy of this):"]
+        lines += [f"%   {code}: {action_labels[code]}" for code in sorted(action_labels)]
     lines += [
         "",
         f"plan({node_text}).",
@@ -995,9 +1033,9 @@ def generate_plan_pl(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
         lines.append("")
     with open(output_path, "w") as f:
         f.write("\n".join(lines))
-    return output_path, reason_patterns_by_action
+    return output_path, reason_patterns_by_action, action_labels
 
 
 if __name__ == "__main__":
-    out, _reason_patterns_by_action = generate_plan_pl()
+    out, _reason_patterns_by_action, _action_labels = generate_plan_pl()
     print(f"Wrote {out}")

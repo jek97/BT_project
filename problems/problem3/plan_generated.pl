@@ -20,14 +20,29 @@
 %
 %   1. distance_below(11.675,11.525,0.3) -- already there, nothing to do.
 %   2. Guarded by cond(neg(last_halt(obstacle_on_path(_,_)))): plan
-%      straight to goal; walk it, watching obstacle_on_path(0.6) as a
-%      trigger; then confirm it actually landed within tolerance.
+%      straight to goal (PlanWith code a3); walk it, watching
+%      obstacle_on_path(0.6) as a trigger; then confirm it actually
+%      landed within tolerance.
 %   3. Recover WHICH obstacle branch 2's own trigger fired against
 %      (recover_obstacle/1, built on last_halt/1 -- see basic_action_
-%      theory.pl's own note there); follow its offset boundary; walk
-%      it, watching line_of_sight_clear(Obst1,11.675,11.525) as a
-%      trigger; then confirm it actually landed within tolerance.
+%      theory.pl's own note there); follow its offset boundary
+%      (PlanWith code a4); walk it, watching line_of_sight_clear
+%      (Obst1,11.675,11.525) as a trigger; then confirm it actually
+%      landed within tolerance.
 %
+% Both planWith calls now also carry their own ActionCode (a3, a4,
+% continuing the a1/a2 numbering already used by the two moveto_leg
+% occurrences below -- same shared per-occurrence counter
+% next_action_code() would assign if this tree DID translate
+% automatically) as their own 4th argument, exactly mirroring MoveTo's
+% own ActionCode -- see do_node(planWith(...))'s own note in
+% basic_action_theory.pl. So a failed astar/straight/voronoi/
+% follow_boarder call now records completed(Algorithm,Goal,ActionCode)
+% or no_path(Algorithm,Goal,ActionCode) in the situation history (Goal
+% is `none` for follow_boarder, which has no goal point), distinguishing
+% WHICH of several planning attempts in the same tree produced it, the
+% same way crashed(ObstacleId,ActionCode) already distinguishes WHICH
+% MoveTo leg crashed.
 % No third "resume to goal" leg is hand-chained after branch 3 -- it
 % doesn't need one. Every trigger above is classified `reactive` (see
 % leg_status/9) and tagged with the SAME code, rc1, identifying the
@@ -71,13 +86,13 @@ reactive_children(rc1, [
     cond(distance_below(11.675,11.525,0.3)),
     seq_node([
         cond(neg(last_halt(obstacle_on_path(_,_,_)))),
-        planWith(straight, point(11.675,11.525), PathS),
+        planWith(straight, point(11.675,11.525), PathS, a3),
         moveto_leg(PathS, [collision,battery,obstacle_on_path(0.6,rc1)], a1),
         cond(distance_below(11.675,11.525,0.3))
     ]),
     seq_node([
         cond(recover_obstacle(Obst1)),
-        planWith(follow_boarder(Obst1,0.6), point(0.0,0.0), PathFB),
+        planWith(follow_boarder(Obst1,0.6), point(0.0,0.0), PathFB, a4),
         moveto_leg(PathFB, [collision,battery,line_of_sight_clear(Obst1,11.675,11.525,rc1)], a2),
         cond(distance_below(11.675,11.525,0.3))
     ])

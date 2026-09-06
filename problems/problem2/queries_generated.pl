@@ -11,9 +11,13 @@ query(plan_outcome(reactive_escaped)).
 
 query(any_reason_pattern(battery_depleted)).
 query(any_reason_pattern(completed)).
+query(any_reason_pattern(completed(voronoi,point(11.675,11.525)))).
 query(any_reason_pattern(crashed(wild))).
+query(any_reason_pattern(no_path(voronoi,point(11.675,11.525)))).
 
-query(any_reason_pattern_by_action(completed,a1)).
-query(any_reason_pattern_by_action(crashed(wild),a1)).
-query(any_reason_pattern_detail_by_action(crashed(_),a1)).
-query(any_reason_pattern_by_action(battery_depleted,a1)).
+query(any_reason_pattern_by_action(completed(voronoi,point(11.675,11.525)),a1)).
+query(any_reason_pattern_by_action(no_path(voronoi,point(11.675,11.525)),a1)).
+query(any_reason_pattern_by_action(completed,a2)).
+query(any_reason_pattern_by_action(crashed(wild),a2)).
+query(any_reason_pattern_detail_by_action(crashed(_),a2)).
+query(any_reason_pattern_by_action(battery_depleted,a2)).

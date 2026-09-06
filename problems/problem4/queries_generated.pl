@@ -11,15 +11,23 @@ query(plan_outcome(reactive_escaped)).
 
 query(any_reason_pattern(battery_depleted)).
 query(any_reason_pattern(completed)).
+query(any_reason_pattern(completed(straight,point(2.275,2.075)))).
+query(any_reason_pattern(completed(straight,point(22.275,2.075)))).
 query(any_reason_pattern(crashed(wild))).
 query(any_reason_pattern(guard_break(battery_over(70.0)))).
+query(any_reason_pattern(no_path(straight,point(2.275,2.075)))).
+query(any_reason_pattern(no_path(straight,point(22.275,2.075)))).
 
-query(any_reason_pattern_by_action(completed,a1)).
-query(any_reason_pattern_by_action(crashed(wild),a1)).
-query(any_reason_pattern_detail_by_action(crashed(_),a1)).
-query(any_reason_pattern_by_action(battery_depleted,a1)).
-query(any_reason_pattern_by_action(guard_break(battery_over(70.0)),a1)).
+query(any_reason_pattern_by_action(completed(straight,point(22.275,2.075)),a1)).
+query(any_reason_pattern_by_action(no_path(straight,point(22.275,2.075)),a1)).
 query(any_reason_pattern_by_action(completed,a2)).
 query(any_reason_pattern_by_action(crashed(wild),a2)).
 query(any_reason_pattern_detail_by_action(crashed(_),a2)).
 query(any_reason_pattern_by_action(battery_depleted,a2)).
+query(any_reason_pattern_by_action(guard_break(battery_over(70.0)),a2)).
+query(any_reason_pattern_by_action(completed(straight,point(2.275,2.075)),a3)).
+query(any_reason_pattern_by_action(no_path(straight,point(2.275,2.075)),a3)).
+query(any_reason_pattern_by_action(completed,a4)).
+query(any_reason_pattern_by_action(crashed(wild),a4)).
+query(any_reason_pattern_detail_by_action(crashed(_),a4)).
+query(any_reason_pattern_by_action(battery_depleted,a4)).

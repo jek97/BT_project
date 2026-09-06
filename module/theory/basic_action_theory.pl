@@ -1483,8 +1483,8 @@ plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, [], no_path, false) 
 %    IMPORTANT GOTCHA when using planWith inside a fallback_node with
 %    SEPARATE algorithms per branch: give EACH branch its OWN CP
 %    variable, e.g.
-%        fallback_node([seq_node([planWith(astar,point(GX,GY),CP1), moveto_leg(CP1,...)]),
-%                        seq_node([planWith(straight,point(GX,GY),CP2), moveto_leg(CP2,...)])])
+%        fallback_node([seq_node([planWith(astar,point(GX,GY),CP1,a1), moveto_leg(CP1,...)]),
+%                        seq_node([planWith(straight,point(GX,GY),CP2,a2), moveto_leg(CP2,...)])])
 %    NOT a single CP variable shared across both branches. Reusing one
 %    CP across fallback alternatives silently breaks: a FAILING
 %    planWith still SUCCEEDS as a do_node call (with Outcome=false,
@@ -1506,17 +1506,67 @@ plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, [], no_path, false) 
 % goal-tolerance checking in leg_status, first_hit/on_track/
 % verify_safe reporting) stays exact, unaffected -- only the position
 % a NEW leg gets planned FROM is coarsened.
-do_node(planWith(Algorithm, point(GX,GY), CP), S, do(planned(Algorithm,Reason), S), Status) :-
+%
+% ActionCode (a FOURTH argument now, one per planWith OCCURRENCE in
+% the tree, from the SAME var_pool.next_action_code() counter MoveTo's
+% own ActionCode already comes from -- codes stay unique tree-wide
+% regardless of node kind) is baked into the RECORDED Reason via
+% tag_reason/3, the EXACT same generic mechanism poss(haltMoveto(...))
+% already uses -- see that predicate's own note. Reason0 out of
+% plan_call/8 is always the bare atom completed/no_path; before
+% tagging, it's first rebuilt (via =..) to also carry Algorithm and
+% the point this call was actually working toward, so the FINAL
+% recorded Reason is completed(Algorithm,Goal,ActionCode) or
+% no_path(Algorithm,Goal,ActionCode) -- ActionCode LAST is not
+% arbitrary, it's what lets halted_with_pattern/3 (built generically
+% on "the recorded Reason's own trailing argument is ActionCode",
+% see that predicate's own note) work for planning outcomes with NO
+% change of its own. TWO mutually exclusive clauses below, split on
+% Algorithm's own shape, ONLY because follow_boarder has no real Goal
+% point to report (see follow_boarder(ObstacleId,Offset)'s own note
+% above plan_call/8) --
+% embedding the harmless point(0.0,0.0) placeholder threaded through
+% planWith's own second argument for template-sharing purposes would
+% be misleading if surfaced in a Reason meant to be read by a human/
+% query, so that case reports the honest atom `none` instead. The
+% explicit Algorithm \= follow_boarder(_,_) guard on the second clause
+% is NOT redundant with the first clause's own head shape: without it,
+% a follow_boarder call's own point(0.0,0.0) placeholder Goal argument
+% would ALSO unify against the second clause's point(GX,GY) head
+% pattern, giving ProbLog TWO derivations of the same fact instead of
+% one -- exactly the kind of silent solution-doubling this project has
+% already hit once (see match_wild/2's own history note) and now
+% checks for on purpose.
+do_node(planWith(follow_boarder(ObstacleId,Offset), _Goal, CP, ActionCode), S,
+        do(planned(follow_boarder(ObstacleId,Offset),Reason), S), Status) :-
     now(T, S), at(SXExact,SYExact,T,S),
     disc_step_position(Grid),
     quantize(SXExact, Grid, SX), quantize(SYExact, Grid, SY),
-    plan_call(Algorithm, SX,SY,GX,GY, CP, Reason, Status).
+    plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, CP, Reason0, Status),
+    Reason0 =.. [Functor],
+    Reason1 =.. [Functor, follow_boarder(ObstacleId,Offset), none],
+    tag_reason(Reason1, ActionCode, Reason).
+do_node(planWith(Algorithm, point(GX,GY), CP, ActionCode), S,
+        do(planned(Algorithm,Reason), S), Status) :-
+    Algorithm \= follow_boarder(_,_),
+    now(T, S), at(SXExact,SYExact,T,S),
+    disc_step_position(Grid),
+    quantize(SXExact, Grid, SX), quantize(SYExact, Grid, SY),
+    plan_call(Algorithm, SX,SY,GX,GY, CP, Reason0, Status),
+    Reason0 =.. [Functor],
+    Reason1 =.. [Functor, Algorithm, point(GX,GY)],
+    tag_reason(Reason1, ActionCode, Reason).
 
 % planned_with(+Algorithm, +Reason, +S): the direct parallel to
 % halted_with/2, for the (now-recorded) planning marker. Searches the
 % WHOLE history, so it can distinguish which of SEVERAL planning
 % attempts (across different legs, or different fallback branches)
-% produced a given Reason, and with which algorithm.
+% produced a given Reason, and with which algorithm -- though Reason
+% ITSELF now already carries Algorithm and ActionCode too (see
+% do_node(planWith(...))'s own note), so this predicate's own
+% Algorithm argument is redundant with Reason's own first argument in
+% practice; kept as-is since dropping it would be a needless interface
+% change for something already unambiguous.
 planned_with(Algorithm, Reason, do(planned(Algorithm,Reason), _)).
 planned_with(Algorithm, Reason, do(_A, S)) :- planned_with(Algorithm, Reason, S).
 
@@ -1701,7 +1751,13 @@ holds(neg(P),   S) :- \+ holds(P,S).
 
 % halted_with_cond(Reason): reads the LAST halt's Reason via
 % halted_with/2 -- lets a cond() leaf branch on how the PREVIOUS leg
-% ended, e.g. cond(halted_with_cond(battery_depleted)).
+% ended, e.g. cond(halted_with_cond(battery_depleted)). ACTION-
+% INDEPENDENT (see halted_with/2's own note): Reason can just as well
+% be a planning call's own completed(Algorithm,Goal,Code)/no_path
+% (Algorithm,Goal,Code), e.g. cond(halted_with_cond(no_path(_,_,_)))
+% to branch on "did the last planning attempt fail, regardless of
+% which algorithm/goal" -- same wildcard convention as every other
+% Reason shape below.
 %
 % TODO / KNOWN INTERFACE CHANGE: crashed/obstacle_in_bound/battery_under
 % Reasons are compound terms carrying extra info (crashed(ObstacleId),
@@ -1738,7 +1794,7 @@ holds(halted_with_cond(Reason), S) :- halted_with(Reason, S).
 % there, or a check placed right after a MoveTo to confirm it actually
 % landed close enough to its own intended target --
 %   fallback_node([cond(distance_below(11.675,11.525,0.3)), moveto_leg(CP,[collision,battery])])
-% Pass the SAME point as whichever PlanAstar/PlanVoronoi/... node's own
+% Pass the SAME point as whichever PlanWith node's own
 % goal port targets, if that's the intent -- being explicit here means
 % there is no longer a global/local goal-point mismatch to drift out
 % of sync (the risk a single shared goal/2 fact used to carry).
@@ -2097,12 +2153,26 @@ sample_walk_frac(I, S, WalkFrac) :-
 %    situation's own history.
 % ---------------------------------------------------------------
 
-% halted_with(+Reason, +S): TRUE iff SOMEWHERE in S's action history a
-% haltMoveto occurred with exactly this Reason. Searches the WHOLE
-% history (not just the most recent halt), so a future multi-leg plan
-% where an earlier leg had a different fate than the final leg is
-% still handled correctly.
+% halted_with(+Reason, +S): TRUE iff SOMEWHERE in S's action history
+% EITHER a haltMoveto OR a planWith occurred with exactly this Reason
+% -- ACTION-INDEPENDENT on purpose: a query built on this (or on
+% halted_with_pattern/3 further down, which is layered directly on
+% top of this) shouldn't have to know or care whether a given Reason
+% came from a MoveTo leg finishing or a planning call finishing, only
+% that SOME action in the history produced it. The two Reason
+% vocabularies never collide by construction: a MoveTo's own Reasons
+% (completed(Code), crashed(ObstId,Code), battery_under(Threshold,Code),
+% ...) and a planning call's own (completed(Algorithm,Goal,Code),
+% no_path(Algorithm,Goal,Code)) differ in ARITY even where they share a
+% functor name (completed/1 vs completed/3), so Prolog unification
+% already keeps "any MoveTo completion" (completed(_)) and "any
+% planning success" (completed(_,_,_)) as two distinct, never-
+% overlapping queries with no extra disambiguation needed. Searches the
+% WHOLE history (not just the most recent halt/plan), so a future
+% multi-leg plan where an earlier leg/planning call had a different
+% fate than the final one is still handled correctly.
 halted_with(Reason, do(haltMoveto(_,Reason,_), _)).
+halted_with(Reason, do(planned(_Algorithm,Reason), _)).
 halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 
 % visited(+Loc, +Tol, +S): TRUE iff the robot ACTUALLY ARRIVED at
@@ -2213,9 +2283,12 @@ match_wild([W|Ws], [W|As]) :-
     match_wild(Ws, As).
 
 % halted_with_pattern(+GroundPattern, +ActionCode, +S): true iff S's
-% history contains a halt whose Reason, once ActionCode (tag_reason/3's
-% own trailing argument -- see poss(haltMoveto(...))'s note) is
-% stripped back off, MATCHES GroundPattern -- i.e. GroundPattern is the
+% history contains a halt OR a planning call (see halted_with/2's own
+% action-independence note) whose Reason, once ActionCode (tag_reason/
+% 3's own trailing argument -- see poss(haltMoveto(...)) and
+% do_node(planWith(...))'s own notes; ALWAYS the trailing argument,
+% regardless of which action produced it) is stripped back off,
+% MATCHES GroundPattern -- i.e. GroundPattern is the
 % UNTAGGED Reason0 shape (crashed(wild), guard_break(battery_over
 % (70.0)), battery_under(20), completed, ...), with any part that's
 % only known at RUNTIME (an argmin ObstacleId for crashed/obstacle_
@@ -2357,8 +2430,8 @@ holds(last_halt(Reason), do(haltMoveto(_T,Reason,_Status),_SPrev)).
 % obstacle_on_path_obstacle/3 (see that predicate's own family comment
 % above it): a Fallback whose first branch plans+walks straight
 % (watching obstacle_on_path(Threshold) as a trigger) and whose SECOND
-% branch needs to know WHICH obstacle to hand FollowBoarder(ObstacleId,
-% ...) -- Golog's own fallback_node semantics threads the SITUATION S
+% branch needs to know WHICH obstacle to hand planWith(follow_boarder
+% (ObstacleId,...),...) -- Golog's own fallback_node semantics threads the SITUATION S
 % forward from a failed branch into the next one (see fallback_node's
 % own do_node note near the top of this section), but NEVER a raw
 % Prolog variable binding a failed branch happened to make, so the
@@ -2583,8 +2656,8 @@ on_track(I) :-
 % BatteryBelow -- are already expressible in the XML with no further
 % changes here; see
 % bt_to_prolog.py's own header for the blackboard-to-Prolog-variable
-% translation this relies on (e.g. giving two different PlanAstar/
-% PlanStraight nodes distinct blackboard keys, same as the CP1/CP2
+% translation this relies on (e.g. giving two different PlanWith
+% nodes distinct blackboard keys, same as the CP1/CP2
 % convention this file already documents for hand-written multi-leg
 % plans). Only the AUTOMATIC generation of multi-leg XML trees and
 % reacting to a planWith/moveto_leg FAILURE by re-planning are future

@@ -39,7 +39,7 @@ WHY A FACT, NOT A CLAUSE WITH A BODY: the old hand-written plan/1 was
 `plan(seq_node([moveto_leg(CP,Triggers)])) :- control_points(CP),
 default_triggers(Triggers).` -- CP had to be bound by a BODY goal
 because the Node term itself only ever REFERENCED CP, never bound it.
-Once a plan's own PlanAstar/PlanStraight leaf computes ControlPoints
+Once a plan's own PlanWith leaf computes ControlPoints
 itself (via planWith(Algorithm,Goal,CP)), CP is bound INSIDE the Node
 term the moment do_node actually runs it -- there is nothing left for a
 body to bind, so the generated plan/1 is a plain fact.
@@ -48,18 +48,18 @@ BLACKBOARD -> PROLOG VARIABLE TRANSLATION: BT.cpp wires one node's
 output port to another's input port by giving both the SAME
 "{blackboard_key}" attribute value (this is a REAL, standard BT.cpp
 convention, not something invented for this project). control_points is
-the one port in this schema that is ALWAYS wired this way -- PlanAstar/
-PlanStraight compute it, they never receive it as a literal, and
+the one port in this schema that is ALWAYS wired this way -- PlanWith
+computes it, it never receives it as a literal, and
 MoveTo's own leg has no way to invent it, so a literal control_points
 value is a hard error, never a valid input here. Each distinct
 blackboard key becomes ONE Prolog variable, shared across every node
 that references it, via straightforward unification -- e.g. "{cp}" on
-both a PlanAstar and a MoveTo node becomes the SAME Prolog variable CP
+both a PlanWith and a MoveTo node becomes the SAME Prolog variable CP
 in planWith(astar,point(GX,GY),CP) and moveto_leg(CP,[...]) -- the
 direct Prolog analogue of BT.cpp's blackboard, and exactly the existing
 "leave a variable free, let a prior step bind it" pattern already
 documented in basic_action_theory.pl for hand-written multi-leg plans.
-Never reuse one key across two DIFFERENT PlanAstar/PlanStraight calls
+Never reuse one key across two DIFFERENT PlanWith calls
 that should compute independent paths -- see basic_action_theory.pl's own
 note on giving fallback_node branches distinct CP1/CP2 variables; the
 same Prolog-variable-scope reasoning applies here.
@@ -113,7 +113,7 @@ VALIDATION IS A HARD FAILURE, not a warning: an unknown node tag, a
 missing required port, an unrecognized attribute (anything not a
 declared port, other than BT.cpp's own universal `name` display
 attribute), or a MoveTo/moveto_leg control_points key with no
-corresponding PlanAstar/PlanStraight producer anywhere in the tree
+corresponding PlanWith producer anywhere in the tree
 (which would silently leave CP unbound) all raise BTValidationError and
 stop the run -- these are structural errors in the tree itself, not a
 tunable value, so there is nothing sensible to warn-and-continue with
@@ -134,22 +134,26 @@ DEFAULT_SCHEMA_PATH = os.path.join(_PROJECT_ROOT, "module", "contracts", "schema
 DEFAULT_OUTPUT_PATH = os.path.join(_DEFAULT_PROBLEM_DIR, "plan_generated.pl")
 
 # Every schema action's `id` maps to how it's dispatched below: which
-# do_node/4 Prolog functor it becomes, and (for the two planners) which
-# Algorithm atom plan_call/8 should dispatch on.
+# do_node/4 Prolog functor it becomes.
 _ACTION_DISPATCH = {
     "MoveTo": {"kind": "moveto_leg"},
-    "PlanAstar": {"kind": "planWith", "algorithm": "astar"},
-    "PlanStraight": {"kind": "planWith", "algorithm": "straight"},
-    # A third planner, SAME bare-atom shape, needing no new branch at
-    # all -- it reuses the "planWith" kind verbatim.
-    "PlanVoronoi": {"kind": "planWith", "algorithm": "voronoi"},
-    # A fourth planner, dispatched through the SAME planWith template,
-    # but with a COMPOUND Algorithm term (obstacle_id/offset ride
-    # inside it, not a fixed atom, and NO goal_point at all -- this
-    # planner doesn't take one, see its own "kind" branch below) --
-    # zero further interface change needed.
-    "FollowBoarder": {"kind": "planWith_follow_boarder"},
+    # ONE consolidated planner action -- see schema.yaml's own note on
+    # why PlanAstar/PlanStraight/PlanVoronoi/FollowBoarder collapsed
+    # into this single PlanWith id (Algorithm was always just a
+    # runtime value plan_call/8 dispatches on, never four different
+    # predicates). Which concrete algorithm runs is read off THIS
+    # node's own `algorithm` attribute at translation time, not fixed
+    # per schema entry -- see _PLAN_ALGORITHMS below and the "planWith"
+    # kind's own branch in _translate_leaf.
+    "PlanWith": {"kind": "planWith"},
 }
+
+# The only valid values for PlanWith's own `algorithm` port. astar/
+# straight/voronoi take a `goal` port and become a BARE Prolog atom;
+# follow_boarder takes `obstacle_id`/`offset` instead and becomes the
+# COMPOUND term follow_boarder(ObstacleId,Offset) plan_call/8's own
+# follow_boarder clauses dispatch on (see basic_action_theory.pl).
+_PLAN_ALGORITHMS = {"astar", "straight", "voronoi", "follow_boarder"}
 # "single_float_port": the shared shape of every cond(Functor(Value))
 # condition whose one port is a plain float -- ObstacleInBound and
 # BatteryBelow/Equal/Over all reduce to this, just with different
@@ -512,7 +516,7 @@ def _reduce_guard_condition(elem, required_polarity, schema_ports):
 
     Returns None (SKIP -- no guard derived, no error) for a left
     sibling that can't be automatically watched: an Action (e.g.
-    PlanStraight, a completely ordinary left sibling of a MoveTo -- see
+    PlanWith, a completely ordinary left sibling of a MoveTo -- see
     problem4's own TryGoal branch) or a composite, because once it has
     SUCCEEDED it stays succeeded for the rest of the leg (an already-
     completed action never retroactively fails), so it can never
@@ -653,28 +657,12 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             return f"moveto_leg({cp_var},{triggers},{action_code})"
 
         if info["kind"] == "planWith":
-            goal_point = _point_literal(attrs["goal"], tag, "goal")
-            cp_value = attrs["control_points"]
-            if not _is_blackboard_ref(cp_value):
+            algorithm = attrs["algorithm"].strip()
+            if algorithm not in _PLAN_ALGORITHMS:
                 raise BTValidationError(
-                    f"<{tag}>'s control_points port ('{cp_value}') must be "
-                    f"a blackboard reference like \"{{cp}}\" -- it is this "
-                    f"node's own OUTPUT, never a literal.")
-            key = _blackboard_key(cp_value)
-            var_pool.producers.add(key)
-            var_pool.note_key_scope(key, reactive_code)
-            cp_var = var_pool.var_for(key)
-            return f"planWith({info['algorithm']},{goal_point},{cp_var})"
+                    f"<{tag}>'s algorithm port ('{algorithm}') is not one of "
+                    f"{sorted(_PLAN_ALGORITHMS)}.")
 
-        if info["kind"] == "planWith_follow_boarder":
-            # obstacle_id is written VERBATIM as Prolog text (a bare
-            # atom), same convention as HaltedWith's own reason port
-            # below -- NOT quoted, NOT blackboard-ref-checked (nothing
-            # in this schema produces obstacle_id as its own port yet;
-            # a future producer would need this branch extended the
-            # same way MoveTo/PlanAstar's control_points already is).
-            obstacle_id = attrs["obstacle_id"].strip()
-            offset = float(attrs["offset"])
             cp_value = attrs["control_points"]
             if not _is_blackboard_ref(cp_value):
                 raise BTValidationError(
@@ -685,14 +673,71 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             var_pool.producers.add(key)
             var_pool.note_key_scope(key, reactive_code)
             cp_var = var_pool.var_for(key)
-            # planWith/3's Goal slot is part of the SHARED template
-            # every planner sits inside (do_node(planWith(Algorithm,
-            # Goal,CP),...) in basic_action_theory.pl) -- FollowBoarder
-            # itself takes no goal port (see its own schema.yaml entry)
-            # and plan_call/8's follow_boarder clauses ignore it
-            # outright, so a placeholder point(0.0,0.0) is spliced in
-            # here purely to satisfy that shared shape, never read.
-            return f"planWith(follow_boarder({obstacle_id},{offset}),point(0.0,0.0),{cp_var})"
+
+            if algorithm == "follow_boarder":
+                extraneous = {"goal"} & set(attrs)
+                if extraneous:
+                    raise BTValidationError(
+                        f"<{tag}> has algorithm=\"follow_boarder\", which "
+                        f"takes no goal port -- unexpected {sorted(extraneous)}.")
+                if "obstacle_id" not in attrs or "offset" not in attrs:
+                    raise BTValidationError(
+                        f"<{tag}> has algorithm=\"follow_boarder\", which "
+                        f"requires BOTH obstacle_id and offset.")
+                # obstacle_id is written VERBATIM as Prolog text (a bare
+                # atom), same convention as HaltedWith's own reason port
+                # below -- NOT quoted, NOT blackboard-ref-checked
+                # (nothing in this schema produces obstacle_id as its
+                # own port yet; a future producer would need this
+                # branch extended the same way control_points already
+                # is).
+                obstacle_id = attrs["obstacle_id"].strip()
+                offset = float(attrs["offset"])
+                algorithm_term = f"follow_boarder({obstacle_id},{offset})"
+                # planWith/4's own Goal slot is part of the SHARED
+                # template every algorithm sits inside (do_node(planWith
+                # (Algorithm,Goal,CP,ActionCode),...) in basic_action_
+                # theory.pl) -- follow_boarder itself has no goal point
+                # (see this action's own schema.yaml note) and plan_call/
+                # 8's own follow_boarder clauses ignore this slot
+                # outright, so a placeholder point(0.0,0.0) is spliced
+                # in here purely to satisfy that shared shape, never
+                # read (the do_node clause that actually handles
+                # follow_boarder reports the honest atom `none` as this
+                # call's own Goal inside its RECORDED Reason instead --
+                # see that predicate's own note).
+                goal_term = "point(0.0,0.0)"
+                reason_goal_text = "none"
+            else:
+                extraneous = {"obstacle_id", "offset"} & set(attrs)
+                if extraneous:
+                    raise BTValidationError(
+                        f"<{tag}> has algorithm=\"{algorithm}\", which takes "
+                        f"no obstacle_id/offset port -- unexpected "
+                        f"{sorted(extraneous)}.")
+                if "goal" not in attrs:
+                    raise BTValidationError(
+                        f"<{tag}> has algorithm=\"{algorithm}\", which "
+                        f"requires a goal port.")
+                algorithm_term = algorithm
+                goal_term = _point_literal(attrs["goal"], tag, "goal")
+                reason_goal_text = goal_term
+
+            action_code = var_pool.next_action_code()
+            # See do_node(planWith(...))'s own note in basic_action_
+            # theory.pl for why ActionCode is fully concrete here too
+            # (never 'wild'): unlike an argmin ObstacleId, ActionCode/
+            # Algorithm/Goal are ALL already known at translation time
+            # for a given PlanWith occurrence -- there's nothing
+            # runtime-random about which occurrence this is, only
+            # whether it actually succeeds, which the by-action query
+            # already reports as a probability regardless.
+            var_pool.reason_patterns_by_action[action_code] = [
+                f"completed({algorithm_term},{reason_goal_text})",
+                f"no_path({algorithm_term},{reason_goal_text})",
+            ]
+
+            return f"planWith({algorithm_term},{goal_term},{cp_var},{action_code})"
 
     if tag in _CONDITION_DISPATCH:
         return f"cond({_leaf_condition_term(tag, attrs)})"
@@ -786,7 +831,7 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
         # in from enclosing levels, so a MoveTo nested under two
         # reactive ancestors accumulates guards -- and codes -- from
         # BOTH. A sibling that _reduce_guard_condition can't turn into
-        # a live guard (e.g. an ordinary Action like PlanStraight --
+        # a live guard (e.g. an ordinary Action like PlanWith --
         # see its own note) returns None and is simply skipped, not an
         # error: most Sequence/ReactiveSequence children are actions,
         # not conditions, and that's completely normal.
@@ -876,15 +921,15 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
     var_pool = _VarPool()
     node_text = _translate_node(tree_root_elem, schema_ports, var_pool, battery_enabled, None, [])
 
-    # A MoveTo whose control_points key has no PlanAstar/PlanStraight
+    # A MoveTo whose control_points key has no PlanWith
     # producer anywhere in the tree would silently leave CP unbound --
     # catch it here rather than let ProbLog fail confusingly later.
     dangling = var_pool.consumers - var_pool.producers
     if dangling:
         raise BTValidationError(
             f"control_points blackboard key(s) {sorted(dangling)} are read "
-            f"by a MoveTo node but never produced by any PlanAstar/"
-            f"PlanStraight node in the tree -- CP would be unbound.")
+            f"by a MoveTo node but never produced by any PlanWith "
+            f"node in the tree -- CP would be unbound.")
 
     # A blackboard key produced/consumed under more than one reactive
     # scope (including "outside any ReactiveSequence/ReactiveFallback",

@@ -625,9 +625,11 @@ def _follow_boarder_control_points(sx, sy, obstacle_id, offset):
 # ControlPoints, no extra params) -- a THIRD instance of the exact
 # "add one more plan_astar-style function plus one more pair of
 # plan_call/8 clauses" recipe, needing NO new dispatch machinery in
-# bt_to_prolog.py/bt_actions.py at all (see those files' own PlanVoronoi
-# entries, which just reuse the SAME "planWith"/plan_with_term branches
-# PlanAstar/PlanStraight already use).
+# bt_to_prolog.py/bt_actions.py at all: "voronoi" is just one more
+# valid value of the single consolidated PlanWith action's own
+# algorithm port (see schema.yaml's own note on why every algorithm
+# collapsed into one BT.cpp node), reusing the SAME "planWith"/
+# plan_with_term branches astar/straight already use.
 #
 # Builds a roadmap from scipy's Voronoi diagram over points densely
 # sampled along every obstacle's own boundary (reusing _OBSTACLE_

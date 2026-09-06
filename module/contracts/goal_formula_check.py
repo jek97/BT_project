@@ -217,7 +217,7 @@ _ALWAYS_QUERIES = [
 ]
 
 
-def generate_safety_queries(reason_patterns_by_action, output_path):
+def generate_safety_queries(reason_patterns_by_action, output_path, condition_codes=()):
     """Writes output_path (this problem's own queries_generated.pl):
     the five ALWAYS-relevant, tree-shape-independent queries, then one
     query(any_reason_pattern(Pattern)) per DISTINCT Reason pattern
@@ -247,7 +247,24 @@ def generate_safety_queries(reason_patterns_by_action, output_path):
     "crashed(wild) on a1 = 30%" into its own further breakdown by
     WHICH concrete obstacle. A pattern with no 'wild' in it at all
     (battery_under(20), guard_break(Cond), completed, ...) has nothing
-    runtime-only to enumerate, so gets no companion query."""
+    runtime-only to enumerate, so gets no companion query.
+
+    condition_codes is an iterable of every condition-leaf code this
+    problem's own tree produced (module/translators/bt_to_prolog.py's
+    own generate_plan_pl fourth return value's keys, i.e.
+    condition_labels) -- for each one, emits BOTH
+    query(any_condition_status(Code,true)) and query(any_condition_
+    status(Code,false)), mirroring the (pattern,action) pairs above but
+    for CONDITIONS (see basic_action_theory.pl's own any_condition_
+    status/2). Defaults to () for the same "hand-written plan, nothing
+    to derive" case reason_patterns_by_action's own {} default covers.
+
+    ALSO always emits query(outcome_signature(_)) -- theory-level,
+    generic machinery needing no per-problem derivation at all (see
+    that predicate's own note in basic_action_theory.pl): one result
+    row per DISTINCT combination of Reason/Condition values actually
+    reached, the full joint enumeration main.py's own "Full outcome
+    enumeration" table is built from."""
     all_patterns = sorted(set(
         pattern
         for patterns in reason_patterns_by_action.values()
@@ -261,6 +278,14 @@ def generate_safety_queries(reason_patterns_by_action, output_path):
         "",
     ]
     lines += [f"query({q})." for q in _ALWAYS_QUERIES]
+    # outcome_signature/1 is theory-level, GENERIC machinery (see its own
+    # note in basic_action_theory.pl) -- unlike everything else here, it
+    # needs no per-problem derivation at all, so it's always emitted,
+    # even when reason_patterns_by_action/condition_codes are both {}/()
+    # (e.g. diagnose_pipeline.py's hand-written-plan path). Deliberately
+    # NON-ground, like the _detail queries below -- one result row per
+    # DISTINCT outcome combination actually reached.
+    lines.append("query(outcome_signature(_)).")
     lines.append("")
     lines += [f"query(any_reason_pattern({pattern}))." for pattern in all_patterns]
     lines.append("")
@@ -270,6 +295,10 @@ def generate_safety_queries(reason_patterns_by_action, output_path):
             if re.search(r"\bwild\b", pattern):
                 detail_pattern = re.sub(r"\bwild\b", "_", pattern)
                 lines.append(f"query(any_reason_pattern_detail_by_action({detail_pattern},{action_code})).")
+    lines.append("")
+    for condition_code in sorted(condition_codes):
+        lines.append(f"query(any_condition_status({condition_code},true)).")
+        lines.append(f"query(any_condition_status({condition_code},false)).")
     lines.append("")
 
     with open(output_path, "w") as f:

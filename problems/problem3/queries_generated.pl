@@ -8,5 +8,7 @@ query(plan_outcome(true)).
 query(plan_outcome(false)).
 query(plan_outcome(world_too_large)).
 query(plan_outcome(reactive_escaped)).
+query(outcome_signature(_)).
+
 
 

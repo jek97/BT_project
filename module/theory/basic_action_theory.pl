@@ -1259,9 +1259,32 @@ nominal_at(X,Y,Frac,ControlPoints) :- spline_point(ControlPoints, Frac, X, Y).
 % with no translation step in between.
 %
 % Node is one of:
-%     cond(C)                  -- CONDITION leaf: tests C against the
-%                                  CURRENT situation via holds/2, no
-%                                  side effect (S1 = S).
+%     cond(C,Code)              -- CONDITION leaf: tests C against the
+%                                  CURRENT situation via holds/2. UNLIKE
+%                                  an earlier version of this file
+%                                  (cond(C), no Code, S1=S, a genuine
+%                                  no-op), this now DOES extend the
+%                                  situation, with a checked(Code,C,
+%                                  Status) marker -- the direct
+%                                  analogue of planWith's own planned
+%                                  (Algorithm,Reason) marker just below,
+%                                  for the SAME reason: otherwise a
+%                                  condition's own outcome leaves no
+%                                  trace once execution moves past it,
+%                                  making it unqueryable after the fact
+%                                  (an action's own Reason survives in
+%                                  haltMoveto(...)/planned(...); a bare
+%                                  cond(C) with S1=S never did). Code is
+%                                  a per-CONDITION-OCCURRENCE identifier
+%                                  bt_to_prolog.py assigns (same
+%                                  per-occurrence-counter idiom as
+%                                  MoveTo/PlanWith's own ActionCode),
+%                                  letting checked_with/4 further down
+%                                  (the direct analogue of planned_with/
+%                                  3) distinguish WHICH cond() leaf in
+%                                  the tree a given checked(...) marker
+%                                  came from -- there can be many, e.g.
+%                                  a DistanceBelow after EVERY MoveTo.
 %     moveto_leg(CP,Triggers)   -- ACTION leaf. Triggers is ALWAYS
 %                                  given explicitly at the call site --
 %                                  there is no sugar/default form, by
@@ -1311,8 +1334,18 @@ primitive_action(interrupt(_)).
 do_action(A, S, do(A,S)) :- primitive_action(A), poss(A, S).
 
 % -- CONDITION leaf ---------------------------------------------------
-do_node(cond(C), S, S, true)  :- holds(C, S).
-do_node(cond(C), S, S, false) :- \+ holds(C, S).
+% checked(Code,C,Status) is a bare MARKER, exactly like planned(Algorithm,
+% Reason) below -- no primitive_action entry, no Poss, just recorded via
+% do(...) the same way do_action itself would. Status is fully
+% DETERMINED by holds(C,S) at an ALREADY-RESOLVED situation -- recording
+% it introduces no new probabilistic choice (unlike z/2's own per-
+% startMoveto annotated disjunction), so this adds no branching to the
+% underlying inference, only one more do(...) layer for the generic
+% pass-through fluents (at/4, battery/3, moving/1, now/2, current_walk/6)
+% to skip over -- exactly the same, already-proven-cheap shape planned
+% (Algorithm,Reason) already added for PlanWith.
+do_node(cond(C,Code), S, do(checked(Code,C,true), S), true)  :- holds(C, S).
+do_node(cond(C,Code), S, do(checked(Code,C,false),S), false) :- \+ holds(C, S).
 
 % -- ACTION leaf --------------------------------------------------------
 % moveto_leg(CP,Triggers) -- Triggers is ALWAYS given explicitly here;
@@ -1569,6 +1602,23 @@ do_node(planWith(Algorithm, point(GX,GY), CP, ActionCode), S,
 % change for something already unambiguous.
 planned_with(Algorithm, Reason, do(planned(Algorithm,Reason), _)).
 planned_with(Algorithm, Reason, do(_A, S)) :- planned_with(Algorithm, Reason, S).
+
+% checked_with(+Code, -C, -Status, +S): the direct analogue of
+% planned_with/3 above, for cond(C,Code)'s own checked(Code,C,Status)
+% marker -- searches the WHOLE history for Code (same "search
+% everything, one solution per match" shape halted_with/2 and
+% planned_with/3 both already use), NOT just the most recent one: a
+% cond() leaf sitting inside a reactive_children/2 list can be
+% re-checked on every redescend, so a given Code can legitimately carry
+% more than one (possibly different) Status across a single resolved
+% world's own history -- each is reported as its own solution, exactly
+% mirroring how halted_with/2 already handles a Reason that could, in
+% principle, recur. Fails outright (no solution) for a Code whose own
+% cond() leaf was never reached in a given resolved world at all (e.g.
+% it sits in a Fallback branch that never got tried) -- same "absence,
+% not sentinel" convention as everywhere else in this file.
+checked_with(Code, C, Status, do(checked(Code,C,Status), _)).
+checked_with(Code, C, Status, do(_A, S)) :- checked_with(Code, C, Status, S).
 
 % -- SEQUENCE composite: stop and FAIL at the first failing child; --
 %    succeed only if every child succeeds, in order. A REACTIVE child
@@ -2065,6 +2115,71 @@ final_situation(S) :-
     do_node(Node, s0, S, Outcome),
     Outcome \= reactive(_).
 
+% -- FULL OUTCOME ENUMERATION -----------------------------------------
+% outcome_entry(+Action, -Entry): Entry = Code-Value for whichever
+% ACTION or CONDITION marker carries a queryable outcome of its own --
+% Value is Reason with its own trailing ActionCode STRIPPED back off
+% (the exact same generic univ+append technique halted_with_pattern/3
+% already uses to do the reverse) for a MoveTo's haltMoveto or a
+% PlanWith's planned(...) marker, or simply Status for a cond(C,Code)'s
+% own checked(Code,C,Status) marker (see that predicate's own note).
+% Fails outright (no Entry, no choicepoint) for every other action
+% (startMoveto, interrupt) -- those carry no reportable outcome of
+% their own, only advance the clock/position.
+outcome_entry(haltMoveto(_,Reason,_), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
+outcome_entry(planned(_,Reason), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
+outcome_entry(checked(Code,_,Status), Code-Status).
+
+% history_outcomes(+S, -Entries): every outcome_entry/2 found ANYWHERE
+% in S's own history, oldest-first -- the one GENERIC pass behind
+% outcome_signature/1 below. UNLIKE halted_with/2 (finds ONE matching
+% Reason, nondeterministically, one solution per match), this COLLECTS
+% ALL of them at once, since a full outcome needs every action's/
+% condition's own contribution together, not one at a time. No sort/
+% dedup step needed: do_node/4 always visits a GIVEN tree's own
+% children in the SAME left-to-right structural order regardless of
+% which Reason/Status values actually occur, so two resolved worlds
+% that reach the same SET of codes always visited them in the same
+% relative order already -- Entries is already canonical across
+% worlds, for free.
+history_outcomes(s0, []).
+history_outcomes(do(A,S), [Entry|Rest]) :-
+    outcome_entry(A, Entry),
+    history_outcomes(S, Rest).
+history_outcomes(do(A,S), Rest) :-
+    \+ outcome_entry(A, _),
+    history_outcomes(S, Rest).
+
+% outcome_signature(-Sig): Sig is the full list of every Code-Value
+% pair this resolved world's own final_situation actually produced --
+% one entry per action Reason and per condition check reached along
+% the way, enclosing the WHOLE outcome of the system in one term rather
+% than the separate per-action/per-condition MARGINALS halted_with_
+% pattern/3 and any_condition_status/2 already report. Queried
+% DELIBERATELY NON-GROUND (query(outcome_signature(_))), reusing the
+% SAME "ProbLog reports one result row per distinct grounding instead
+% of aggregating" behavior halted_with_pattern_detail/3 already relies
+% on (see that predicate's own note) -- here that's exactly the wanted
+% behavior: one row per DISTINCT combination of Reason/Condition values
+% actually reached, each with its own aggregated probability, a full
+% enumeration of every possible outcome instead of one marginal at a
+% time. NOTE: a cond() leaf re-checked more than once in the SAME world
+% (e.g. one sitting inside a reactive_children/2 list that gets
+% redescended) contributes ONE Code-Value entry PER actual check, not
+% just its last one -- a redescended condition whose own Status
+% genuinely differed between checks shows up as two distinct entries
+% for the same Code in Sig, which is correct (both really happened in
+% that one world), if unusual to read.
+outcome_signature(Sig) :-
+    final_situation(S),
+    history_outcomes(S, Sig).
+
 % plan_outcome(Outcome): the WHOLE tree's own outcome, a first-class
 % query -- P(plan_outcome(true)) is the BT-level analogue of verify_
 % goal_formula, but based on Status/Outcome rather than an explicit
@@ -2377,52 +2492,106 @@ halted_with_pattern_detail(Pattern, ActionCode, S) :-
 any_reason_pattern_detail_by_action(Pattern, ActionCode) :-
     final_situation(S), halted_with_pattern_detail(Pattern, ActionCode, S).
 
+% any_condition_status(+Code, +Status): P(the cond() leaf identified by
+% Code was actually checked, AND its own Status came out this way, in
+% the world resolved by final_situation) -- the direct analogue of
+% any_reason_pattern_by_action/2 above, but for CONDITIONS instead of
+% action Reasons: Code identifies WHICH cond(C,Code) occurrence in the
+% tree (same per-occurrence-code idiom as ActionCode), Status is true
+% or false (never a Pattern -- a condition's own outcome has no
+% runtime-only argument structure to distinguish, unlike a MoveTo's own
+% Reason). module/contracts/goal_formula_check.py's generate_safety_
+% queries emits one query(any_condition_status(Code,true)) and one
+% query(any_condition_status(Code,false)) per condition occurrence
+% bt_to_prolog.py assigned a code to, mirroring exactly how it already
+% emits one any_reason_pattern_by_action query per (Pattern,ActionCode)
+% pair. Fails outright (contributes zero probability) in any world
+% where this Code's own cond() leaf was never reached at all -- same
+% "absence, not sentinel" convention checked_with/4 itself already
+% follows, so P(any_condition_status(Code,true)) + P(any_condition_
+% status(Code,false)) need NOT sum to 1.0 (exactly like a MoveTo's own
+% Reason probabilities not summing to 100% when the leg was never
+% reached in some worlds).
+any_condition_status(Code, Status) :-
+    final_situation(S), checked_with(Code, _C, Status, S).
+
 % last_halt(-Reason): a cond() leaf that reads off WHY the MOST RECENT
-% moveto_leg halted, without searching S's history at all. Works by
-% direct unification against S's own OUTERMOST layer: do_node(moveto_
-% leg(...),...) always ends with do_action(haltMoveto(_T,Reason,
-% Status), S2, S1) as its very last step (see moveto_leg's own do_node
-% clause above), and every seq_node/fallback_node `reactive(Code)`
-% clause passes that S1 straight through, UNCHANGED -- as does
-% reactivesequence_budgeted/reactivefallback_budgeted's own "different
-% code, pass upward" clause, and the S2 a MATCHING code restarts FROM
-% is exactly that same unchanged S1 too (see the CONTROL-FLOW
-% REDESCEND TARGETS note above do_node(reactivesequence(...))) -- no
-% do_node level, reactive composite or plain, ever layers another
-% action on top of it. So whatever S a cond(last_halt(...)) leaf is
-% actually checked against (whether that's immediately after a
-% reactive composite's own restart, or partway through a still-
-% propagating reactive(_)) is STRUCTURALLY GUARANTEED to be exactly
-% do(haltMoveto(_,Reason,_),_) at its outermost layer, and reading
-% Reason back off it is a single deterministic unification, not a
-% search -- unlike halted_with/2 above (which walks S's WHOLE history
-% and can match more than one past action), this can only ever produce
-% the ONE most recent halt, so it stays a single ProbLog world instead
-% of branching into one world per historical match. Fails outright (no
-% solution) if S isn't shaped like a just-halted moveto at all (e.g.
-% S=s0, before any walk has ever run) -- same "absence, not sentinel"
-% convention as everywhere else.
+% moveto_leg halted. Works by searching BACKWARD through S, but ONLY
+% ever skipping past BOOKKEEPING markers -- checked(_,_,_) from a
+% cond(C,Code) leaf (see do_node(cond(...))'s own note) and
+% planned(_,_) from a PlanWith call (see do_node(planWith(...))'s own
+% note) -- neither of which represents anything PHYSICALLY happening
+% (no time elapsed, no position/battery change, nothing that could make
+% "the last halt" stale); it genuinely STOPS (fails, no further skip)
+% at any OTHER action (startMoveto, interrupt), which DO mean something
+% new has happened since the last halt.
+%
+% UPDATED from an EARLIER version that pattern-matched ONLY S's own
+% OUTERMOST layer directly against do(haltMoveto(...),_), reasoning
+% that do_node(moveto_leg(...),...) always ends with haltMoveto as its
+% very last step and no do_node level (plain or reactive) ever layered
+% another action on top of that S1 on the way up -- which was true
+% right up until cond(C,Code) started recording its own checked(...)
+% marker (see that predicate's own note): a DistanceBelow placed right
+% after a MoveTo -- exactly this project's own now-standard idiom --
+% appends ONE MORE do(...) layer on top of the halt before a LATER
+% branch's own cond(last_halt(...)) (or recover_obstacle/1, built on
+% top of it) ever gets to read it, which the old direct-unification
+% version could no longer see through. Skipping bookkeeping markers
+% restores the original "single deterministic unification, not a
+% search" behavior for the REAL halt underneath, without giving up
+% cond()'s own traceability: this still can only ever produce the ONE
+% most recent halt (unlike halted_with/2, which walks the WHOLE history
+% and can match more than one past action), so it stays a single
+% ProbLog world instead of branching into one world per historical
+% match. Fails outright (no solution) if S isn't shaped like a
+% just-halted moveto (skipping bookkeeping markers) at all -- same
+% "absence, not sentinel" convention as everywhere else.
 %
 % NOT YET GENERIC across leaf/action types -- a caveat for whoever adds
 % the next reactive-capable leaf (e.g. a robotic-arm action halting via
-% its own haltArmMove(...) instead of haltMoveto(...)): this clause
-% will simply FAIL to match such an S, silently, not with an error --
-% do(haltArmMove(...),_) doesn't unify with do(haltMoveto(...),_), so
-% neg(last_halt(...))-based guards elsewhere would trivially succeed
-% even though something genuinely just halted. Two things have to keep
-% holding for last_halt/1 to stay correct as this theory grows: (1)
-% every new reactive-capable leaf type needs its OWN last_halt/1 clause
-% added here (or all leaves funneled through one shared halt-action
-% functor with a Kind tag, instead of a differently-named action per
-% leaf type), and (2) every future composite/decorator node's own
-% `reactive(Code)` do_node clause has to keep passing S through
-% UNCHANGED, on the way up (or into a restart), the same way seq_node/
-% fallback_node/reactivesequence_budgeted/reactivefallback_budgeted
-% already do -- a future composite that layers so much as one more
-% action on top of S1 before it's read would break the "S's outermost
-% layer IS the most recent halt" guarantee this whole predicate rests
-% on.
+% its own haltArmMove(...) instead of haltMoveto(...)): the first
+% clause below will simply FAIL to match such an S, silently, not with
+% an error -- do(haltArmMove(...),_) doesn't unify with do(haltMoveto
+% (...),_), so neg(last_halt(...))-based guards elsewhere would
+% trivially succeed even though something genuinely just halted. Every
+% new reactive-capable leaf type needs its OWN base clause added here
+% (or all leaves funneled through one shared halt-action functor with a
+% Kind tag, instead of a differently-named action per leaf type).
 holds(last_halt(Reason), do(haltMoveto(_T,Reason,_Status),_SPrev)).
+holds(last_halt(Reason), do(checked(_,_,_), S)) :- holds(last_halt(Reason), S).
+holds(last_halt(Reason), do(planned(_,_), S)) :- holds(last_halt(Reason), S).
+
+% KNOWN LIMITATION, found while adding cond(C,Code)'s own checked(...)
+% marker (Option B): cond(neg(last_halt(...))) -- problem3's OWN Bug0
+% guard, "retry the direct path unless the last halt was an
+% obstacle_on_path" -- makes ProbLog's grounder raise a spurious
+% "non-ground probabilistic clause" error against z/2's own template
+% clause in config_generated.pl, even though the actual derivation
+% needs no such thing (verified directly: replan_budget(1) still fails
+% just as fast, so it isn't the known reactive-redescend blowup; a bare
+% cond(last_halt(...)) with NO neg() wrapper, or a cond() whose own
+% Status doesn't change do_node(cond(...))'s own S1 shape, both work
+% fine). The negation itself is the trigger -- ProbLog's own grounding
+% of \+ over a goal that (transitively, via this predicate's own
+% checked(...)-skipping clauses above) reaches back through the
+% situation apparently forces broader exploration than a plain,
+% non-negated call needs, tripping over z/2's non-ground template
+% clause somewhere in that wider search. Root-caused down to "negation
+% over last_halt/1 specifically, once cond() stopped being S1=S" but
+% NOT resolved further: every reformulation tried (recursion moved out
+% of holds/2 into a separate skip_bookkeeping/2 helper; a single do_node
+% (cond(...)) clause with a shared checked(...) term shape regardless
+% of Status) still reproduced it, pointing at something in ProbLog's
+% own negation-grounding internals rather than a fixable shape in this
+% theory's own clauses. Affects ONLY problem3's own hand-written
+% plan_generated.pl (the one tree in this project using neg(last_halt
+% (...)) at all) -- every translator-generated tree (problems 0/1/2/4)
+% neither uses last_halt/recover_obstacle nor is affected. problem3 was
+% already unable to complete a run within any practical timeout before
+% this (a separate, pre-existing reactive-redescend combinatorial
+% blowup, see perf_diag_two_hop/), so this is a new FAILURE MODE on an
+% already-nonfunctional tree, not a regression on a working one.
 
 % recover_obstacle(-ObstacleId): a cond() leaf that RETRIEVES which
 % obstacle the branch that led here just halted against, wildcarding

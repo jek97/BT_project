@@ -8,6 +8,7 @@ query(plan_outcome(true)).
 query(plan_outcome(false)).
 query(plan_outcome(world_too_large)).
 query(plan_outcome(reactive_escaped)).
+query(outcome_signature(_)).
 
 query(any_reason_pattern(battery_depleted)).
 query(any_reason_pattern(completed)).
@@ -21,3 +22,6 @@ query(any_reason_pattern_by_action(completed,a2)).
 query(any_reason_pattern_by_action(crashed(wild),a2)).
 query(any_reason_pattern_detail_by_action(crashed(_),a2)).
 query(any_reason_pattern_by_action(battery_depleted,a2)).
+
+query(any_condition_status(c1,true)).
+query(any_condition_status(c1,false)).

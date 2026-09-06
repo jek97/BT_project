@@ -206,13 +206,78 @@ def print_action_legend(tee, action_labels):
         tee(f"  {code:<{code_w}}   {action_labels[code]}")
 
 
-def print_compact_summary(tee, results, goal_formula_path, action_labels=None):
+def print_condition_legend(tee, condition_labels):
+    """Small "which condition has which code" table -- the direct
+    analogue of print_action_legend above, for cond(C,Code)'s own Code
+    (see basic_action_theory.pl's own checked(Code,C,Status) marker
+    note). condition_labels ({condition_code: label_text}) comes
+    straight from bt_to_prolog.py's own generate_plan_pl; label_text is
+    built generically from the schema id + its own bound ports (e.g.
+    "DistanceBelow(goal=2.275;2.075,threshold=0.3)"), plus a branch
+    suffix same as action labels. Skipped entirely if this problem's
+    plan wasn't translated from behavior_tree.xml at all."""
+    if not condition_labels:
+        return
+    section(tee, "Condition codes")
+    code_w = max(len(code) for code in condition_labels)
+    for code in sorted(condition_labels):
+        tee(f"  {code:<{code_w}}   {condition_labels[code]}")
+
+
+_CONDITION_STATUS_RE = re.compile(r"^any_condition_status\((\w+),(true|false)\)$")
+
+
+def print_condition_breakdown(tee, results, condition_labels):
+    """Table: P(true)/P(false) per condition occurrence, flattened from
+    every any_condition_status(Code,true/false) query result (see
+    basic_action_theory.pl's own any_condition_status/2) -- the direct
+    analogue of print_reason_breakdown above, but for CONDITIONS rather
+    than action Reasons. A code whose own true+false falls SHORT of
+    100% means its own cond() leaf wasn't reached in every world (e.g.
+    it sits in a Fallback branch that isn't always tried) -- shown as
+    its own "never reached" remainder rather than silently hidden, same
+    "absence is informative" posture as the rest of this report. A code
+    whose own true+false EXCEEDS 100% means the opposite problem: this
+    cond() leaf sits somewhere that gets CHECKED MORE THAN ONCE per
+    world on average -- a reactive guard condition (e.g. BatteryOver as
+    a ReactiveSequence's own left sibling) that a redescend loop
+    re-evaluates fresh on every restart is the typical cause; true and
+    false are then independent per-CHECK rates, not a mutually
+    exclusive partition of "what happened to this world" -- flagged
+    explicitly rather than printing a nonsensical negative remainder."""
+    by_code = {}   # condition_code -> {"true": prob, "false": prob}
+    for key, prob in results.items():
+        m = _CONDITION_STATUS_RE.match(key)
+        if not m:
+            continue
+        code, status = m.groups()
+        by_code.setdefault(code, {})[status] = prob
+    if not by_code:
+        return
+    section(tee, "Condition check breakdown")
+    for code in sorted(by_code):
+        label = condition_labels.get(code, code)
+        p_true = by_code[code].get("true", 0.0)
+        p_false = by_code[code].get("false", 0.0)
+        tee(f"  {code}  {label}")
+        tee(f"    {'true':<40} {p_true*100:6.2f}%")
+        tee(f"    {'false':<40} {p_false*100:6.2f}%")
+        total = p_true + p_false
+        if total < 0.9995:
+            tee(f"    {'(never reached)':<40} {(1.0 - total)*100:6.2f}%")
+        elif total > 1.0005:
+            tee(f"    (checked more than once per world on average -- "
+                f"true/false are independent per-check rates, not a partition)")
+
+
+def print_compact_summary(tee, results, goal_formula_path, action_labels=None, condition_labels=None):
     section(tee, "Goal formula")
     tee(f"  {goal_formula_path}")
     for line in extract_goal_formula_text(goal_formula_path).split("\n"):
         tee(f"    {line}")
 
     print_action_legend(tee, action_labels or {})
+    print_condition_legend(tee, condition_labels or {})
 
     section(tee, "Query results")
     label_w = max(len(name) for name in SUMMARY_QUERIES)
@@ -226,6 +291,88 @@ def print_compact_summary(tee, results, goal_formula_path, action_labels=None):
         tee(f"  {name:<{label_w}}   {p*100:6.2f}%")
 
     print_reason_breakdown(tee, results)
+    print_condition_breakdown(tee, results, condition_labels or {})
+    print_outcome_enumeration(tee, results)
+
+
+def _split_top_level(text, seps=","):
+    """Split text on any character in `seps` that sits at bracket depth
+    0 -- tracks BOTH ()/[] (unlike _split_last_top_level_arg below,
+    which only ever needs to track () for a Pattern's own nested
+    compound terms; outcome_signature/1's own list entries can nest a
+    compound term like point(11.675,11.525) inside a list, so both
+    bracket kinds matter here). Each returned piece is stripped -- see
+    print_outcome_enumeration's own note on why ProbLog renders a
+    list's own top-level commas WITH a trailing space (unlike a
+    compound term's own commas, always dense) -- verified directly
+    against ProbLog's own term-to-string output before relying on it."""
+    parts = []
+    depth = 0
+    start = 0
+    for i, ch in enumerate(text):
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        elif ch in seps and depth == 0:
+            parts.append(text[start:i])
+            start = i + 1
+    parts.append(text[start:])
+    return [p.strip() for p in parts]
+
+
+def _split_code_value(entry_text):
+    """Split one outcome_signature/1 list entry (e.g.
+    "a1-completed(astar,point(11.675,11.525))") into (Code, Value) on
+    its own FIRST top-level '-' -- Code is always a bare atom (a1, c3,
+    ...) coming from next_action_code()/next_condition_code(), which
+    never themselves contain '(' or '-', so the first top-level '-' is
+    always the right split point regardless of what Value looks like."""
+    depth = 0
+    for i, ch in enumerate(entry_text):
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        elif ch == "-" and depth == 0:
+            return entry_text[:i], entry_text[i + 1:]
+    raise ValueError(f"no top-level '-' found in {entry_text!r}")
+
+
+_OUTCOME_SIGNATURE_RE = re.compile(r"^outcome_signature\(\[(.*)\]\)$")
+
+
+def print_outcome_enumeration(tee, results):
+    """Table: every DISTINCT combination of Reason/Condition values
+    actually reached across all resolved worlds, most probable first --
+    see basic_action_theory.pl's own outcome_signature/1 for how each
+    combination (a list of Code-Value pairs, one per action Reason and
+    per condition check reached in that world) is derived, and why
+    query(outcome_signature(_)) is deliberately non-ground (ProbLog
+    reports one result row per distinct grounding rather than
+    aggregating -- exactly the wanted behavior here, same mechanism
+    already used for the per-obstacle detail rows in print_reason_
+    breakdown above). This is the JOINT distribution over every tracked
+    Reason/Condition together; Table 2/3 above are its own MARGINALS
+    (summed over everything else) -- probabilities across rows here sum
+    to 100% (every resolved world produces exactly one signature),
+    unlike Table 2/3's own rows, which can each fall short of 100% when
+    a given action/condition wasn't reached in every world."""
+    rows = []   # (probability, [(code, value_text), ...])
+    for key, prob in results.items():
+        m = _OUTCOME_SIGNATURE_RE.match(key)
+        if not m:
+            continue
+        inner = m.group(1)
+        entries = [_split_code_value(e) for e in _split_top_level(inner)] if inner else []
+        rows.append((prob, entries))
+    if not rows:
+        return
+    section(tee, "Full outcome enumeration (every Reason/Condition combination)")
+    for prob, entries in sorted(rows, key=lambda row: -row[0]):
+        tee(f"  {prob*100:6.2f}%")
+        for code, value in entries:
+            tee(f"    {code}: {_display_pattern(value)}")
 
 
 def _split_last_top_level_arg(inner_text):
@@ -454,7 +601,7 @@ def main():
         # see bt_to_prolog.py's own generate_plan_pl/_is_battery_trigger.
         try:
             from bt_to_prolog import generate_plan_pl, BTValidationError
-            generated_plan_path, reason_patterns_by_action, action_labels = generate_plan_pl(
+            generated_plan_path, reason_patterns_by_action, action_labels, condition_labels = generate_plan_pl(
                 xml_path=os.path.join(problem_dir, "behavior_tree.xml"),
                 schema_path=os.path.join(CONTRACTS_DIR, "schema.yaml"),
                 output_path=os.path.join(problem_dir, "plan_generated.pl"),
@@ -500,7 +647,8 @@ def main():
         try:
             generated_queries_path = generate_safety_queries(
                 reason_patterns_by_action,
-                output_path=os.path.join(problem_dir, "queries_generated.pl"))
+                output_path=os.path.join(problem_dir, "queries_generated.pl"),
+                condition_codes=condition_labels.keys())
             tee(f"  Queries     : {generated_queries_path} (auto-generated from "
                 f"this tree's own per-action Reason universe)")
         except Exception as e:
@@ -540,7 +688,7 @@ def main():
                 "file has query(...) declarations.")
             sys.exit(1)
 
-        print_compact_summary(tee, results, goal_formula_path, action_labels)
+        print_compact_summary(tee, results, goal_formula_path, action_labels, condition_labels)
 
         tee("")
         banner(tee, f"Log : {log_path}")

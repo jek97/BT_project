@@ -8,6 +8,17 @@
 % mechanism (leg_status/8's three-valued Status, evaluate_plan/4) can
 % actually be tested end-to-end before the translator catches up.
 %
+% CURRENTLY DOES NOT RUN AT ALL (a separate matter from the translator
+% gaps above): grounding fails fast with a spurious "non-ground
+% probabilistic clause" ProbLog error, traced to cond(neg(last_halt
+% (...)))'s own interaction with cond(C,Code)'s checked(...) marker --
+% see the KNOWN LIMITATION note directly above holds(recover_obstacle
+% (...)) in basic_action_theory.pl for the full investigation. Even
+% before that, this tree's own reactive-redescend chaining already
+% couldn't complete within any practical timeout (see perf_diag_two_hop/),
+% so this replaces one non-functional state with another, not a
+% regression from a working one.
+%
 % Two branches under one Fallback, matching behavior_tree.xml's own
 % Bug0 shape, PLUS an explicit distance_below/3 early exit as the
 % first branch (same idiom DistanceBelow already uses elsewhere in
@@ -43,6 +54,16 @@
 % WHICH of several planning attempts in the same tree produced it, the
 % same way crashed(ObstacleId,ActionCode) already distinguishes WHICH
 % MoveTo leg crashed.
+%
+% Every cond(C) below likewise now carries its own Code (c1..c5, in
+% reading order -- same next_condition_code() counter bt_to_prolog.py
+% would assign) as a 2nd argument, mirroring ActionCode's own
+% "identify which OCCURRENCE this is" role but for condition leaves --
+% see do_node(cond(C,Code),...)'s own note in basic_action_theory.pl.
+% This is a REQUIRED interface change, not optional: do_node(cond(C),
+% S,S,Status) (1-arg, no Code) no longer has a matching clause at all
+% now that every cond() leaf records a checked(Code,C,Status) marker
+% into the situation on its own.
 % No third "resume to goal" leg is hand-chained after branch 3 -- it
 % doesn't need one. Every trigger above is classified `reactive` (see
 % leg_status/9) and tagged with the SAME code, rc1, identifying the
@@ -83,17 +104,17 @@
 plan(reactivefallback(rc1)).
 
 reactive_children(rc1, [
-    cond(distance_below(11.675,11.525,0.3)),
+    cond(distance_below(11.675,11.525,0.3),c1),
     seq_node([
-        cond(neg(last_halt(obstacle_on_path(_,_,_)))),
+        cond(neg(last_halt(obstacle_on_path(_,_,_))),c2),
         planWith(straight, point(11.675,11.525), PathS, a3),
         moveto_leg(PathS, [collision,battery,obstacle_on_path(0.6,rc1)], a1),
-        cond(distance_below(11.675,11.525,0.3))
+        cond(distance_below(11.675,11.525,0.3),c3)
     ]),
     seq_node([
-        cond(recover_obstacle(Obst1)),
+        cond(recover_obstacle(Obst1),c4),
         planWith(follow_boarder(Obst1,0.6), point(0.0,0.0), PathFB, a4),
         moveto_leg(PathFB, [collision,battery,line_of_sight_clear(Obst1,11.675,11.525,rc1)], a2),
-        cond(distance_below(11.675,11.525,0.3))
+        cond(distance_below(11.675,11.525,0.3),c5)
     ])
 ]).

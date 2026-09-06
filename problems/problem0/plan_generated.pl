@@ -6,5 +6,8 @@
 % Action code legend (see main.py's own printed copy of this):
 %   a1: PlanWith(astar, goal=point(11.675,11.525)) [GoToGoal]
 %   a2: MoveTo(CP) [GoToGoal]
+%
+% Condition code legend (see main.py's own printed copy of this):
+%   c1: DistanceBelow(goal=11.675;11.525,threshold=0.3) [GoToGoal]
 
-plan(seq_node([planWith(astar,point(11.675,11.525),CP,a1),moveto_leg(CP,[collision,battery],a2),cond(distance_below(11.675,11.525,0.3))])).
+plan(seq_node([planWith(astar,point(11.675,11.525),CP,a1),moveto_leg(CP,[collision,battery],a2),cond(distance_below(11.675,11.525,0.3),c1)])).

@@ -294,6 +294,10 @@ class _VarPool:
                                    # -- see next_action_code()'s own note; purely for
                                    # main.py's printed action-code legend, never
                                    # consulted by anything Prolog-side.
+        self._condition_counter = 0
+        self.condition_labels = {}   # condition_code -> human-readable "what/where" label,
+                                      # e.g. "DistanceBelow(2.275,2.075,0.3) [GoHome]" --
+                                      # see next_condition_code()'s own note.
 
     def var_for(self, key):
         if key not in self._map:
@@ -325,6 +329,22 @@ class _VarPool:
         than reactive composites."""
         self._action_counter += 1
         return f"a{self._action_counter}"
+
+    def next_condition_code(self):
+        """A fresh, unique code for one <Condition> LEAF occurrence --
+        embedded by basic_action_theory.pl's do_node(cond(C,Code),...)
+        into its own checked(Code,C,Status) marker (see that predicate's
+        own note), so a safety query can distinguish WHICH cond() leaf
+        in the tree a given check/outcome came from -- same per-
+        occurrence-counter idiom as next_action_code()/
+        next_reactive_code() above, just for condition leaves rather
+        than actions/reactive composites. Deliberately a SEPARATE
+        namespace/prefix (c1, c2, ...) from ActionCode (a1, a2, ...) --
+        the two are never compared against each other, only ever used
+        as opaque keys into their own respective dicts, so there's no
+        need for them to share one counter."""
+        self._condition_counter += 1
+        return f"c{self._condition_counter}"
 
 
 def _validate_ports(tag, elem, port_specs):
@@ -761,7 +781,15 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             return f"planWith({algorithm_term},{goal_term},{cp_var},{action_code})"
 
     if tag in _CONDITION_DISPATCH:
-        return f"cond({_leaf_condition_term(tag, attrs)})"
+        condition_code = var_pool.next_condition_code()
+        # Generic label built straight from the schema id + its own bound
+        # ports (e.g. "DistanceBelow(goal=2.275;2.075,threshold=0.3)") --
+        # works for ANY condition tag automatically, no per-condition-type
+        # special-casing, same spirit as _leaf_condition_term's own dispatch.
+        port_text = ",".join(f"{k}={v}" for k, v in attrs.items() if k != "name")
+        var_pool.condition_labels[condition_code] = _with_branch_suffix(
+            f"{tag}({port_text})", branch_name)
+        return f"cond({_leaf_condition_term(tag, attrs)},{condition_code})"
 
     raise BTValidationError(f"Unhandled schema entry '{tag}' -- add it to "
                              f"_ACTION_DISPATCH/_CONDITION_DISPATCH.")
@@ -924,16 +952,20 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
     PLUS the separate reactive_children/2 facts any ReactiveSequence/
     ReactiveFallback in the tree needs, PLUS the full per-action Reason
     universe for safety-query generation, PLUS a human-readable label
-    per action code -- returns (node_text, reactive_facts,
-    reason_patterns_by_action, action_labels), where reactive_facts is
-    [(code, [child_term,...]), ...], reason_patterns_by_action is
-    {action_code: [reason_pattern_text, ...]} (see _VarPool's own note
-    and module/contracts/goal_formula_check.py's generate_safety_
-    queries, the actual consumer), and action_labels is {action_code:
-    label_text} (see _VarPool.action_labels's own note -- main.py
-    prints this as a small "which action has which code" legend, purely
-    cosmetic, no Prolog-side consumer). Raises BTValidationError on any
-    structural problem.
+    per action code AND per condition code -- returns (node_text,
+    reactive_facts, reason_patterns_by_action, action_labels,
+    condition_labels), where reactive_facts is [(code, [child_term,...]),
+    ...], reason_patterns_by_action is {action_code: [reason_pattern_
+    text, ...]} (see _VarPool's own note and module/contracts/goal_
+    formula_check.py's generate_safety_queries, the actual consumer),
+    action_labels is {action_code: label_text} and condition_labels is
+    {condition_code: label_text} (see _VarPool.action_labels/
+    condition_labels's own notes -- main.py prints these as small
+    "which action/condition has which code" legends, purely cosmetic,
+    no Prolog-side consumer; condition_labels' own codes are ALSO what
+    generate_safety_queries uses to emit one any_condition_status(Code,
+    true)/(Code,false) query pair per condition occurrence). Raises
+    BTValidationError on any structural problem.
 
     battery_enabled=False strips every battery-related trigger name
     (battery, battery_below(...), battery_over(...), battery_equal(...)
@@ -982,19 +1014,21 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
             f"live ENTIRELY inside the same reactive composite (or entirely "
             f"outside all of them): {details}.")
 
-    return node_text, var_pool.reactive_facts, var_pool.reason_patterns_by_action, var_pool.action_labels
+    return (node_text, var_pool.reactive_facts, var_pool.reason_patterns_by_action,
+            var_pool.action_labels, var_pool.condition_labels)
 
 
 def generate_plan_pl(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
                       output_path=DEFAULT_OUTPUT_PATH, battery_enabled=True):
-    """Returns (output_path, reason_patterns_by_action, action_labels)
-    -- reason_patterns_by_action is what main.py hands to module/
-    contracts/goal_formula_check.py's generate_safety_queries right
-    after goal_formula.pl's own validation, to build this problem's own
-    queries_generated.pl; action_labels ({action_code: label_text}) is
-    what main.py prints as its own action-code legend -- see
-    translate_tree's own note for both."""
-    node_text, reactive_facts, reason_patterns_by_action, action_labels = translate_tree(
+    """Returns (output_path, reason_patterns_by_action, action_labels,
+    condition_labels) -- reason_patterns_by_action AND condition_labels'
+    own keys are both what main.py hands to module/contracts/goal_
+    formula_check.py's generate_safety_queries right after goal_formula
+    .pl's own validation, to build this problem's own queries_generated
+    .pl; action_labels/condition_labels ({code: label_text} each) are
+    what main.py prints as its own action-/condition-code legends -- see
+    translate_tree's own note for all four."""
+    node_text, reactive_facts, reason_patterns_by_action, action_labels, condition_labels = translate_tree(
         xml_path, schema_path, battery_enabled=battery_enabled)
     lines = [
         "% AUTO-GENERATED by module/translators/bt_to_prolog.py from",
@@ -1013,6 +1047,9 @@ def generate_plan_pl(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
     if action_labels:
         lines += ["%", "% Action code legend (see main.py's own printed copy of this):"]
         lines += [f"%   {code}: {action_labels[code]}" for code in sorted(action_labels)]
+    if condition_labels:
+        lines += ["%", "% Condition code legend (see main.py's own printed copy of this):"]
+        lines += [f"%   {code}: {condition_labels[code]}" for code in sorted(condition_labels)]
     lines += [
         "",
         f"plan({node_text}).",
@@ -1033,9 +1070,9 @@ def generate_plan_pl(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
         lines.append("")
     with open(output_path, "w") as f:
         f.write("\n".join(lines))
-    return output_path, reason_patterns_by_action, action_labels
+    return output_path, reason_patterns_by_action, action_labels, condition_labels
 
 
 if __name__ == "__main__":
-    out, _reason_patterns_by_action, _action_labels = generate_plan_pl()
+    out, _reason_patterns_by_action, _action_labels, _condition_labels = generate_plan_pl()
     print(f"Wrote {out}")

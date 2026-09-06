@@ -77,7 +77,7 @@
 %                              module/translators/occgrid_to_problog.py.
 %      - start/1, robot_radius/1, safety_buffer/1, speed/1, sigma/1,
 %        sigma_tangential/1, sigma_battery/1, battery_start/1,
-%        idle_drain_rate/1, moving_drain_rate/1, goal_tolerance/1,
+%        idle_drain_rate/1, moving_drain_rate/1,
 %        tolerance/1, num_samples/1, bracket_samples/1, crossing_eps/1,
 %        z/2, zt/2, zbatt/1, disc_step_position/1, disc_step_battery/1,
 %        disc_step_time/1 (see the MERGE-GRID QUANTIZATION note above
@@ -183,7 +183,7 @@ dist(X1,Y1,X2,Y2,D) :- D is sqrt((X2-X1)**2 + (Y2-Y1)**2).
 % halted_with/2 all still read the exact, un-rounded Tcross/position/
 % battery of whichever leg actually produced them; only what SEEDS the
 % NEXT leg is coarsened). cond() checks (holds(battery_over(...)),
-% holds(at_goal(...)), etc.) also stay exact, on purpose -- a
+% holds(distance_below(...)), etc.) also stay exact, on purpose -- a
 % decision boundary like "is battery actually over 70%" should not be
 % shifted by a floor/ceiling/round choice made for an unrelated reason.
 %
@@ -1123,14 +1123,17 @@ last_element([_|T], X) :- T \= [], last_element(T, X).
 % THIS particular reactive halt, instead of every enclosing composite
 % unconditionally redescending the way evaluate_plan/4 used to.
 %
-%   true         -- Reason=completed AND the actual (noisy) final
-%                position lands within goal_tolerance of the leg's OWN
-%                endpoint. Deliberately DISTINCT from Reason=completed
-%                alone, which only means the walk wasn't cut short
-%                before its nominal duration elapsed -- it says
-%                nothing about whether noise carried the robot far
-%                enough off course to miss the target despite
-%                "completing".
+%   true         -- Reason=completed: the walk ran its full nominal
+%                duration without any Trigger cutting it short. Says
+%                NOTHING about whether the actual (noisy) final
+%                position also landed close enough to the leg's own
+%                endpoint -- that used to be baked in here via
+%                goal_tolerance/1, but is now its OWN explicit,
+%                inspectable BT condition (distance_below/3), hand-
+%                placed by the tree author right after a MoveTo in a
+%                Sequence wherever that check is wanted, same as any
+%                other cond() leaf, rather than something silently
+%                folded into MoveTo's own Status.
 %   false        -- a genuine, unrecoverable failure: crashed
 %                (ObstacleId) or battery_depleted. Nothing downstream
 %                can react to these and continue; the leg (and, per
@@ -1146,18 +1149,7 @@ last_element([_|T], X) :- T \= [], last_element(T, X).
 %                FLOW REDESCEND TARGETS note above do_node(reactive
 %                sequence(...)) further down for what happens when a
 %                do_node/4 call anywhere in the tree returns this.
-leg_status(completed, CP, T0, Duration, Z, Zt, T, _Code, true) :-
-    walk_noisy_point(CP, T0, Duration, Z, Zt, T, X, Y),
-    leg_target(CP, GX, GY),
-    dist(X, Y, GX, GY, D),
-    goal_tolerance(Tol),
-    D =< Tol.
-leg_status(completed, CP, T0, Duration, Z, Zt, T, _Code, false) :-
-    walk_noisy_point(CP, T0, Duration, Z, Zt, T, X, Y),
-    leg_target(CP, GX, GY),
-    dist(X, Y, GX, GY, D),
-    goal_tolerance(Tol),
-    D > Tol.
+leg_status(completed, _CP, _T0, _Duration, _Z, _Zt, _T, _Code, true).
 leg_status(crashed(_), _,_,_,_,_,_, _Code, false).
 leg_status(battery_depleted, _,_,_,_,_,_, _Code, false).
 leg_status(Reason, _,_,_,_,_,_, Code, reactive(Code)) :-
@@ -1432,9 +1424,13 @@ plan_call(voronoi, SX,SY,GX,GY, [], no_path, false) :-
 % TRIGGERS section above) -- so the bug-variant choice is a matter of
 % that Triggers list, not a different planner call. If the attached
 % trigger never fires, the leg just completes the whole loop naturally
-% and Status comes out false (not within goal_tolerance of the loop's
-% own arbitrary endpoint) via the ordinary leg_status mechanism -- no
-% special no_path case needed here for that.
+% and Status comes out true via the ordinary leg_status mechanism --
+% leg_status/9 no longer judges whether the final position is close to
+% the leg's own endpoint (see that predicate's own note: that check is
+% now the separate, explicit distance_below/3 BT condition), so a fully
+% -circled loop with nothing meaningful downstream of it simply reads
+% as a completed leg, same as any other MoveTo. No special no_path case
+% needed here for that.
 plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, CP, completed, true) :-
     follow_boarder(SX,SY,ObstacleId,Offset, CP).
 plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, [], no_path, false) :-
@@ -1459,7 +1455,7 @@ plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, [], no_path, false) 
 %    instantiating a parametrized "GoTo(target)" BT.cpp subtree twice
 %    with two different port bindings, rather than both calls silently
 %    aiming at one shared destination (there is no longer a global
-%    goal/2 fact at all -- see at_goal/3's own note, and plan_generation
+%    goal/2 fact at all -- see distance_below/3's own note, and plan_generation
 %    /plan/goal_formula.pl for where a plan's own goal information
 %    lives now). Status flows
 %    straight through as Outcome, exactly like moveto_leg's own Status
@@ -1723,24 +1719,39 @@ holds(neg(P),   S) :- \+ holds(P,S).
 % written the same way: reason="crashed(_)" or reason="crashed(obs5)".
 holds(halted_with_cond(Reason), S) :- halted_with(Reason, S).
 
-% at_goal(GX,GY,Tol): true iff the CURRENT position (at the current
-% time, via now/2) is within Tol of the EXPLICIT point (GX,GY) --
+% distance_below(GX,GY,Threshold) / distance_equal(GX,GY,Threshold) /
+% distance_over(GX,GY,Threshold): true iff the CURRENT position (at
+% the current time, via now/2) is, respectively, below/exactly-equal-
+% to/above Threshold distance from the EXPLICIT point (GX,GY) --
 % PARAMETRIZED, same as obstacle_in_bound(Threshold)/battery_below
 % (Threshold)/etc., not a lookup against any global "the goal" fact
 % (there is no such fact anymore -- see the problem's own
 % goal_formula.pl for where a plan's own goal information now lives
-% entirely; at_goal is a DIFFERENT, complementary thing: a REACTIVE
-% in-tree check, evaluated possibly many times at different situations
-% as the policy runs, not a one-time post-hoc verification query).
+% entirely; distance_below is a DIFFERENT, complementary thing: a
+% REACTIVE in-tree check, evaluated possibly many times at different
+% situations as the policy runs, not a one-time post-hoc verification
+% query). This is also what used to be baked directly into
+% moveto_leg's own Status output (see leg_status/9's own note) --
+% factored out into its own explicit, inspectable condition node
+% instead, same as any other cond() leaf.
 % Typical use: a fallback child that skips moveto entirely if already
-% there --
-%   fallback_node([cond(at_goal(11.675,11.525,0.3)), moveto_leg(CP,[collision,battery])])
+% there, or a check placed right after a MoveTo to confirm it actually
+% landed close enough to its own intended target --
+%   fallback_node([cond(distance_below(11.675,11.525,0.3)), moveto_leg(CP,[collision,battery])])
 % Pass the SAME point as whichever PlanAstar/PlanVoronoi/... node's own
 % goal port targets, if that's the intent -- being explicit here means
 % there is no longer a global/local goal-point mismatch to drift out
 % of sync (the risk a single shared goal/2 fact used to carry).
-holds(at_goal(GX,GY,Tol), S) :-
-    now(T, S), at(X,Y,T,S), dist(X,Y,GX,GY,D), D =< Tol.
+% distance_equal/distance_over exist for the SAME reason
+% battery_equal/battery_over exist alongside battery_below: a
+% caller-chosen threshold at a different comparison, not a
+% replacement.
+holds(distance_below(GX,GY,Threshold), S) :-
+    now(T, S), at(X,Y,T,S), dist(X,Y,GX,GY,D), D < Threshold.
+holds(distance_equal(GX,GY,Threshold), S) :-
+    now(T, S), at(X,Y,T,S), dist(X,Y,GX,GY,D), D =:= Threshold.
+holds(distance_over(GX,GY,Threshold), S) :-
+    now(T, S), at(X,Y,T,S), dist(X,Y,GX,GY,D), D > Threshold.
 
 % obstacle_in_bound(Threshold): true iff the CURRENT position (at the
 % current time, via now/2) is within Threshold of ANY obstacle. Same
@@ -1851,9 +1862,15 @@ holds_leg(or(P,Q), CP,T0,Duration,Z,Zt,Zb,B0,T) :-
 holds_leg(neg(P), CP,T0,Duration,Z,Zt,Zb,B0,T) :-
     \+ holds_leg(P,CP,T0,Duration,Z,Zt,Zb,B0,T).
 
-holds_leg(at_goal(GX,GY,Tol), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+holds_leg(distance_below(GX,GY,Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
     walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
-    dist(X,Y,GX,GY,D), D =< Tol.
+    dist(X,Y,GX,GY,D), D < Threshold.
+holds_leg(distance_equal(GX,GY,Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+    walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
+    dist(X,Y,GX,GY,D), D =:= Threshold.
+holds_leg(distance_over(GX,GY,Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+    walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
+    dist(X,Y,GX,GY,D), D > Threshold.
 
 holds_leg(obstacle_in_bound(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
     walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
@@ -2088,21 +2105,24 @@ sample_walk_frac(I, S, WalkFrac) :-
 halted_with(Reason, do(haltMoveto(_,Reason,_), _)).
 halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 
-% visited(+Loc, +S): TRUE iff the robot ACTUALLY ARRIVED at
-% Loc=point(GX,GY) -- the endpoint of SOME already-completed leg,
-% Status=true, not just Reason=completed (see leg_status/8's own
-% distinction: Reason=completed only means a leg's walk wasn't cut
-% short by a trigger, it says nothing about whether noise carried the
-% robot far enough off course to miss the target; Status=true is what
-% actually means "landed within goal_tolerance of that leg's own
-% endpoint," which is what "visited" should mean) -- anywhere in S's
+% visited(+Loc, +Tol, +S): TRUE iff the robot ACTUALLY ARRIVED at
+% Loc=point(GX,GY) -- the endpoint of SOME already-completed leg
+% (Reason=completed(_ActionCode), Status=true, i.e. the walk wasn't
+% cut short by a trigger), AND its own actual (noisy) final position
+% is within Tol of Loc. Status=true alone no longer implies this (see
+% leg_status/9's own note: that check used to be baked into Status,
+% but is now the separate, explicit distance_below/3 condition --
+% visited/3 re-derives the SAME dist/5 comparison directly, via at/4,
+% rather than depending on any particular BT node having been placed
+% in the tree to check it) -- anywhere in S's
 % history. SAME "search the whole history" shape as halted_with/2
 % above, and for the same reason needs no separate persistence/frame
 % axiom: situation histories only ever grow by appending do(...), so
 % "did this ever happen in S's past" is already monotonic for free --
 % a fluent that starts false and, once made true, stays true in every
 % situation built on top of that one, exactly the shape a multi-leg
-% "visited(A), visited(B), visited(C)" goal formula needs, verified
+% "visited(A,Tol,S), visited(B,Tol,S), visited(C,Tol,S)" goal formula
+% needs, verified
 % the same way verify_goal_formula/any_collision already are (P(...) over
 % resolved worlds, since a collision or battery depletion partway
 % through a multi-leg plan can genuinely truncate the history before
@@ -2113,13 +2133,16 @@ halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 % seq_node/1's own definition (do_node(seq_node([Child|Rest]),S,S1,
 % Outcome):-do_node(Child,S,S2,true),...) already REQUIRES each
 % child's Status=true before the next one even starts -- so checking
-% visited/2 on just the LAST waypoint already logically entails every
+% visited/3 on just the LAST waypoint already logically entails every
 % earlier one was visited too; only worth checking each individually
 % once a Fallback sits somewhere before the waypoint you care about.
-visited(point(GX,GY), do(haltMoveto(_T,completed(_ActionCode),true), S)) :-
+visited(point(GX,GY), Tol, do(haltMoveto(T,completed(_ActionCode),true), S)) :-
     current_walk(S, CP, _Triggers, _T0, _SPrev),
-    leg_target(CP, GX, GY).
-visited(Loc, do(_A, S)) :- visited(Loc, S).
+    leg_target(CP, GX, GY),
+    at(X,Y,T, do(haltMoveto(T,completed(_ActionCode),true), S)),
+    dist(X,Y,GX,GY,D),
+    D =< Tol.
+visited(Loc, Tol, do(_A, S)) :- visited(Loc, Tol, S).
 
 % -- crashed_in(S) / battery_depleted_in(S) / obstacle_in_bound_in(S) /
 %    battery_under_in(S): trivial one-liners reading the actual Reason,
@@ -2556,7 +2579,7 @@ on_track(I) :-
 %
 % Since the translator handles arbitrary Sequence/Fallback nesting and
 % every schema.yaml action/condition, sequence/fallback/multi-leg
-% policies -- and conditions like AtGoal/HaltedWith/ObstacleInBound/
+% policies -- and conditions like DistanceBelow/HaltedWith/ObstacleInBound/
 % BatteryBelow -- are already expressible in the XML with no further
 % changes here; see
 % bt_to_prolog.py's own header for the blackboard-to-Prolog-variable
@@ -2573,7 +2596,7 @@ on_track(I) :-
 % full rationale and the "must be kept in sync with behavior_tree.xml"
 % caveat. This is the ONLY place a plan's own goal information lives --
 % there is no separate global goal/2 fact anywhere in this theory (see
-% at_goal/3's own note). It is a UNIFORM formula (Reiter's sense -- one
+% distance_below/3's own note). It is a UNIFORM formula (Reiter's sense -- one
 % free situation argument, every fluent inside applied to exactly it);
 % verify_goal_formula below is what actually applies it AT
 % final_situation, same "zero-arg convenience wrapper hardwired to

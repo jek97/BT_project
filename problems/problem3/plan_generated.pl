@@ -9,19 +9,24 @@
 % actually be tested end-to-end before the translator catches up.
 %
 % Two branches under one Fallback, matching behavior_tree.xml's own
-% Bug0 shape, PLUS an explicit at_goal/3 early exit as the first
-% branch (same idiom AtGoal already uses elsewhere in this project --
-% "a fallback child that skips moveto entirely if already there"):
+% Bug0 shape, PLUS an explicit distance_below/3 early exit as the
+% first branch (same idiom DistanceBelow already uses elsewhere in
+% this project -- "a fallback child that skips moveto entirely if
+% already there"). A distance_below/3 check is also placed right
+% after EACH branch's own moveto_leg -- this used to be baked directly
+% into moveto_leg's own Status output (see leg_status/9's own note in
+% basic_action_theory.pl), now an explicit, hand-placed condition
+% instead, same as any other cond() leaf:
 %
-%   1. at_goal(11.675,11.525,0.3) -- already there, nothing to do.
+%   1. distance_below(11.675,11.525,0.3) -- already there, nothing to do.
 %   2. Guarded by cond(neg(last_halt(obstacle_on_path(_,_)))): plan
 %      straight to goal; walk it, watching obstacle_on_path(0.6) as a
-%      trigger.
+%      trigger; then confirm it actually landed within tolerance.
 %   3. Recover WHICH obstacle branch 2's own trigger fired against
 %      (recover_obstacle/1, built on last_halt/1 -- see basic_action_
 %      theory.pl's own note there); follow its offset boundary; walk
 %      it, watching line_of_sight_clear(Obst1,11.675,11.525) as a
-%      trigger.
+%      trigger; then confirm it actually landed within tolerance.
 %
 % No third "resume to goal" leg is hand-chained after branch 3 -- it
 % doesn't need one. Every trigger above is classified `reactive` (see
@@ -63,15 +68,17 @@
 plan(reactivefallback(rc1)).
 
 reactive_children(rc1, [
-    cond(at_goal(11.675,11.525,0.3)),
+    cond(distance_below(11.675,11.525,0.3)),
     seq_node([
         cond(neg(last_halt(obstacle_on_path(_,_,_)))),
         planWith(straight, point(11.675,11.525), PathS),
-        moveto_leg(PathS, [collision,battery,obstacle_on_path(0.6,rc1)], a1)
+        moveto_leg(PathS, [collision,battery,obstacle_on_path(0.6,rc1)], a1),
+        cond(distance_below(11.675,11.525,0.3))
     ]),
     seq_node([
         cond(recover_obstacle(Obst1)),
         planWith(follow_boarder(Obst1,0.6), point(0.0,0.0), PathFB),
-        moveto_leg(PathFB, [collision,battery,line_of_sight_clear(Obst1,11.675,11.525,rc1)], a2)
+        moveto_leg(PathFB, [collision,battery,line_of_sight_clear(Obst1,11.675,11.525,rc1)], a2),
+        cond(distance_below(11.675,11.525,0.3))
     ])
 ]).

@@ -94,6 +94,7 @@ no image/plot is produced (see print_compact_summary).
 
 import argparse
 import os
+import re
 import shutil
 import sys
 from datetime import datetime
@@ -223,6 +224,14 @@ def _split_last_top_level_arg(inner_text):
     raise ValueError(f"no top-level comma found in {inner_text!r}")
 
 
+def _display_pattern(pattern_text):
+    """Cosmetic-only: swap the literal 'wild' marker atom (see
+    basic_action_theory.pl's halted_with_pattern/3 and match_wild/2) for
+    a more readable '*' wherever a Pattern is printed. Never touches the
+    actual Prolog query text, only what gets shown in a label."""
+    return re.sub(r"\bwild\b", "*", pattern_text)
+
+
 def print_reason_breakdown(tee, results):
     """Table 2: every any_reason_pattern_by_action(Pattern,ActionCode)
     result, grouped by Pattern's own outer functor. A functor with only
@@ -280,7 +289,16 @@ def print_reason_breakdown(tee, results):
     section(tee, "Safety query breakdown (per action)")
     for functor in sorted(by_functor):
         for pattern_text in sorted(by_functor[functor]):
-            label = functor if len(by_functor[functor]) == 1 else pattern_text
+            # Only collapse to the bare functor when this Pattern has a
+            # 'wild' marker in it -- i.e. there IS a lower detail level
+            # (any_reason_pattern_detail_by_action) that still shows the
+            # specifics one level down. A Pattern with no 'wild' (e.g.
+            # guard_break(battery_over(70.0)), battery_under(20)) has no
+            # such fallback, so its whole identity would be lost by
+            # collapsing to the functor -- always show it in full.
+            has_wild = "wild" in pattern_text
+            label = (functor if (has_wild and len(by_functor[functor]) == 1)
+                     else _display_pattern(pattern_text))
             per_action = by_pattern[pattern_text]
             total = sum(per_action.values())
             tee(f"  {label:<40} {total*100:6.2f}%")

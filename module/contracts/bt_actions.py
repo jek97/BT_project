@@ -40,8 +40,9 @@ way to "run" that in a plain Python function without reimplementing
 the entire probabilistic model outside ProbLog, and a naive
 deterministic stand-in would silently misrepresent what the theory
 actually says happens -- worse than no implementation at all.
-AtGoal/HaltedWith are native Prolog conditions over a situation;
-Python has no situation to evaluate them against on its own.
+DistanceBelow/DistanceEqual/DistanceOver/HaltedWith are native Prolog
+conditions over a situation; Python has no situation to evaluate them
+against on its own.
 
 What IS provided for all three is their INTERFACE (matching
 schema.yaml's ports exactly) plus a TERM BUILDER -- a function
@@ -219,17 +220,33 @@ def follow_boarder_term(obstacle_id, offset, cp_var="CP"):
 # =====================================================================
 # CONDITIONS -- interface-only: term builders
 # =====================================================================
-def at_goal_cond_term(goal, tolerance):
-    """cond(at_goal(GX,GY,Tolerance)) term text -- matches AtGoal's
-    goal/tolerance ports in schema.yaml. PARAMETRIZED, same as
-    obstacle_in_bound_cond_term/battery_below_cond_term below -- there
-    is no global "the goal" fact this reads instead.
+def distance_below_cond_term(goal, threshold):
+    """cond(distance_below(GX,GY,Threshold)) term text -- matches
+    DistanceBelow's goal/threshold ports in schema.yaml. PARAMETRIZED,
+    same as obstacle_in_bound_cond_term/battery_below_cond_term below
+    -- there is no global "the goal" fact this reads instead.
 
     goal: an (x,y) pair.
-    tolerance: distance threshold, metres.
+    threshold: distance threshold, metres.
     """
     gx, gy = goal
-    return f"cond(at_goal({float(gx)},{float(gy)},{float(tolerance)}))"
+    return f"cond(distance_below({float(gx)},{float(gy)},{float(threshold)}))"
+
+
+def distance_equal_cond_term(goal, threshold):
+    """cond(distance_equal(GX,GY,Threshold)) term text -- matches
+    DistanceEqual's goal/threshold ports in schema.yaml. Same shape as
+    distance_below_cond_term above, exact-equality comparison."""
+    gx, gy = goal
+    return f"cond(distance_equal({float(gx)},{float(gy)},{float(threshold)}))"
+
+
+def distance_over_cond_term(goal, threshold):
+    """cond(distance_over(GX,GY,Threshold)) term text -- matches
+    DistanceOver's goal/threshold ports in schema.yaml. Same shape as
+    distance_below_cond_term above, ">" comparison."""
+    gx, gy = goal
+    return f"cond(distance_over({float(gx)},{float(gy)},{float(threshold)}))"
 
 
 def halted_with_cond_term(reason):
@@ -332,10 +349,20 @@ ACTIONS = {
 }
 
 CONDITIONS = {
-    "AtGoal": {
+    "DistanceBelow": {
         "kind": "interface_only",
-        "prolog_condition": "at_goal",
-        "term_builder": at_goal_cond_term,
+        "prolog_condition": "distance_below",
+        "term_builder": distance_below_cond_term,
+    },
+    "DistanceEqual": {
+        "kind": "interface_only",
+        "prolog_condition": "distance_equal",
+        "term_builder": distance_equal_cond_term,
+    },
+    "DistanceOver": {
+        "kind": "interface_only",
+        "prolog_condition": "distance_over",
+        "term_builder": distance_over_cond_term,
     },
     "HaltedWith": {
         "kind": "interface_only",

@@ -53,6 +53,16 @@
   east of it, tuned together with config.yaml's raised
   moving_drain_rate (5.0%/time-unit, vs. problem0-3's shared 0.5) so
   the walk crosses the 70% threshold well before reaching the goal.
+
+  A DistanceBelow node right after each branch's own MoveTo checks
+  that leg's own noisy final position landed within 0.3m of whichever
+  point that branch's own PlanStraight targeted. See
+  problem0/behavior_tree.xml's own header for the full rationale (this
+  used to be baked into MoveTo's own status output, now an explicit
+  condition node instead). Keeping this here (rather than dropping it,
+  now that it's an opt-in tree-authoring choice) is what preserves
+  this problem's own documented plan_outcome(true)/plan_outcome(false)
+  split as a regression baseline.
 -->
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
@@ -61,10 +71,12 @@
         <BatteryOver threshold="70"/>
         <PlanStraight goal="22.275;2.075" control_points="{cp}"/>
         <MoveTo control_points="{cp}"/>
+        <DistanceBelow goal="22.275;2.075" threshold="0.3"/>
       </ReactiveSequence>
       <Sequence name="GoHome">
         <PlanStraight goal="2.275;2.075" control_points="{cp2}"/>
         <MoveTo control_points="{cp2}"/>
+        <DistanceBelow goal="2.275;2.075" threshold="0.3"/>
       </Sequence>
     </Fallback>
   </BehaviorTree>
@@ -83,6 +95,10 @@
       <output_port name="status" type="bool"/>
     </Action>
     <Condition ID="BatteryOver">
+      <input_port name="threshold" type="double"/>
+    </Condition>
+    <Condition ID="DistanceBelow">
+      <input_port name="goal" type="Point"/>
       <input_port name="threshold" type="double"/>
     </Condition>
   </TreeNodesModel>

@@ -167,7 +167,6 @@ def render_prolog(config):
         f"idle_drain_rate({_format_number(battery_cfg['idle_drain_rate'])}).",
         f"moving_drain_rate({_format_number(battery_cfg['moving_drain_rate'])}).",
         f"disc_step_battery({_format_number(disc_step_battery)}).",
-        f"goal_tolerance({_format_number(config['tolerances']['goal'])}).",
         f"tolerance({_format_number(config['tolerances']['on_track'])}).",
         f"num_samples({_format_number(config['verification']['num_samples'])}).",
         f"bracket_samples({_format_number(config['verification']['bracket_samples'])}).",

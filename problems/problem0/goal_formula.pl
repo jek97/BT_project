@@ -26,10 +26,10 @@
 % (11.675,11.525) -- so "visited the goal" is the only waypoint to
 % check today. A multi-leg A->B->C plan would list each leg's own
 % endpoint here as its own visited(...) conjunct, in the SAME order
-% the tree visits them (see visited/2's own note on why, for a plain
+% the tree visits them (see visited/3's own note on why, for a plain
 % linear Sequence, checking only the LAST waypoint already implies
 % every earlier one -- listing them all here is for clarity/
 % robustness against a Fallback being added later, not because it's
 % strictly needed today).
 goal_formula(S) :-
-    visited(point(11.675,11.525), S).
+    visited(point(11.675,11.525), 0.3, S).

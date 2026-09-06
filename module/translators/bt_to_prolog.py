@@ -156,10 +156,16 @@ _ACTION_DISPATCH = {
 # functor/port names, so they share ONE translation branch below
 # instead of several near-identical ones.
 _CONDITION_DISPATCH = {
-    # at_goal(GX,GY,Tol) -- PARAMETRIZED (no global "the goal" fact to
-    # read instead), so it needs its own dispatch kind, not the shared
-    # single_float_port shape (two ports, a Point AND a float).
-    "AtGoal": {"kind": "at_goal_cond"},
+    # distance_below/distance_equal/distance_over(GX,GY,Threshold) --
+    # PARAMETRIZED (no global "the goal" fact to read instead), so they
+    # need their own dispatch kind, not the shared single_float_port
+    # shape (a Point port AND a float port, not just one float) -- but
+    # all THREE share that one kind, same "one shared shape, several
+    # functors" idea single_float_port itself already uses for
+    # ObstacleInBound/BatteryBelow/etc.
+    "DistanceBelow": {"kind": "distance_cond", "functor": "distance_below"},
+    "DistanceEqual": {"kind": "distance_cond", "functor": "distance_equal"},
+    "DistanceOver": {"kind": "distance_cond", "functor": "distance_over"},
     "ObstacleInBound": {"kind": "single_float_port", "functor": "obstacle_in_bound", "port": "threshold"},
     "ObstacleOnPath": {"kind": "single_float_port", "functor": "obstacle_on_path", "port": "threshold"},
     "BatteryBelow": {"kind": "single_float_port", "functor": "battery_below", "port": "threshold"},
@@ -486,10 +492,10 @@ def _leaf_condition_term(tag, attrs):
         obstacle_id = attrs["obstacle_id"].strip()
         gx, gy = _point_xy(attrs["goal"], tag, "goal")
         return f"line_of_sight_clear({obstacle_id},{gx},{gy})"
-    if info["kind"] == "at_goal_cond":
+    if info["kind"] == "distance_cond":
         gx, gy = _point_xy(attrs["goal"], tag, "goal")
-        tolerance = float(attrs["tolerance"])
-        return f"at_goal({gx},{gy},{tolerance})"
+        threshold = float(attrs["threshold"])
+        return f"{info['functor']}({gx},{gy},{threshold})"
     raise BTValidationError(f"Unhandled condition kind for <{tag}>.")
 
 

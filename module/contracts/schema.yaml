@@ -61,10 +61,12 @@ actions:
       Runs one durative moveto leg along ControlPoints, halting on
       whichever of Triggers occurs earliest (or on natural
       completion if none do). Reason/Status are haltMoveto's own two
-      outputs -- see basic_action_theory.pl's own header comment on why
-      they are kept distinct (Reason=completed only means the walk
-      wasn't cut short; Status additionally requires landing within
-      goal_tolerance of THIS LEG'S OWN endpoint).
+      outputs -- see basic_action_theory.pl's own header comment on
+      what they mean (Reason=completed only means the walk wasn't cut
+      short; Status is true in that case regardless of where the walk
+      actually landed -- whether it landed close enough to its own
+      intended target is now a SEPARATE, explicit check, see
+      DistanceBelow below).
     ports:
       - name: control_points
         direction: input
@@ -164,10 +166,12 @@ actions:
         direction: output
         type: bool
         description: >
-          true iff reason=completed AND the final position landed
-          within goal_tolerance of this leg's own endpoint (the last
-          point of control_points, NOT necessarily the global goal --
-          see leg_target/3's own comment in basic_action_theory.pl).
+          true iff reason=completed, i.e. the walk ran its full
+          nominal duration without any trigger cutting it short.
+          Says NOTHING about whether the final position also landed
+          close to this leg's own endpoint -- pair this MoveTo with a
+          DistanceBelow condition right after it (in a Sequence) if
+          that also needs checking (see DistanceBelow below).
 
   # ----------------------------------------------------------------
   # The two planners. Both are dispatched, underneath, through the
@@ -383,19 +387,31 @@ actions:
 conditions:
 
   # ----------------------------------------------------------------
-  # holds(at_goal(GX,GY,Tol), S) in basic_action_theory.pl.
+  # holds(distance_below(GX,GY,Threshold), S) /
+  # holds(distance_equal(GX,GY,Threshold), S) /
+  # holds(distance_over(GX,GY,Threshold), S) in basic_action_theory.pl
+  # -- THREE separate condition nodes sharing one description/port
+  # shape, same "one shared shape, several functors" idea as
+  # BatteryBelow/BatteryEqual/BatteryOver below. This is also what
+  # used to be baked directly into MoveTo's own status port (see
+  # MoveTo's own description above) -- extracted out into its own
+  # explicit, inspectable condition, typically placed in a Sequence
+  # right after the MoveTo whose landing accuracy it's meant to check.
   # ----------------------------------------------------------------
-  - id: AtGoal
-    prolog_condition: at_goal
+  - id: DistanceBelow
+    prolog_condition: distance_below
     description: >
       True iff the CURRENT position (now/2 + at/4) is within
-      tolerance of an EXPLICIT point -- PARAMETRIZED, same as
+      threshold of an EXPLICIT point -- PARAMETRIZED, same as
       ObstacleInBound/BatteryBelow/etc., not a lookup against any
       global "the goal" fact (there is no such fact in this theory).
-      Typical use: the first child of a Fallback, to skip planning/
-      moving entirely if already there. Pass the SAME point as
-      whichever PlanAstar/PlanVoronoi/... node's own goal port
-      targets, if that's the intent.
+      Typical uses: the first child of a Fallback, to skip planning/
+      moving entirely if already there; or placed right after a
+      MoveTo, in sequence, to check that the leg's own noisy final
+      position actually landed close enough to its intended target
+      (pass the SAME point as whichever PlanAstar/PlanVoronoi/...
+      node's own goal port targeted, or as the MoveTo's own last
+      control point, if that's the intent).
     ports:
       - name: goal
         direction: input
@@ -404,7 +420,51 @@ conditions:
         description: >
           The point to check proximity to -- see PlanAstar's own goal
           port.
-      - name: tolerance
+      - name: threshold
+        direction: input
+        type: double
+        required: true
+        description: Distance threshold, metres.
+
+  - id: DistanceEqual
+    prolog_condition: distance_equal
+    description: >
+      True iff the CURRENT position (now/2 + at/4) is EXACTLY
+      threshold distance from an EXPLICIT point (arithmetic equality)
+      -- same shape as DistanceBelow above. In a continuous,
+      noise-driven model this is only true at whatever instant the
+      distance genuinely passes through threshold (same caveat as
+      BatteryEqual below) -- checking it at an arbitrary current time
+      will usually be false.
+    ports:
+      - name: goal
+        direction: input
+        type: Point
+        required: true
+        description: >
+          The point to check proximity to -- see PlanAstar's own goal
+          port.
+      - name: threshold
+        direction: input
+        type: double
+        required: true
+        description: Distance threshold, metres.
+
+  - id: DistanceOver
+    prolog_condition: distance_over
+    description: >
+      True iff the CURRENT position (now/2 + at/4) is further than
+      threshold distance from an EXPLICIT point -- same shape as
+      DistanceBelow above.
+    ports:
+      - name: goal
+        direction: input
+        type: Point
+        required: true
+        description: >
+          The point to check proximity to -- see PlanAstar's own goal
+          port.
+      - name: threshold
         direction: input
         type: double
         required: true

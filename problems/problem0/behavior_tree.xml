@@ -11,7 +11,7 @@
 
   goal="11.675;11.525" is a LITERAL. There is no global goal/2 fact any
   more: planWith always took an explicit Goal argument, and now so
-  does the AtGoal condition (goal="..." port, see
+  does the DistanceBelow condition (goal="..." port, see
   module/contracts/schema.yaml) and this same directory's own
   goal_formula.pl, which is
   the single place mission-goal information lives. If the map or
@@ -33,12 +33,22 @@
   project's current instruction; add obstacle_in_bound(Threshold) (or
   any other extra trigger) here via a triggers="..." attribute
   whenever it's wanted.
+
+  The DistanceBelow node right after MoveTo checks that the leg's own
+  noisy final position actually landed within 0.3m of the same goal
+  point PlanAstar targeted. This USED to be baked directly into
+  MoveTo's own status output (see basic_action_theory.pl's leg_status/9
+  and MoveTo's own note in schema.yaml); it's now this project's own
+  explicit, hand-placed condition node, same as any other check, so
+  removing/loosening it here is a genuine tree-authoring decision
+  instead of an implicit side effect of Status.
 -->
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <Sequence name="GoToGoal">
       <PlanAstar goal="11.675;11.525" control_points="{cp}"/>
       <MoveTo control_points="{cp}"/>
+      <DistanceBelow goal="11.675;11.525" threshold="0.3"/>
     </Sequence>
   </BehaviorTree>
 
@@ -61,9 +71,9 @@
       <output_port name="reason" type="std::string"/>
       <output_port name="status" type="bool"/>
     </Action>
-    <Condition ID="AtGoal">
+    <Condition ID="DistanceBelow">
       <input_port name="goal" type="Point"/>
-      <input_port name="tolerance" type="double"/>
+      <input_port name="threshold" type="double"/>
     </Condition>
     <Condition ID="HaltedWith">
       <input_port name="reason" type="std::string"/>

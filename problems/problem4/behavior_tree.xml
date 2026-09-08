@@ -48,11 +48,14 @@
   problem is also used as the regression check that localized
   redescend reproduces the prior global-redescend results.
 
-  Start position (2.275,2.075, this problem's own config.yaml) IS the
-  "home" this tree returns to; the goal (22.275,2.075) is 20 metres
-  east of it, tuned together with config.yaml's raised
-  moving_drain_rate (5.0%/time-unit, vs. problem0-3's shared 0.5) so
-  the walk crosses the 70% threshold well before reaching the goal.
+  Start position (12.6,0.0, this problem's own config.yaml) IS the
+  "home" this tree returns to; the goal (12.6,-20.0) is 20 metres
+  south of it, along the fully clear north-south lane the new orchard
+  map (problems/new_map/orchard_map.*) leaves between two tree rows,
+  tuned together with config.yaml's raised moving_drain_rate
+  (5.0%/time-unit, vs. problem0-3's shared 0.5) so the walk crosses the
+  70% threshold well before reaching the goal, same 30%-of-the-way
+  ratio as the previous map (6m out of 20m).
 
   A DistanceBelow node right after each branch's own MoveTo checks
   that leg's own noisy final position landed within 0.3m of whichever
@@ -69,14 +72,14 @@
     <Fallback name="BatteryFallback">
       <ReactiveSequence name="TryGoal">
         <BatteryOver threshold="70"/>
-        <PlanWith algorithm="straight" goal="22.275;2.075" control_points="{cp}"/>
+        <PlanWith algorithm="straight" goal="12.6;-20.0" control_points="{cp}"/>
         <MoveTo control_points="{cp}"/>
-        <DistanceBelow goal="22.275;2.075" threshold="0.3"/>
+        <DistanceBelow goal="12.6;-20.0" threshold="0.3"/>
       </ReactiveSequence>
       <Sequence name="GoHome">
-        <PlanWith algorithm="straight" goal="2.275;2.075" control_points="{cp2}"/>
+        <PlanWith algorithm="straight" goal="12.6;0.0" control_points="{cp2}"/>
         <MoveTo control_points="{cp2}"/>
-        <DistanceBelow goal="2.275;2.075" threshold="0.3"/>
+        <DistanceBelow goal="12.6;0.0" threshold="0.3"/>
       </Sequence>
     </Fallback>
   </BehaviorTree>

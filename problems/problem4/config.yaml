@@ -69,8 +69,14 @@ initial_situation:
   # file's own header, and basic_action_theory.pl's distance_below condition,
   # which now takes its own goal point as an explicit argument instead
   # of reading one).
-  start_x: 2.275   # metres
-  start_y: 2.075   # metres
+  # Repositioned onto the new orchard map (problems/new_map/orchard_map.*
+  # -- see map.yaml): (12.6,0.0) sits in the middle of the fully clear
+  # north-south lane between two tree rows (x in [9.3,15.9] is
+  # obstacle-free along the map's ENTIRE y extent, verified against the
+  # raw occupancy grid), 6.6m wide -- comfortably clear of both the
+  # 0.3m robot safety margin and the position noise model.
+  start_x: 12.6   # metres
+  start_y: 0.0    # metres
 
 robot:
   radius: 0.20          # metres -- robot_radius/1

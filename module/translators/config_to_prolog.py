@@ -18,10 +18,14 @@ shape, just with config.yaml as the source instead of a map or a plan.
 
 config.yaml's own top level is organized by PHYSICAL QUANTITY
 (position:, battery:, ...) rather than by "noise vs. drain vs.
-grounding" -- see that file's own header for why -- but the Prolog
-FACT NAMES this emits are unchanged from before that reorganization
-(sigma/1, sigma_tangential/1, battery_start/1, position_merge_grid/1,
-...), so basic_action_theory.pl itself needed no changes for it.
+grounding" -- see that file's own header for why -- and the Prolog FACT
+NAMES this emits mirror config.yaml's own key names directly (sigma/1,
+sigma_tangential/1, battery_start/1, disc_step_position/1, ...) -- the
+three discretization-step knobs (disc_step_position/1, disc_step_
+battery/1, disc_step_time/1) are named identically to their own
+config.yaml keys (position.disc_step_position, battery.disc_step_
+battery, grounding.disc_step_time) specifically so the two stay
+trivially greppable as the same knob.
 
 battery.enabled (config.yaml) drives TWO things here:
   - battery_enabled/1: a plain fact basic_action_theory.pl doesn't
@@ -33,7 +37,7 @@ battery.enabled (config.yaml) drives TWO things here:
     specifically so it can be conditional on a PER-PROBLEM config
     value instead of being the same for every problem.
 Every OTHER battery-related fact (battery_start/1, idle_drain_rate/1,
-moving_drain_rate/1, sigma_battery/1, battery_merge_grid/1, zbatt/1's
+moving_drain_rate/1, sigma_battery/1, disc_step_battery/1, zbatt/1's
 own table) is ALWAYS emitted regardless of battery.enabled -- battery/3
 (the fluent itself) is unconditional theory code, still tracking charge
 level either way; only whether battery can ever be a HALTING cause
@@ -90,9 +94,9 @@ def _format_number(x):
 
 def _gaussian_disjunction(functor, args_prefix, discretized_gaussian):
     """Build one annotated-disjunction block, e.g.:
-        0.0606::z(do(startMoveto(CP,Triggers,T0),S), -2.0) ;
+        0.0606::z(do(startMoveto(CP,Triggers,ActionCode,T0),S), -2.0) ;
         ...
-        0.0606::z(do(startMoveto(CP,Triggers,T0),S),  2.0).
+        0.0606::z(do(startMoveto(CP,Triggers,ActionCode,T0),S),  2.0).
     or, for a zero-argument functor like zbatt/1:
         0.0606::zbatt(-2.0) ;
         ...
@@ -117,22 +121,28 @@ def render_prolog(config):
     _check_gaussian_weights("position.tangential", position_cfg["tangential"]["discretized_gaussian"])
     _check_gaussian_weights("battery", battery_cfg["discretized_gaussian"])
 
-    # position.merge_grid/battery.merge_grid default to 0 if omitted;
-    # grounding.time_merge_grid the same, via its own (much smaller,
-    # now single-purpose) grounding: section -- all three "disabled,
-    # exact" at 0, per basic_action_theory.pl's own quantize/
+    # position.disc_step_position/battery.disc_step_battery default to 0
+    # if omitted; grounding.disc_step_time the same, via its own (much
+    # smaller, single-purpose) grounding: section -- all three
+    # "disabled, exact" at 0, per basic_action_theory.pl's own quantize/
     # quantize_down/quantize_up.
-    position_merge_grid = position_cfg.get("merge_grid", 0.0)
-    battery_merge_grid = battery_cfg.get("merge_grid", 0.0)
-    time_merge_grid = config.get("grounding", {}).get("time_merge_grid", 0.0)
+    disc_step_position = position_cfg.get("disc_step_position", 0.0)
+    disc_step_battery = battery_cfg.get("disc_step_battery", 0.0)
+    disc_step_time = config.get("grounding", {}).get("disc_step_time", 0.0)
 
     battery_enabled = battery_cfg.get("enabled", True)
 
+    # ActionCode is a free variable here, same as CP/Triggers/T0 --
+    # z/zt's own key doesn't need its ACTUAL value (CP+T0+S already
+    # uniquely pin down "this leg"), it just has to be PRESENT so the
+    # key's arity matches startMoveto/4 (see basic_action_theory.pl's
+    # own poss(haltMoveto(...))/tag_reason note for why startMoveto
+    # gained this 4th argument).
     z_block = _gaussian_disjunction(
-        "z", "do(startMoveto(CP,Triggers,T0),S), ",
+        "z", "do(startMoveto(CP,Triggers,ActionCode,T0),S), ",
         position_cfg["lateral"]["discretized_gaussian"])
     zt_block = _gaussian_disjunction(
-        "zt", "do(startMoveto(CP,Triggers,T0),S), ",
+        "zt", "do(startMoveto(CP,Triggers,ActionCode,T0),S), ",
         position_cfg["tangential"]["discretized_gaussian"])
     zbatt_block = _gaussian_disjunction(
         "zbatt", "", battery_cfg["discretized_gaussian"])
@@ -150,19 +160,18 @@ def render_prolog(config):
         f"speed({_format_number(config['motion']['speed'])}).",
         f"sigma({_format_number(position_cfg['lateral']['sigma'])}).",
         f"sigma_tangential({_format_number(position_cfg['tangential']['sigma'])}).",
-        f"position_merge_grid({_format_number(position_merge_grid)}).",
+        f"disc_step_position({_format_number(disc_step_position)}).",
         f"battery_enabled({str(bool(battery_enabled)).lower()}).",
         f"sigma_battery({_format_number(battery_cfg['sigma'])}).",
         f"battery_start({_format_number(battery_cfg['start'])}).",
         f"idle_drain_rate({_format_number(battery_cfg['idle_drain_rate'])}).",
         f"moving_drain_rate({_format_number(battery_cfg['moving_drain_rate'])}).",
-        f"battery_merge_grid({_format_number(battery_merge_grid)}).",
-        f"goal_tolerance({_format_number(config['tolerances']['goal'])}).",
+        f"disc_step_battery({_format_number(disc_step_battery)}).",
         f"tolerance({_format_number(config['tolerances']['on_track'])}).",
         f"num_samples({_format_number(config['verification']['num_samples'])}).",
         f"bracket_samples({_format_number(config['verification']['bracket_samples'])}).",
         f"crossing_eps({_format_number(config['verification']['crossing_eps'])}).",
-        f"time_merge_grid({_format_number(time_merge_grid)}).",
+        f"disc_step_time({_format_number(disc_step_time)}).",
         "",
         z_block,
         "",

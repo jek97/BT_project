@@ -50,7 +50,7 @@
 # battery: holds EVERYTHING about battery (the enabled/disabled flag,
 # drain rates, noise, and its own merge-grid knob) in one place, rather
 # than the same physical quantity's settings being scattered across
-# three top-level sections. time_merge_grid stays in its own small
+# three top-level sections. disc_step_time stays in its own small
 # grounding: section since it isn't position- or battery-specific (see
 # basic_action_theory.pl's own MERGE-GRID QUANTIZATION note, above
 # dist/5's own section, for the full mechanism all three merge-grid
@@ -66,11 +66,17 @@ initial_situation:
   # battery.start below, the noise model, robot geometry), and "the
   # goal" now lives entirely in this problem's own goal_formula.pl
   # (there is no longer a single global goal point at all -- see that
-  # file's own header, and basic_action_theory.pl's AtGoal condition,
+  # file's own header, and basic_action_theory.pl's distance_below condition,
   # which now takes its own goal point as an explicit argument instead
   # of reading one).
-  start_x: 2.275   # metres
-  start_y: 2.075   # metres
+  # Repositioned onto the new orchard map (problems/new_map/orchard_map.*
+  # -- see map.yaml): (12.6,0.0) sits in the middle of the fully clear
+  # north-south lane between two tree rows (x in [9.3,15.9] is
+  # obstacle-free along the map's ENTIRE y extent, verified against the
+  # raw occupancy grid), 6.6m wide -- comfortably clear of both the
+  # 0.3m robot safety margin and the position noise model.
+  start_x: 12.6   # metres
+  start_y: 0.0    # metres
 
 robot:
   radius: 0.20          # metres -- robot_radius/1
@@ -92,7 +98,7 @@ position:
   # already. The generator checks each table's sum separately and
   # warns (but does not hard-fail, consistent with this project's
   # existing choice not to hard-stop ProbLog loads) if any is off.
-  merge_grid: 1.0   # metres -- rounds the position handed to planWith()
+  disc_step_position: 1.0   # metres -- rounds the position handed to planWith()
                      # when planning a NEW leg's own control points, so
                      # different noise draws that land close enough
                      # together produce an IDENTICAL ground term for
@@ -155,7 +161,7 @@ battery:
                              # battery dynamics -- see that file's own
                              # header for why this problem exists.
   sigma: 0.5   # percent per sqrt(time-unit) -- zbatt/1's scale (sigma_battery/1)
-  merge_grid: 10   # percent -- rounds a NEW leg's own starting battery
+  disc_step_battery: 10   # percent -- rounds a NEW leg's own starting battery
                     # (floor, never overestimating remaining charge --
                     # see basic_action_theory.pl's own MERGE-GRID
                     # QUANTIZATION note). 0 disables this (exact).
@@ -168,7 +174,6 @@ battery:
       weight: 0.25
 
 tolerances:
-  goal: 0.3       # metres -- goal_tolerance/1 (Status/goal_reached success check)
   on_track: 0.5   # metres -- tolerance/1 (on_track/1 drift-reporting diagnostic)
 
 verification:
@@ -178,9 +183,9 @@ verification:
   crossing_eps: 0.01     # bisection refinement tolerance, time-units
 
 grounding:
-  # time_merge_grid is the one merge-grid knob that ISN'T position- or
+  # disc_step_time is the one discretization-step knob that ISN'T position- or
   # battery-specific -- it rounds a NEW leg's own start time (ceiling,
   # since a leg can never plausibly start before the previous one
   # actually ended -- see basic_action_theory.pl's own MERGE-GRID
   # QUANTIZATION note). 0 disables this (exact).
-  time_merge_grid: 20   # seconds
+  disc_step_time: 20   # seconds

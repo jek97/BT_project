@@ -9,12 +9,12 @@
   <Fallback>
     <Sequence>                     : Branch 1: path is clear
       <Inverter><ObstacleOnPath/></Inverter>
-      <PlanStraight/>
+      <PlanWith algorithm="straight"/>
       <MoveTo triggers="collision;battery;obstacle_on_path(T)"/>
     </Sequence>
     <Sequence>                     : Branch 2: obstacle blocks the path
       <ObstacleOnPath/>
-      <FollowBoarder/>
+      <PlanWith algorithm="follow_boarder"/>
       <MoveTo triggers="collision;battery;line_of_sight_clear(...)"/>
     </Sequence>
   </Fallback>
@@ -76,6 +76,21 @@
   goal="11.675;11.525" matches this same directory's own goal_formula.pl:
   see problem0/behavior_tree.xml's own header for the shared
   goal/config-consistency rationale.
+
+  DistanceBelow, right after each branch's own MoveTo, confirms that
+  leg's own noisy final position actually landed within 0.3m of the
+  same goal PlanWith was working toward. See
+  problem0/behavior_tree.xml's own header for the full rationale (this
+  used to be baked into MoveTo's own status output, now an explicit
+  condition node instead; also present in this same directory's own
+  hand-written plan_generated.pl, see that file's own header for why
+  this tree doesn't yet translate to it directly).
+
+  PlanWith is the ONE consolidated planner action (see
+  problem0/behavior_tree.xml's own note); Branch 1 uses
+  algorithm="straight", Branch 2 uses algorithm="follow_boarder" (which
+  takes obstacle_id/offset instead of a goal port, see schema.yaml's
+  own note on PlanWith).
 -->
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
@@ -84,13 +99,15 @@
         <Inverter>
           <ObstacleOnPath threshold="0.6"/>
         </Inverter>
-        <PlanStraight goal="11.675;11.525" control_points="{cp}"/>
+        <PlanWith algorithm="straight" goal="11.675;11.525" control_points="{cp}"/>
         <MoveTo control_points="{cp}" triggers="collision;battery;obstacle_on_path(0.6)"/>
+        <DistanceBelow goal="11.675;11.525" threshold="0.3"/>
       </Sequence>
       <Sequence name="FollowObstacleBoundary">
         <ObstacleOnPath threshold="0.6"/>
-        <FollowBoarder obstacle_id="obs3" offset="0.6" control_points="{cp2}"/>
+        <PlanWith algorithm="follow_boarder" obstacle_id="obs3" offset="0.6" control_points="{cp2}"/>
         <MoveTo control_points="{cp2}" triggers="collision;battery;line_of_sight_clear(obs3,11.675,11.525)"/>
+        <DistanceBelow goal="11.675;11.525" threshold="0.3"/>
       </Sequence>
     </Fallback>
   </BehaviorTree>
@@ -102,13 +119,9 @@
       <output_port name="reason" type="std::string"/>
       <output_port name="status" type="bool"/>
     </Action>
-    <Action ID="PlanStraight">
+    <Action ID="PlanWith">
+      <input_port name="algorithm" type="std::string"/>
       <input_port name="goal" type="Point"/>
-      <output_port name="control_points" type="std::vector&lt;Point&gt;"/>
-      <output_port name="reason" type="std::string"/>
-      <output_port name="status" type="bool"/>
-    </Action>
-    <Action ID="FollowBoarder">
       <input_port name="obstacle_id" type="std::string"/>
       <input_port name="offset" type="double"/>
       <output_port name="control_points" type="std::vector&lt;Point&gt;"/>
@@ -118,9 +131,9 @@
     <Condition ID="ObstacleOnPath">
       <input_port name="threshold" type="double"/>
     </Condition>
-    <Condition ID="AtGoal">
+    <Condition ID="DistanceBelow">
       <input_port name="goal" type="Point"/>
-      <input_port name="tolerance" type="double"/>
+      <input_port name="threshold" type="double"/>
     </Condition>
     <Condition ID="HaltedWith">
       <input_port name="reason" type="std::string"/>

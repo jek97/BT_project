@@ -42,8 +42,17 @@ Usage:
 
 main.py calls validate_goal_formula() itself before every run, so you
 don't normally need to run this by hand.
+
+ALSO HOME TO generate_safety_queries() (see its own docstring, near the
+bottom of this file) -- main.py calls it immediately after
+validate_goal_formula(), writing this problem's own queries_generated.pl
+from the per-action Reason universe module/translators/bt_to_prolog.py
+worked out while translating behavior_tree.xml. Kept in this same file
+specifically because the two steps always run back-to-back as one unit
+in main.py's own pipeline.
 """
 import os
+import re
 import sys
 
 import yaml
@@ -174,6 +183,127 @@ def validate_goal_formula(goal_formula_path=DEFAULT_GOAL_FORMULA_PATH,
                 f"Reiter's 'uniform in s' definition. A formula that "
                 f"genuinely needs to relate two different situations "
                 f"(e.g. 'visited A before visited B') isn't supported yet.")
+
+
+# -----------------------------------------------------------------------
+# SAFETY QUERY GENERATION -- deliberately kept in this same file, right
+# alongside goal_formula.pl's own validation, since main.py calls both
+# back-to-back as one step: validate the goal formula, THEN generate
+# the safety queries that get consulted alongside it (see main.py's own
+# call site and pipeline_stages.write_problem_data_pl, which now also
+# consults this function's own output file).
+#
+# WHY THIS REPLACES basic_action_theory.pl's old hardcoded Section 10:
+# a problem-INDEPENDENT theory file can't itself vary per-problem, but
+# the file it consults (via problem_data.pl) can -- the SAME reasoning
+# config_to_prolog.py already used for conditionally emitting
+# query(any_battery_depletion), generalized to EVERY safety query
+# instead of just that one hand-picked case. basic_action_theory.pl's
+# own halted_with_pattern/3, any_reason_pattern/1, and
+# any_reason_pattern_by_action/2 (see that file's Section 9) are the
+# fixed, problem-independent MACHINERY; this function decides, per
+# problem, WHICH Reason patterns are actually worth asking about --
+# exactly the ones module/translators/bt_to_prolog.py already worked
+# out are possible for each MoveNode while translating the tree (see
+# its own _VarPool.reason_patterns_by_action).
+# -----------------------------------------------------------------------
+
+_ALWAYS_QUERIES = [
+    "verify_goal_formula",
+    "plan_outcome(true)",
+    "plan_outcome(false)",
+    "plan_outcome(world_too_large)",
+    "plan_outcome(reactive_escaped)",
+]
+
+
+def generate_safety_queries(reason_patterns_by_action, output_path, condition_codes=()):
+    """Writes output_path (this problem's own queries_generated.pl):
+    the five ALWAYS-relevant, tree-shape-independent queries, then one
+    query(any_reason_pattern(Pattern)) per DISTINCT Reason pattern
+    reachable ANYWHERE in the tree (the auto-generated replacement for
+    hand-picking any_collision/any_battery_depletion -- any_collision
+    is now any_reason_pattern(crashed(_)), any_battery_depletion is
+    any_reason_pattern(battery_depleted), and every OTHER reason this
+    problem's own tree can produce gets the same treatment, not just
+    the two someone thought to hand-write), then one
+    query(any_reason_pattern_by_action(Pattern,ActionCode)) per
+    (pattern, action) pair actually possible -- the per-node breakdown.
+
+    reason_patterns_by_action is {action_code: [reason_pattern_text,
+    ...]}, exactly module/translators/bt_to_prolog.py's own
+    generate_plan_pl second return value. Pass {} (e.g. for a hand-
+    written plan_generated.pl that bypasses translation entirely --
+    see diagnose_pipeline.py) to still get the five ALWAYS queries with
+    no per-reason breakdown.
+
+    ALSO emits, for every (pattern, action) pair whose own pattern
+    contains the 'wild' marker somewhere, a companion query(any_reason_
+    pattern_detail_by_action(...)) with 'wild' replaced by a genuine
+    Prolog variable ('_') -- see basic_action_theory.pl's own
+    halted_with_pattern_detail/3 for why THIS query is deliberately
+    non-ground: ProbLog enumerates one result row per distinct
+    grounding for it, which is exactly what turns e.g.
+    "crashed(wild) on a1 = 30%" into its own further breakdown by
+    WHICH concrete obstacle. A pattern with no 'wild' in it at all
+    (battery_under(20), guard_break(Cond), completed, ...) has nothing
+    runtime-only to enumerate, so gets no companion query.
+
+    condition_codes is an iterable of every condition-leaf code this
+    problem's own tree produced (module/translators/bt_to_prolog.py's
+    own generate_plan_pl fourth return value's keys, i.e.
+    condition_labels) -- for each one, emits BOTH
+    query(any_condition_status(Code,true)) and query(any_condition_
+    status(Code,false)), mirroring the (pattern,action) pairs above but
+    for CONDITIONS (see basic_action_theory.pl's own any_condition_
+    status/2). Defaults to () for the same "hand-written plan, nothing
+    to derive" case reason_patterns_by_action's own {} default covers.
+
+    ALSO always emits query(outcome_signature(_)) -- theory-level,
+    generic machinery needing no per-problem derivation at all (see
+    that predicate's own note in basic_action_theory.pl): one result
+    row per DISTINCT combination of Reason/Condition values actually
+    reached, the full joint enumeration main.py's own "Full outcome
+    enumeration" table is built from."""
+    all_patterns = sorted(set(
+        pattern
+        for patterns in reason_patterns_by_action.values()
+        for pattern in patterns))
+
+    lines = [
+        "% AUTO-GENERATED by module/contracts/goal_formula_check.py's",
+        "% generate_safety_queries -- DO NOT HAND-EDIT, this is derived",
+        "% entirely from the problem's own behavior_tree.xml (via",
+        "% bt_to_prolog.py) and regenerated by main.py before every run.",
+        "",
+    ]
+    lines += [f"query({q})." for q in _ALWAYS_QUERIES]
+    # outcome_signature/1 is theory-level, GENERIC machinery (see its own
+    # note in basic_action_theory.pl) -- unlike everything else here, it
+    # needs no per-problem derivation at all, so it's always emitted,
+    # even when reason_patterns_by_action/condition_codes are both {}/()
+    # (e.g. diagnose_pipeline.py's hand-written-plan path). Deliberately
+    # NON-ground, like the _detail queries below -- one result row per
+    # DISTINCT outcome combination actually reached.
+    lines.append("query(outcome_signature(_)).")
+    lines.append("")
+    lines += [f"query(any_reason_pattern({pattern}))." for pattern in all_patterns]
+    lines.append("")
+    for action_code in sorted(reason_patterns_by_action):
+        for pattern in reason_patterns_by_action[action_code]:
+            lines.append(f"query(any_reason_pattern_by_action({pattern},{action_code})).")
+            if re.search(r"\bwild\b", pattern):
+                detail_pattern = re.sub(r"\bwild\b", "_", pattern)
+                lines.append(f"query(any_reason_pattern_detail_by_action({detail_pattern},{action_code})).")
+    lines.append("")
+    for condition_code in sorted(condition_codes):
+        lines.append(f"query(any_condition_status({condition_code},true)).")
+        lines.append(f"query(any_condition_status({condition_code},false)).")
+    lines.append("")
+
+    with open(output_path, "w") as f:
+        f.write("\n".join(lines))
+    return output_path
 
 
 if __name__ == "__main__":

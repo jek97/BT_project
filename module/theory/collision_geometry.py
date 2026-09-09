@@ -131,6 +131,23 @@ file, this black box will not see them -- keep obstacles_generated.pl
 the single source of truth, exactly as planners.py's own map
 loading already assumes for map.yaml.
 
+IMPORTANT -- these polygons are ALREADY INFLATED by the robot's own
+safety_margin (robot_radius+safety_buffer): occgrid_to_problog.py's own
+generate() dilates the occupied mask by that amount BEFORE extracting
+contours (see that module's own docstring), so obstacle_within_threshold/
+obstacle_on_path_within_threshold below measure distance to the
+INFLATED boundary, not the map's raw occupied cells. `collision`
+(basic_action_theory.pl's first_collision_time/6) exploits this
+directly -- it now calls first_threshold_crossing_time_value at
+Threshold=0.0, a bare contact/containment test, instead of comparing
+against safety_margin. Every OTHER caller whose own Threshold argument
+is still meant as "distance from the REAL, uninflated obstacle
+surface" (obstacle_in_bound(Threshold), obstacle_on_path(Threshold))
+corrects for this on the Prolog side, via
+basic_action_theory.pl's own clearance_adjusted_threshold/2, BEFORE
+ever reaching this module -- nothing here needs to know about
+safety_margin at all, it only ever sees an already-adjusted Threshold.
+
 Everything below the constant/obstacle loading is PLAIN PYTHON, with no
 ProbLog types anywhere -- first_threshold_crossing_time_value is the
 testable core; the ProbLog import itself is wrapped in a try/except

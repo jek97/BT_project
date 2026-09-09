@@ -160,12 +160,15 @@ def write_problem_data_pl(problem_data_path, problem_dir, goal_formula_path,
                            run_label, tee=None):
     """Write module/theory/problem_data.pl's bootstrap consult chain,
     pointing (via absolute paths) at one problem directory's own
-    obstacles_generated.pl / config_generated.pl / plan_generated.pl,
-    plus goal_formula_path -- the SAME shape main.py always wrote
-    inline, factored out here so main.py and diagnose_pipeline.py
-    (which deliberately does NOT translate behavior_tree.xml first --
-    see that script's own header) can't drift apart on this file's
-    format.
+    obstacles_generated.pl / config_generated.pl / plan_generated.pl /
+    queries_generated.pl, plus goal_formula_path -- the SAME shape
+    main.py always wrote inline, factored out here so main.py and
+    diagnose_pipeline.py (which deliberately does NOT translate
+    behavior_tree.xml first -- see that script's own header) can't
+    drift apart on this file's format. Every CALLER is responsible for
+    having already written queries_generated.pl (via module/contracts/
+    goal_formula_check.py's generate_safety_queries) before calling
+    this -- the consult below fails outright if it doesn't exist yet.
     """
     with open(problem_data_path, "w") as f:
         f.write(
@@ -177,6 +180,7 @@ def write_problem_data_pl(problem_data_path, problem_dir, goal_formula_path,
             f":- consult('{os.path.join(problem_dir, 'config_generated.pl')}').\n"
             f":- consult('{os.path.join(problem_dir, 'plan_generated.pl')}').\n"
             f":- consult('{goal_formula_path}').\n"
+            f":- consult('{os.path.join(problem_dir, 'queries_generated.pl')}').\n"
         )
     if tee:
         tee(f"  Bootstrap   : {problem_data_path} (points basic_action_theory.pl "

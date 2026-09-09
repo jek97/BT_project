@@ -2,5 +2,25 @@
 % behavior_tree.xml -- DO NOT HAND-EDIT,
 % edit the XML tree instead and regenerate (main.py does this
 % automatically before every run).
+%
+% Action code legend (see main.py's own printed copy of this):
+%   a1: PlanWith(straight, goal=point(12.6,-20.0)) [TryGoal]
+%   a2: MoveTo(CP) [TryGoal]
+%   a3: PlanWith(straight, goal=point(12.6,0.0)) [GoHome]
+%   a4: MoveTo(CP2) [GoHome]
+%
+% Condition code legend (see main.py's own printed copy of this):
+%   c1: BatteryOver(threshold=70) [TryGoal]
+%   c2: DistanceBelow(goal=12.6;-20.0,threshold=0.3) [TryGoal]
+%   c3: DistanceBelow(goal=12.6;0.0,threshold=0.3) [GoHome]
 
-plan(fallback_node([seq_node([cond(battery_over(70.0)),planWith(straight,point(22.275,2.075),CP),moveto_leg(CP,[collision,battery,battery_below(70)])]),seq_node([planWith(straight,point(2.275,2.075),CP2),moveto_leg(CP2,[collision,battery])])])).
+plan(fallback_node([reactivesequence(rc1),seq_node([planWith(straight,point(12.6,0.0),CP2,a3),moveto_leg(CP2,[collision,battery],a4),cond(distance_below(12.6,0.0,0.3),c3)])])).
+
+% One reactive_children/2 fact per <ReactiveSequence>/
+% <ReactiveFallback> in the tree, keyed by the same code
+% embedded in plan/1's own reactivesequence(Code)/
+% reactivefallback(Code) markers above -- see basic_action_
+% theory.pl's own CONTROL-FLOW REDESCEND TARGETS note for why
+% these live as SEPARATE facts rather than being inlined.
+
+reactive_children(rc1, [cond(battery_over(70.0),c1),planWith(straight,point(12.6,-20.0),CP,a1),moveto_leg(CP,[collision,battery,guard_break(battery_over(70.0),rc1)],a2),cond(distance_below(12.6,-20.0,0.3),c2)]).

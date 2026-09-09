@@ -77,10 +77,10 @@
 %                              module/translators/occgrid_to_problog.py.
 %      - start/1, robot_radius/1, safety_buffer/1, speed/1, sigma/1,
 %        sigma_tangential/1, sigma_battery/1, battery_start/1,
-%        idle_drain_rate/1, moving_drain_rate/1, goal_tolerance/1,
+%        idle_drain_rate/1, moving_drain_rate/1,
 %        tolerance/1, num_samples/1, bracket_samples/1, crossing_eps/1,
-%        z/2, zt/2, zbatt/1, position_merge_grid/1, battery_merge_grid/1,
-%        time_merge_grid/1 (see the MERGE-GRID QUANTIZATION note above
+%        z/2, zt/2, zbatt/1, disc_step_position/1, disc_step_battery/1,
+%        disc_step_time/1 (see the MERGE-GRID QUANTIZATION note above
 %        dist/5's own section)
 %                              from config_generated.pl, itself
 %                              generated from config.yaml by
@@ -153,8 +153,8 @@ dist(X1,Y1,X2,Y2,D) :- D is sqrt((X2-X1)**2 + (Y2-Y1)**2).
 % MERGE-GRID QUANTIZATION -- three rounding primitives used ONLY at
 % the specific "seam" where a NEW leg (a fresh startMoveto) reads its
 % own starting condition from wherever the PREVIOUS leg's actual halt
-% left things. See position_merge_grid/1, battery_merge_grid/1, and
-% time_merge_grid/1 (config facts, from the problem's own config.yaml
+% left things. See disc_step_position/1, disc_step_battery/1, and
+% disc_step_time/1 (config facts, from the problem's own config.yaml
 % -- see that file's own "grounding:" section) for what actually
 % enables this, and leg_start_battery/3, poss(startMoveto(...)), and
 % do_node(planWith(...)) further down for where each is applied.
@@ -183,7 +183,7 @@ dist(X1,Y1,X2,Y2,D) :- D is sqrt((X2-X1)**2 + (Y2-Y1)**2).
 % halted_with/2 all still read the exact, un-rounded Tcross/position/
 % battery of whichever leg actually produced them; only what SEEDS the
 % NEXT leg is coarsened). cond() checks (holds(battery_over(...)),
-% holds(at_goal(...)), etc.) also stay exact, on purpose -- a
+% holds(distance_below(...)), etc.) also stay exact, on purpose -- a
 % decision boundary like "is battery actually over 70%" should not be
 % shifted by a floor/ceiling/round choice made for an unrelated reason.
 %
@@ -246,6 +246,48 @@ sum_list([H|T], Sum) :- sum_list(T, SumT), Sum is H + SumT.
 % sensible (> safety_margin) -- currently unchecked, same as any other
 % trigger-list entry's argument.
 safety_margin(M) :- robot_radius(R), safety_buffer(B), M is R + B.
+
+% MAP-PREPROCESSING INFLATION: <problem>/obstacles_generated.pl's own
+% obstacle_polygon/2 facts are no longer the map's raw occupied cells --
+% module/translators/occgrid_to_problog.py's own generate() now
+% inflates the occupied mask by safety_margin/1's own value (main.py
+% passes robot_radius+safety_buffer straight through, computed from
+% THIS SAME problem's own config.yaml) BEFORE extracting polygons -- see
+% that file's own module docstring. So `collision` (a robot's own
+% CENTER point coming into physical contact with an obstacle, once its
+% own radius+buffer are accounted for) is now a bare containment/
+% contact test against the ALREADY-INFLATED polygon -- first_collision_
+% time/7 below calls the generalized machinery at Threshold=0.0, not
+% safety_margin, and needs no distance comparison at all beyond
+% "is the point on or inside the (inflated) obstacle". Every OTHER
+% distance-based test that still means "how close to the REAL,
+% uninflated obstacle surface" -- obstacle_in_bound(Threshold) and
+% obstacle_on_path(Threshold), whose own Threshold argument keeps its
+% documented meaning unchanged -- must correct for the same inflation
+% by subtracting safety_margin back out before calling into
+% collision_geometry.py's distance primitives (which only ever see the
+% inflated polygons): see clearance_adjusted_threshold/2 immediately
+% below, used at every one of their call sites (trigger_crossing_time/11,
+% holds/2, and holds_leg/9).
+%
+% obstacles_generated.pl also carries a SECOND, SEPARATE family,
+% obstacle_polygon_planning/2 -- inflated by robot_radius ALONE, no
+% safety_buffer -- that collision_geometry.py never reads at all; it
+% is planners.py's own plan_voronoi that routes through it (and
+% plan_astar's raster grid, independently, at the same robot_radius-
+% only amount). See occgrid_to_problog.py's own module docstring, "TWO
+% INFLATION LEVELS, ONE FILE", and planners.py's own module docstring
+% for the full split.
+%
+% clearance_adjusted_threshold(+Threshold, -Adjusted): Adjusted is
+% Threshold minus safety_margin -- can go negative (a caller asking for
+% a bound TIGHTER than the robot's own physical clearance), which
+% correctly degrades to "never fires beyond what collision itself
+% already would", same not-yet-validated "Threshold > safety_margin"
+% caveat this file already documented above, now just enforced
+% arithmetically instead of geometrically.
+clearance_adjusted_threshold(Threshold, Adjusted) :-
+    safety_margin(M), Adjusted is Threshold - M.
 
 % within_obstacle_threshold/3 (the generalized "is (PX,PY) within
 % Threshold of the nearest obstacle" test, parametrized by threshold so
@@ -345,7 +387,7 @@ walk_duration(ControlPoints, Duration) :-
 %    (an interrupt can only fire while a walk IS in progress).
 %    Pure regression, exactly on the same footing as at/4.
 % ---------------------------------------------------------------
-moving(do(startMoveto(_,_,_), _)).
+moving(do(startMoveto(_,_,_,_), _)).
 moving(do(A,S)) :-
     A \= haltMoveto(_,_,_), A \= interrupt(_),
     moving(S).
@@ -369,13 +411,26 @@ current_walk(S, CP, T0, SPrev) :- current_walk(S, CP, _Triggers, T0, SPrev).
 % current_walk/5 additionally exposes Triggers -- the leg's own list
 % of EXTRA halting conditions -- needed wherever the earliest-wins
 % computation over Triggers has to run (Poss(haltMoveto(...)),
-% interrupt's Poss). This is now the PRIMARY definition; /3 and /4
-% above are thin wrappers over it, same pattern as when SPrev was
-% added to /3 earlier.
-current_walk(do(startMoveto(CP,Triggers,T0),SPrev), CP, Triggers, T0, SPrev).
-current_walk(do(A,S), CP, Triggers, T0, SPrev) :-
-    A \= startMoveto(_,_,_),
-    current_walk(S, CP, Triggers, T0, SPrev).
+% interrupt's Poss). UNCHANGED signature/behaviour for every one of
+% its own (many) existing callers -- now a thin wrapper dropping
+% ActionCode from current_walk/6 below, exactly the same "/3 and /4
+% are thin wrappers" pattern as when SPrev was added to /3 earlier.
+current_walk(S, CP, Triggers, T0, SPrev) :-
+    current_walk(S, CP, Triggers, _ActionCode, T0, SPrev).
+
+% current_walk/6 -- the REAL base fact/recursion, over startMoveto/4
+% (CP,Triggers,ActionCode,T0) now instead of startMoveto/3. ActionCode
+% is the per-MoveTo-OCCURRENCE code bt_to_prolog.py assigns (mirrors
+% next_reactive_code()'s own per-reactive-composite code -- see that
+% file's own _VarPool note), embedded into the action term by
+% poss(startMoveto(...)) below and carried straight through by do_node
+% (moveto_leg(...)) -- ONLY poss(haltMoveto(...)) actually needs the
+% real value (to tag the final halt Reason with it -- see tag_reason/3
+% further down); every other current_walk/5 caller is unaffected.
+current_walk(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), CP, Triggers, ActionCode, T0, SPrev).
+current_walk(do(A,S), CP, Triggers, ActionCode, T0, SPrev) :-
+    A \= startMoveto(_,_,_,_),
+    current_walk(S, CP, Triggers, ActionCode, T0, SPrev).
 
 % ---------------------------------------------------------------
 % 4b. THE BATTERY FLUENT -- a second clock fluent, on the exact same
@@ -472,7 +527,7 @@ battery(Level, T, s0) :-
     Level is max(0, min(100, B0 - TotalDrain)).
 
 % leg_start_battery(+T0, +SPrev, -B0): a NEW leg's own starting
-% battery level, rounded DOWN to battery_merge_grid/1's own
+% battery level, rounded DOWN to disc_step_battery/1's own
 % granularity (see the MERGE-GRID QUANTIZATION note above dist/5's own
 % section) -- the SINGLE shared definition used both here (the MOVING-
 % phase clause just below) and by poss(haltMoveto(...))/poss(interrupt
@@ -485,7 +540,7 @@ battery(Level, T, s0) :-
 % coarsened, once, at the seam.
 leg_start_battery(T0, SPrev, B0) :-
     battery(B0Exact, T0, SPrev),
-    battery_merge_grid(Grid),
+    disc_step_battery(Grid),
     quantize_down(B0Exact, Grid, B0).
 
 % MOVING phase keeps the Duration-normalized scaling (Elapsed/sqrt(D),
@@ -496,7 +551,7 @@ leg_start_battery(T0, SPrev, B0) :-
 % Structurally this is now the SAME "nominal drain minus a signed
 % deviation, clamped at zero" pattern as the idle phases -- only the
 % Deviation formula's normalization differs, for the reason above.
-battery(Level, T, do(startMoveto(CP,Triggers,T0), S)) :-
+battery(Level, T, do(startMoveto(CP,_Triggers,_ActionCode,T0), S)) :-
     leg_start_battery(T0, S, B0),
     walk_duration(CP, Duration),
     Elapsed0 is T - T0,
@@ -550,7 +605,7 @@ battery(Level, T, do(interrupt(T1), S)) :-
 % startMoveto/haltMoveto/interrupt anchors exist in the history, same
 % principle as at/4's own pass-through clause.
 battery(Level, T, do(A,S)) :-
-    A \= startMoveto(_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
+    A \= startMoveto(_,_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
     battery(Level, T, S).
 
 % first_battery_depletion_time(+CP,+T0,+Duration,+B0,+Zb,-Tcross):
@@ -659,6 +714,27 @@ first_battery_equal_time(CP,T0,Duration,B0,Zb,Threshold,Tcross) :-
 first_battery_over_time(CP,T0,Duration,B0,Zb,Threshold,T0) :-
     B0 > Threshold.
 
+% battery_at_leg(+T0,+Duration,+Zb,+B0,+T,-Level): Level(T) during ONE
+% moveto leg, as a function of T alone -- the EXACT SAME formula as
+% battery/3's own do(startMoveto(...),S) clause above (leg_start_
+% battery(T0,S,B0) resolved to a plain value, not re-derived from S),
+% just without S, for use by holds_leg/9 further down (which only ever
+% has CP/T0/Duration/Z/Zt/Zb/B0 on hand -- the same flat signature
+% every trigger_crossing_time/11 clause already receives, not a full
+% situation term). MUST be kept in sync BY HAND with battery/3's own
+% do(startMoveto(...),S) clause -- there is no single shared definition
+% because that clause additionally resolves B0 from S via
+% leg_start_battery/3, which this one takes already-resolved.
+battery_at_leg(T0,Duration,Zb,B0,T,Level) :-
+    Elapsed0 is T - T0,
+    Elapsed is max(0.0, min(Elapsed0, Duration)),
+    moving_drain_rate(MovingRate),
+    sigma_battery(SigmaB),
+    Deviation is Zb * SigmaB * Elapsed / sqrt(Duration),
+    NominalDrain is MovingRate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B0 - TotalDrain)).
+
 % ---------------------------------------------------------------
 % TRIGGERS -- the TEMPLATE mechanism. A leg's Triggers argument is
 % the COMPLETE list of halting conditions this leg reacts to --
@@ -693,20 +769,26 @@ first_battery_over_time(CP,T0,Duration,B0,Zb,Threshold,T0) :-
 % TODO note near holds(halted_with_cond(...)) for the one place this is
 % user-facing.
 %
-% collision (fixed threshold=safety_margin) and battery (fixed
-% threshold=exactly-0, Reason=battery_depleted) are the ORIGINAL,
-% UNPARAMETRIZED trigger names -- kept exactly as they were, on
-% request, rather than folded into the generic versions below.
-% obstacle_in_bound(Threshold) and battery_below(Threshold) are
-% GENUINELY SEPARATE, ADDITIONAL trigger names -- a leg can react to
-% EITHER or BOTH of a fixed floor and an arbitrary per-call threshold
-% at once, e.g. Triggers=[collision,battery,battery_below(20)] halts on
-% whichever of "hits an obstacle", "hits exactly empty", or "drops
-% under 20%" happens earliest. obstacle_in_bound is what "obstacle
-% sighted" was renamed to (see the note above first_threshold_crossing_
-% time below for why sight_threshold/1 is gone): it reuses
+% collision (fixed threshold=0.0 against the ALREADY safety_margin-
+% inflated obstacle_polygon/2 geometry -- a bare contact/containment
+% test, see the MAP-PREPROCESSING INFLATION note above
+% clearance_adjusted_threshold/2) and battery (fixed threshold=exactly-0,
+% Reason=battery_depleted) are the ORIGINAL, UNPARAMETRIZED trigger
+% names -- kept exactly as they were, on request, rather than folded
+% into the generic versions below. obstacle_in_bound(Threshold) and
+% battery_below(Threshold) are GENUINELY SEPARATE, ADDITIONAL trigger
+% names -- a leg can react to EITHER or BOTH of a fixed floor and an
+% arbitrary per-call threshold at once, e.g.
+% Triggers=[collision,battery,battery_below(20)] halts on whichever of
+% "hits an obstacle", "hits exactly empty", or "drops under 20%"
+% happens earliest. obstacle_in_bound is what "obstacle sighted" was
+% renamed to (see the note above first_threshold_crossing_time below
+% for why sight_threshold/1 is gone): it reuses
 % first_threshold_crossing_time DIRECTLY, with Threshold now the
-% CALLER'S OWN argument instead of a fixed config constant -- the exact
+% CALLER'S OWN argument (still meant as "distance from the REAL,
+% uninflated obstacle surface" -- clearance_adjusted_threshold/2
+% corrects for the polygon's own inflation before the call, see that
+% predicate's own note) instead of a fixed config constant -- the exact
 % same black box collision already used, no new machinery. Reason
 % carries Threshold too, not just ObstacleId (unlike collision's
 % crashed(ObstacleId)) -- so two obstacle_in_bound(...) triggers at
@@ -783,66 +865,110 @@ first_battery_over_time(CP,T0,Duration,B0,Zb,Threshold,T0) :-
 % own note on why "has my trajectory crossed this segment" doesn't
 % have a meaningful point-in-time reading the way the others do.
 % ---------------------------------------------------------------
-trigger_crossing_time(collision, CP,T0,Duration,Z,Zt,_Zb,_B0, crashed(ObstacleId), Tcross) :-
+% trigger_crossing_time/11's LAST argument, Code, is the REDESCEND-
+% TARGET CODE this specific trigger OCCURRENCE was tagged with by
+% bt_to_prolog.py at translation time -- see the CONTROL-FLOW
+% REDESCEND TARGETS note above do_node(reactivesequence(...)) further
+% down for the full mechanism. collision/battery (never reactive --
+% they classify straight to false in leg_status, never to a
+% reactive(Code) status) always produce Code=none, since nothing ever
+% reads it for them. Every genuinely reactive-classified trigger name
+% below (obstacle_in_bound, obstacle_on_path, battery_below,
+% battery_equal, battery_over, line_of_sight_clear, crosses_segment)
+% now takes Code as an EXTRA trailing argument in the Triggers list
+% ITSELF (e.g. battery_below(70,rc3), not battery_below(70)) -- bt_to_
+% prolog.py appends it automatically to every reactive trigger token,
+% based on which ReactiveSequence/ReactiveFallback (if any) currently
+% encloses that leg, so nothing about how a BT.xml author writes
+% triggers="..." needs to change; Code just rides along as a plain
+% INPUT here, unify-passed straight through to the OUTPUT Reason-Time
+% pair's own third slot (Reason's own shape, e.g. battery_under
+% (Threshold), is UNCHANGED -- Code is carried ALONGSIDE it, not
+% embedded inside it, so halted_with/2 and everything built on it
+% keeps working exactly as before).
+trigger_crossing_time(collision, CP,T0,Duration,Z,Zt,_Zb,_B0, crashed(ObstacleId), Tcross, none) :-
     first_collision_time(CP,T0,Duration,Z,Zt,Tcross,ObstacleId).
 
-trigger_crossing_time(battery, CP,T0,Duration,_Z,_Zt,Zb,B0, battery_depleted, Tcross) :-
+trigger_crossing_time(battery, CP,T0,Duration,_Z,_Zt,Zb,B0, battery_depleted, Tcross, none) :-
     first_battery_depletion_time(CP,T0,Duration,B0,Zb,Tcross).
 
-trigger_crossing_time(obstacle_in_bound(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0, obstacle_in_bound(Threshold,ObstacleId), Tcross) :-
-    first_threshold_crossing_time(CP,T0,Duration,Z,Zt,Threshold,Tcross,ObstacleId).
+trigger_crossing_time(obstacle_in_bound(Threshold,Code), CP,T0,Duration,Z,Zt,_Zb,_B0, obstacle_in_bound(Threshold,ObstacleId), Tcross, Code) :-
+    clearance_adjusted_threshold(Threshold, AdjThreshold),
+    first_threshold_crossing_time(CP,T0,Duration,Z,Zt,AdjThreshold,Tcross,ObstacleId).
 
-trigger_crossing_time(obstacle_on_path(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0, obstacle_on_path(Threshold,ObstacleId), Tcross) :-
-    first_on_path_crossing_time(CP,T0,Duration,Z,Zt,Threshold,Tcross,ObstacleId).
+trigger_crossing_time(obstacle_on_path(Threshold,Code), CP,T0,Duration,Z,Zt,_Zb,_B0, obstacle_on_path(Threshold,ObstacleId), Tcross, Code) :-
+    clearance_adjusted_threshold(Threshold, AdjThreshold),
+    first_on_path_crossing_time(CP,T0,Duration,Z,Zt,AdjThreshold,Tcross,ObstacleId).
 
-trigger_crossing_time(battery_below(Threshold), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_under(Threshold), Tcross) :-
+trigger_crossing_time(battery_below(Threshold,Code), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_under(Threshold), Tcross, Code) :-
     first_battery_below_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
 
-trigger_crossing_time(battery_equal(Threshold), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_equal(Threshold), Tcross) :-
+trigger_crossing_time(battery_equal(Threshold,Code), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_equal(Threshold), Tcross, Code) :-
     first_battery_equal_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
 
-trigger_crossing_time(battery_over(Threshold), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_over(Threshold), Tcross) :-
+trigger_crossing_time(battery_over(Threshold,Code), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_over(Threshold), Tcross, Code) :-
     first_battery_over_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
 
-trigger_crossing_time(line_of_sight_clear(ObstacleId,GX,GY), CP,T0,Duration,Z,Zt,_Zb,_B0, line_of_sight_clear(ObstacleId,GX,GY), Tcross) :-
+trigger_crossing_time(line_of_sight_clear(ObstacleId,GX,GY,Code), CP,T0,Duration,Z,Zt,_Zb,_B0, line_of_sight_clear(ObstacleId,GX,GY), Tcross, Code) :-
     first_line_of_sight_clear_time(CP,T0,Duration,Z,Zt,ObstacleId,GX,GY,Tcross).
 
-trigger_crossing_time(crosses_segment(SX,SY,GX,GY), CP,T0,Duration,Z,Zt,_Zb,_B0, crosses_segment(SX,SY,GX,GY), Tcross) :-
+trigger_crossing_time(crosses_segment(SX,SY,GX,GY,Code), CP,T0,Duration,Z,Zt,_Zb,_B0, crosses_segment(SX,SY,GX,GY), Tcross, Code) :-
     first_segment_crossing_time(CP,T0,Duration,Z,Zt,SX,SY,GX,GY,Tcross).
 
+% guard_break(Cond,Code): the GENERIC, AUTOMATICALLY-DERIVED trigger
+% bt_to_prolog.py's guard-derivation pass emits for a MoveTo sitting
+% under a ReactiveSequence/ReactiveFallback ancestor with a Condition
+% left sibling (see that file's own CONTROL-FLOW GUARD DERIVATION
+% note) -- Cond is ALREADY the exact term that must stay TRUE for the
+% guard to keep holding: the bare condition itself for a
+% ReactiveSequence-style "left siblings must all SUCCEED" guard, or
+% neg(Condition) for a ReactiveFallback-style "left siblings must all
+% FAIL" guard (bt_to_prolog.py builds this by NEGATING the actual
+% condition per the required polarity -- and per any <Inverter> in the
+% chain -- rather than by looking up a pre-built "opposite" trigger
+% name, so this works uniformly for every condition in schema.yaml's
+% conditions: list with no per-condition crossing-direction table to
+% keep in sync or leave a gap in). Fires at the first instant Cond
+% stops holding -- see first_becomes_false_time/9 and holds_leg/9
+% further down (right after holds/2's own condition clauses, which
+% holds_leg/9 mirrors).
+trigger_crossing_time(guard_break(Cond,Code), CP,T0,Duration,Z,Zt,Zb,B0, guard_break(Cond), Tcross, Code) :-
+    first_becomes_false_time(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Tcross).
+
 % all_trigger_candidates(+Triggers,...,-Candidates): Candidates is a
-% list of Reason-Time pairs, one per trigger in Triggers that ACTUALLY
-% fires in this resolved world (triggers that don't fire contribute
-% nothing -- same "absence, not sentinel" convention as everywhere
-% else). Unrecognized trigger names (no matching
-% trigger_crossing_time/10 clause) are silently skipped, same as "never
-% fires" -- lenient by design, so a typo in a Triggers list doesn't
-% halt the whole theory, just means that trigger never contributes.
+% list of Reason-Time-Code TRIPLES now (was Reason-Time pairs), one
+% per trigger in Triggers that ACTUALLY fires in this resolved world
+% (triggers that don't fire contribute nothing -- same "absence, not
+% sentinel" convention as everywhere else). Unrecognized trigger names
+% (no matching trigger_crossing_time/11 clause) are silently skipped,
+% same as "never fires" -- lenient by design, so a typo in a Triggers
+% list doesn't halt the whole theory, just means that trigger never
+% contributes.
 all_trigger_candidates([], _,_,_,_,_,_,_, []).
-all_trigger_candidates([Trig|Rest], CP,T0,Duration,Z,Zt,Zb,B0, [Reason-Tcross|RestCands]) :-
-    trigger_crossing_time(Trig, CP,T0,Duration,Z,Zt,Zb,B0, Reason, Tcross),
+all_trigger_candidates([Trig|Rest], CP,T0,Duration,Z,Zt,Zb,B0, [Reason-Tcross-Code|RestCands]) :-
+    trigger_crossing_time(Trig, CP,T0,Duration,Z,Zt,Zb,B0, Reason, Tcross, Code),
     all_trigger_candidates(Rest, CP,T0,Duration,Z,Zt,Zb,B0, RestCands).
 all_trigger_candidates([Trig|Rest], CP,T0,Duration,Z,Zt,Zb,B0, RestCands) :-
-    \+ trigger_crossing_time(Trig, CP,T0,Duration,Z,Zt,Zb,B0, _, _),
+    \+ trigger_crossing_time(Trig, CP,T0,Duration,Z,Zt,Zb,B0, _, _, _),
     all_trigger_candidates(Rest, CP,T0,Duration,Z,Zt,Zb,B0, RestCands).
 
-% earliest_of(+PairsList, -ReasonTimePair): generic "minimum by second
-% element" over a non-empty list of Reason-Time pairs. Used to combine
-% natural completion with however many Triggers-derived candidates
-% happen to apply, into ONE earliest-wins choice -- this is the
-% mechanism that makes moveto a genuine template: it works identically
-% whether Triggers is empty, or contains one, or many conditions
-% (including collision/battery themselves now), with no change needed
-% here.
-earliest_of([Pair], Pair).
-earliest_of([R1-T1|Rest], Result) :-
-    earliest_of(Rest, _-T2),
+% earliest_of(+TriplesList, -ReasonTimeCodeTriple): generic "minimum by
+% SECOND element (Time)" over a non-empty list of Reason-Time-Code
+% triples. Used to combine natural completion with however many
+% Triggers-derived candidates happen to apply, into ONE earliest-wins
+% choice -- this is the mechanism that makes moveto a genuine
+% template: it works identically whether Triggers is empty, or
+% contains one, or many conditions (including collision/battery
+% themselves now), with no change needed here.
+earliest_of([Triple], Triple).
+earliest_of([R1-T1-C1|Rest], Result) :-
+    earliest_of(Rest, _-T2-_),
     T1 =< T2,
-    Result = R1-T1.
-earliest_of([R1-T1|Rest], Result) :-
-    earliest_of(Rest, R2-T2),
+    Result = R1-T1-C1.
+earliest_of([R1-T1-C1|Rest], Result) :-
+    earliest_of(Rest, R2-T2-C2),
     T1 > T2,
-    Result = R2-T2.
+    Result = R2-T2-C2.
 
 % walk_noisy_point(+CP,+T0,+Duration,+Z,+Zt,+T,-X,-Y): position along
 % the spline at time T, given TWO ALREADY-RESOLVED, INDEPENDENT noise
@@ -867,14 +993,16 @@ earliest_of([R1-T1|Rest], Result) :-
 % FIRST-THRESHOLD-CROSSING-TIME -- a NATURAL (not chosen) event: the
 % earliest time, within a given resolved world (fixed Z), at which
 % the noisy trajectory comes within a given distance THRESHOLD of an
-% obstacle. GENERALIZED over the threshold (rather than hardcoded to
-% collision's safety_margin) so the SAME machinery serves collision
-% (threshold=safety_margin, via first_collision_time/6 below),
-% obstacle_in_bound(Threshold) (called DIRECTLY with the caller's own
-% Threshold -- see trigger_crossing_time/9 above and
-% holds(obstacle_in_bound(...)) below, no separate wrapper predicate
-% needed since this black box was already threshold-generic), and any
-% future distance-based trigger.
+% (already safety_margin-inflated, see the MAP-PREPROCESSING INFLATION
+% note above clearance_adjusted_threshold/2) obstacle. GENERALIZED over
+% the threshold so the SAME machinery serves collision (threshold=0.0,
+% via first_collision_time/6 below -- a bare contact test against the
+% inflated polygon), obstacle_in_bound(Threshold) (called with the
+% caller's own Threshold, corrected for the inflation via
+% clearance_adjusted_threshold/2 -- see trigger_crossing_time/9 above
+% and holds(obstacle_in_bound(...)) below, no separate wrapper
+% predicate needed since this black box was already threshold-generic),
+% and any future distance-based trigger.
 %
 % first_threshold_crossing_time(+ControlPoints,+T0,+Duration,+Z,+Zt,
 % +Threshold,-Tcross,-ObstacleId) is now a BLACK-BOX Python predicate,
@@ -900,12 +1028,15 @@ earliest_of([R1-T1|Rest], Result) :-
 % this theory.
 
 % first_collision_time/6 kept as a thin, name-preserving wrapper over
-% the generalized machinery, at threshold=safety_margin -- every
-% EXISTING caller (crashed_in, verify_safe, etc.) is unaffected beyond
-% the new ObstacleId output.
+% the generalized machinery, now at threshold=0.0 (obstacle_polygon/2
+% is already inflated by safety_margin -- see the MAP-PREPROCESSING
+% INFLATION note above clearance_adjusted_threshold/2 -- so "within
+% safety_margin of the real obstacle" is now just "on or inside the
+% obstacle" against the already-inflated polygon) -- every EXISTING
+% caller (crashed_in, verify_safe, etc.) is unaffected beyond the new
+% ObstacleId output.
 first_collision_time(CP,T0,Duration,Z,Zt,Tcross,ObstacleId) :-
-    safety_margin(M),
-    first_threshold_crossing_time(CP,T0,Duration,Z,Zt,M,Tcross,ObstacleId).
+    first_threshold_crossing_time(CP,T0,Duration,Z,Zt,0.0,Tcross,ObstacleId).
 
 % ---------------------------------------------------------------
 % Poss AXIOMS for the primitive actions.
@@ -925,17 +1056,17 @@ first_collision_time(CP,T0,Duration,Z,Zt,Tcross,ObstacleId) :-
 % produces a well-formed, immediately-halted situation with the
 % correct Reason, consistent with every other halting cause, rather
 % than a special-cased blocking precondition for battery alone.
-% T0 is rounded UP to time_merge_grid/1's own granularity (see the
+% T0 is rounded UP to disc_step_time/1's own granularity (see the
 % MERGE-GRID QUANTIZATION note above dist/5's own section) -- the
 % previous leg's own recorded halt instant (embedded in ITS OWN
 % haltMoveto/interrupt term, read by REPORTING queries) stays exact;
 % only the value THIS new leg treats as its own start time is
 % coarsened, and CEILING (never floor/round) guarantees a new leg can
 % never appear to start before the previous one actually ended.
-poss(startMoveto(_,_Triggers,T0), S) :-
+poss(startMoveto(_,_Triggers,_ActionCode,T0), S) :-
     \+ moving(S),
     now(T0Exact, S),
-    time_merge_grid(Grid),
+    disc_step_time(Grid),
     quantize_up(T0Exact, Grid, T0).
 
 % now(-T,+S): current wall-clock time -- needed above only to know
@@ -946,11 +1077,11 @@ poss(startMoveto(_,_Triggers,T0), S) :-
 % out-of-convention accessors were fixed; fixed here too, along with
 % every one of its own call sites throughout this file).
 now(0, s0).
-now(T, do(startMoveto(_,_,T),_)).
+now(T, do(startMoveto(_,_,_,T),_)).
 now(T, do(haltMoveto(T,_,_),_)).
 now(T, do(interrupt(T),_)).
 now(T, do(A,S)) :-
-    A \= startMoveto(_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
+    A \= startMoveto(_,_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
     now(T, S).
 
 % haltMoveto(T,Reason): the ways a walk stops other than an interrupt.
@@ -965,29 +1096,62 @@ now(T, do(A,S)) :-
 % or running the battery dry without ever noticing, if collision/
 % battery aren't in its own Triggers list.
 %
-% earliest_halt/10 is the SINGLE SHARED definition of "what happens
+% earliest_halt/11 is the SINGLE SHARED definition of "what happens
 % first" -- used here, by Poss(interrupt(...)) below, AND by
 % verify_safe further down (called there with Z=0.0,Zt=0.0,Zb=0.0
 % instead of the resolved noise). Having exactly ONE definition, rather
 % than the same computation duplicated at each call site, is what
 % guarantees every query stays consistent with what Poss(haltMoveto(...))
 % itself actually derives -- see the "SAFETY QUERIES READ THE ACTUAL
-% OUTCOME" note further down for why this matters.
-earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, Reason,T) :-
+% OUTCOME" note further down for why this matters. Code is the winning
+% candidate's own redescend-target code (none for natural completion/
+% collision/battery, since those never classify to reactive(_) --
+% see leg_status/9 further down and the CONTROL-FLOW REDESCEND TARGETS
+% note above do_node(reactivesequence(...)) further down).
+earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, Reason,T,Code) :-
     all_trigger_candidates(Triggers, CP,T0,Duration,Z,Zt,Zb,B0, ExtraCandidates),
     NaturalEnd is T0 + Duration,
-    earliest_of([completed-NaturalEnd], ExtraCandidates, Reason-T).
+    earliest_of([completed-NaturalEnd-none], ExtraCandidates, Reason-T-Code).
 
+% poss(haltMoveto(...)) is the ONE place a leg's own ActionCode
+% (read off the SAME startMoveto term current_walk/6 already resolves
+% CP/Triggers/T0/SPrev from -- see that predicate's own note) gets
+% baked into the RECORDED Reason, via tag_reason/3 further down --
+% leg_status/9 itself still decides Status from the UNTAGGED Reason0
+% (it needs to recognize completed/crashed(_)/battery_depleted in
+% their ORIGINAL shapes), so tagging happens strictly AFTER Status is
+% already settled, on the value that actually gets written into S1's
+% own haltMoveto term.
 poss(haltMoveto(T, Reason, Status), S) :-
     moving(S),
-    current_walk(S, CP, Triggers, T0, SPrev),
+    current_walk(S, CP, Triggers, ActionCode, T0, SPrev),
     walk_duration(CP, Duration),
-    z(do(startMoveto(CP,Triggers,T0),SPrev), Z),
-    zt(do(startMoveto(CP,Triggers,T0),SPrev), Zt),
+    z(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Z),
+    zt(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Zt),
     zbatt(Zb),
     leg_start_battery(T0, SPrev, B0),
-    earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, Reason,T),
-    leg_status(Reason, CP, T0, Duration, Z, Zt, T, Status).
+    earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, Reason0,T,Code),
+    leg_status(Reason0, CP, T0, Duration, Z, Zt, T, Code, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+
+% tag_reason(+Reason0, +ActionCode, -Reason): appends ActionCode as
+% Reason0's own new TRAILING argument -- crashed(ObstacleId) becomes
+% crashed(ObstacleId,ActionCode), completed becomes completed
+% (ActionCode), guard_break(Cond) becomes guard_break(Cond,ActionCode),
+% and so on for every Reason shape trigger_crossing_time/11 or
+% earliest_halt/11 can ever produce -- GENERICALLY, via univ (=..),
+% rather than one clause per Reason functor (the same "one generic
+% mechanism instead of a per-case table" choice as holds_leg/9's own
+% design). This is what lets a safety query check
+% halted_with_cond(crashed(Obst1,ActionCode)) -- Obst1 unbound to match
+% ANY obstacle, or bound to ask about a specific one, and ActionCode
+% likewise -- to distinguish WHICH MoveTo occurrence in the tree
+% produced a given halt, using the ordinary cond()/halted_with_cond
+% machinery, no new query predicate needed.
+tag_reason(Reason0, ActionCode, Reason) :-
+    Reason0 =.. [Functor|Args0],
+    append(Args0, [ActionCode], Args),
+    Reason =.. [Functor|Args].
 
 % leg_target(+ControlPoints, -GX,-GY): a leg's own intended endpoint
 % is the LAST point in its OWN control_points list -- NOT necessarily
@@ -1002,57 +1166,55 @@ leg_target(ControlPoints, GX,GY) :-
 last_element([X], X).
 last_element([_|T], X) :- T \= [], last_element(T, X).
 
-% leg_status(+Reason,+CP,+T0,+Duration,+Z,+Zt,+T,-Status): THREE
-% possible outputs now, not two -- true/false/reactive are plain
-% Prolog ATOMS here (there is no built-in boolean type restricting
-% this to two values; true/false are ordinary symbols like any other,
-% same as reactive), so a Sequence/Fallback composite (below) can
-% branch on all three the same way it already branched on two.
+% leg_status(+Reason,+CP,+T0,+Duration,+Z,+Zt,+T,+Code,-Status): THREE
+% possible SHAPES of output now -- true/false are plain Prolog ATOMS
+% (there is no built-in boolean type restricting this to two values),
+% and the third is now the COMPOUND term reactive(Code), not the bare
+% atom reactive -- Code (threaded straight through from earliest_halt/
+% 11's own Code output, itself read off the WINNING trigger's own
+% Triggers-list occurrence -- see trigger_crossing_time/11's own note)
+% is what lets do_node(reactivesequence(...))/do_node(reactivefallback
+% (...)) further down decide whether THEY are the redescend target for
+% THIS particular reactive halt, instead of every enclosing composite
+% unconditionally redescending the way evaluate_plan/4 used to.
 %
-%   true     -- Reason=completed AND the actual (noisy) final position
-%                lands within goal_tolerance of the leg's OWN endpoint.
-%                Deliberately DISTINCT from Reason=completed alone,
-%                which only means the walk wasn't cut short before its
-%                nominal duration elapsed -- it says nothing about
-%                whether noise carried the robot far enough off course
-%                to miss the target despite "completing".
-%   false    -- a genuine, unrecoverable failure: crashed(ObstacleId)
-%                or battery_depleted. Nothing downstream can react to
-%                these and continue; the leg (and, per Sequence/
-%                Fallback's own do_node rules, quite possibly the
-%                whole plan) is simply done.
-%   reactive -- every OTHER trigger (obstacle_in_bound(...),
+%   true         -- Reason=completed: the walk ran its full nominal
+%                duration without any Trigger cutting it short. Says
+%                NOTHING about whether the actual (noisy) final
+%                position also landed close enough to the leg's own
+%                endpoint -- that used to be baked in here via
+%                goal_tolerance/1, but is now its OWN explicit,
+%                inspectable BT condition (distance_below/3), hand-
+%                placed by the tree author right after a MoveTo in a
+%                Sequence wherever that check is wanted, same as any
+%                other cond() leaf, rather than something silently
+%                folded into MoveTo's own Status.
+%   false        -- a genuine, unrecoverable failure: crashed
+%                (ObstacleId) or battery_depleted. Nothing downstream
+%                can react to these and continue; the leg (and, per
+%                Sequence/Fallback's own do_node rules, quite possibly
+%                the whole plan) is simply done.
+%   reactive(Code) -- every OTHER trigger (obstacle_in_bound(...),
 %                obstacle_on_path(...), battery_under/equal/over(...),
 %                line_of_sight_clear(...), crosses_segment(...), and
 %                any future trigger name not explicitly listed as a
 %                hard failure above): the walk was cut short by a
 %                condition that's meant to be REACTED to, not treated
-%                as outright success or failure -- see
-%                evaluate_plan/4's own header, further down, for what
-%                happens when a do_node/4 call anywhere in the tree
-%                returns this.
-leg_status(completed, CP, T0, Duration, Z, Zt, T, true) :-
-    walk_noisy_point(CP, T0, Duration, Z, Zt, T, X, Y),
-    leg_target(CP, GX, GY),
-    dist(X, Y, GX, GY, D),
-    goal_tolerance(Tol),
-    D =< Tol.
-leg_status(completed, CP, T0, Duration, Z, Zt, T, false) :-
-    walk_noisy_point(CP, T0, Duration, Z, Zt, T, X, Y),
-    leg_target(CP, GX, GY),
-    dist(X, Y, GX, GY, D),
-    goal_tolerance(Tol),
-    D > Tol.
-leg_status(crashed(_), _,_,_,_,_,_, false).
-leg_status(battery_depleted, _,_,_,_,_,_, false).
-leg_status(Reason, _,_,_,_,_,_, reactive) :-
+%                as outright success or failure -- see the CONTROL-
+%                FLOW REDESCEND TARGETS note above do_node(reactive
+%                sequence(...)) further down for what happens when a
+%                do_node/4 call anywhere in the tree returns this.
+leg_status(completed, _CP, _T0, _Duration, _Z, _Zt, _T, _Code, true).
+leg_status(crashed(_), _,_,_,_,_,_, _Code, false).
+leg_status(battery_depleted, _,_,_,_,_,_, _Code, false).
+leg_status(Reason, _,_,_,_,_,_, Code, reactive(Code)) :-
     Reason \= completed,
     Reason \= crashed(_),
     Reason \= battery_depleted.
 
 % earliest_of/3: like earliest_of/2, but takes a fixed head list
-% (currently just [completed-NaturalEnd]) and a (possibly empty) list
-% of Triggers-derived candidates separately, and combines them --
+% (currently just [completed-NaturalEnd-none]) and a (possibly empty)
+% list of Triggers-derived candidates separately, and combines them --
 % kept as a distinct small wrapper so call sites read as "natural
 % completion ++ whatever this leg's Triggers produced," the intent,
 % at a glance.
@@ -1079,11 +1241,11 @@ poss(interrupt(T), S) :-
     moving(S),
     current_walk(S, CP, Triggers, T0, SPrev),
     walk_duration(CP, Duration),
-    z(do(startMoveto(CP,Triggers,T0),SPrev), Z),
-    zt(do(startMoveto(CP,Triggers,T0),SPrev), Zt),
+    z(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Z),
+    zt(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Zt),
     zbatt(Zb),
     leg_start_battery(T0, SPrev, B0),
-    earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, _Reason,Tend),
+    earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, _Reason,Tend,_Code),
     T >= T0, T < Tend.
 
 % ---------------------------------------------------------------
@@ -1104,10 +1266,10 @@ poss(interrupt(T), S) :-
 % ---------------------------------------------------------------
 at(X,Y,_,s0) :- start(X,Y).
 
-at(X,Y,T, do(startMoveto(ControlPoints,Triggers,T0), S)) :-
+at(X,Y,T, do(startMoveto(ControlPoints,Triggers,ActionCode,T0), S)) :-
     walk_duration(ControlPoints, Duration),
-    z(do(startMoveto(ControlPoints,Triggers,T0),S), Z),
-    zt(do(startMoveto(ControlPoints,Triggers,T0),S), Zt),
+    z(do(startMoveto(ControlPoints,Triggers,ActionCode,T0),S), Z),
+    zt(do(startMoveto(ControlPoints,Triggers,ActionCode,T0),S), Zt),
     walk_noisy_point(ControlPoints, T0, Duration, Z, Zt, T, X, Y).
 
 at(X,Y,T, do(haltMoveto(T1,_Reason,_Status), S)) :-
@@ -1122,7 +1284,7 @@ at(X,Y,T, do(interrupt(T1), S)) :-
 % actions that DON'T affect position (e.g. a future sensing action)
 % can be appended without breaking the regression.
 at(X,Y,T, do(A,S)) :-
-    A \= startMoveto(_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
+    A \= startMoveto(_,_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
     at(X,Y,T,S).
 
 % nominal (zero-noise) position -- for Feature-1-style deterministic
@@ -1152,9 +1314,32 @@ nominal_at(X,Y,Frac,ControlPoints) :- spline_point(ControlPoints, Frac, X, Y).
 % with no translation step in between.
 %
 % Node is one of:
-%     cond(C)                  -- CONDITION leaf: tests C against the
-%                                  CURRENT situation via holds/2, no
-%                                  side effect (S1 = S).
+%     cond(C,Code)              -- CONDITION leaf: tests C against the
+%                                  CURRENT situation via holds/2. UNLIKE
+%                                  an earlier version of this file
+%                                  (cond(C), no Code, S1=S, a genuine
+%                                  no-op), this now DOES extend the
+%                                  situation, with a checked(Code,C,
+%                                  Status) marker -- the direct
+%                                  analogue of planWith's own planned
+%                                  (Algorithm,Reason) marker just below,
+%                                  for the SAME reason: otherwise a
+%                                  condition's own outcome leaves no
+%                                  trace once execution moves past it,
+%                                  making it unqueryable after the fact
+%                                  (an action's own Reason survives in
+%                                  haltMoveto(...)/planned(...); a bare
+%                                  cond(C) with S1=S never did). Code is
+%                                  a per-CONDITION-OCCURRENCE identifier
+%                                  bt_to_prolog.py assigns (same
+%                                  per-occurrence-counter idiom as
+%                                  MoveTo/PlanWith's own ActionCode),
+%                                  letting checked_with/4 further down
+%                                  (the direct analogue of planned_with/
+%                                  3) distinguish WHICH cond() leaf in
+%                                  the tree a given checked(...) marker
+%                                  came from -- there can be many, e.g.
+%                                  a DistanceBelow after EVERY MoveTo.
 %     moveto_leg(CP,Triggers)   -- ACTION leaf. Triggers is ALWAYS
 %                                  given explicitly at the call site --
 %                                  there is no sugar/default form, by
@@ -1197,15 +1382,25 @@ nominal_at(X,Y,Frac,ControlPoints) :- spline_point(ControlPoints, Frac, X, Y).
 %                                  in order; stop and succeed as soon
 %                                  as one succeeds; fail if all do.
 % ============================================================
-primitive_action(startMoveto(_,_,_)).
+primitive_action(startMoveto(_,_,_,_)).
 primitive_action(haltMoveto(_,_,_)).
 primitive_action(interrupt(_)).
 
 do_action(A, S, do(A,S)) :- primitive_action(A), poss(A, S).
 
 % -- CONDITION leaf ---------------------------------------------------
-do_node(cond(C), S, S, true)  :- holds(C, S).
-do_node(cond(C), S, S, false) :- \+ holds(C, S).
+% checked(Code,C,Status) is a bare MARKER, exactly like planned(Algorithm,
+% Reason) below -- no primitive_action entry, no Poss, just recorded via
+% do(...) the same way do_action itself would. Status is fully
+% DETERMINED by holds(C,S) at an ALREADY-RESOLVED situation -- recording
+% it introduces no new probabilistic choice (unlike z/2's own per-
+% startMoveto annotated disjunction), so this adds no branching to the
+% underlying inference, only one more do(...) layer for the generic
+% pass-through fluents (at/4, battery/3, moving/1, now/2, current_walk/6)
+% to skip over -- exactly the same, already-proven-cheap shape planned
+% (Algorithm,Reason) already added for PlanWith.
+do_node(cond(C,Code), S, do(checked(Code,C,true), S), true)  :- holds(C, S).
+do_node(cond(C,Code), S, do(checked(Code,C,false),S), false) :- \+ holds(C, S).
 
 % -- ACTION leaf --------------------------------------------------------
 % moveto_leg(CP,Triggers) -- Triggers is ALWAYS given explicitly here;
@@ -1215,8 +1410,8 @@ do_node(cond(C), S, S, false) :- \+ holds(C, S).
 % for a genuinely unprotected leg. Status flows straight through as
 % Outcome -- no translation predicate needed, since both already speak
 % true/false.
-do_node(moveto_leg(CP,Triggers), S, S1, Status) :-
-    do_action(startMoveto(CP,Triggers,_T0), S, S2),
+do_node(moveto_leg(CP,Triggers,ActionCode), S, S1, Status) :-
+    do_action(startMoveto(CP,Triggers,ActionCode,_T0), S, S2),
     do_action(haltMoveto(_T,_Reason,Status), S2, S1).
 
 % -- PLANNING actions: deliberately NOT part of the full action theory
@@ -1317,9 +1512,13 @@ plan_call(voronoi, SX,SY,GX,GY, [], no_path, false) :-
 % TRIGGERS section above) -- so the bug-variant choice is a matter of
 % that Triggers list, not a different planner call. If the attached
 % trigger never fires, the leg just completes the whole loop naturally
-% and Status comes out false (not within goal_tolerance of the loop's
-% own arbitrary endpoint) via the ordinary leg_status mechanism -- no
-% special no_path case needed here for that.
+% and Status comes out true via the ordinary leg_status mechanism --
+% leg_status/9 no longer judges whether the final position is close to
+% the leg's own endpoint (see that predicate's own note: that check is
+% now the separate, explicit distance_below/3 BT condition), so a fully
+% -circled loop with nothing meaningful downstream of it simply reads
+% as a completed leg, same as any other MoveTo. No special no_path case
+% needed here for that.
 plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, CP, completed, true) :-
     follow_boarder(SX,SY,ObstacleId,Offset, CP).
 plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, [], no_path, false) :-
@@ -1344,7 +1543,7 @@ plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, [], no_path, false) 
 %    instantiating a parametrized "GoTo(target)" BT.cpp subtree twice
 %    with two different port bindings, rather than both calls silently
 %    aiming at one shared destination (there is no longer a global
-%    goal/2 fact at all -- see at_goal/3's own note, and plan_generation
+%    goal/2 fact at all -- see distance_below/3's own note, and plan_generation
 %    /plan/goal_formula.pl for where a plan's own goal information
 %    lives now). Status flows
 %    straight through as Outcome, exactly like moveto_leg's own Status
@@ -1372,8 +1571,8 @@ plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, [], no_path, false) 
 %    IMPORTANT GOTCHA when using planWith inside a fallback_node with
 %    SEPARATE algorithms per branch: give EACH branch its OWN CP
 %    variable, e.g.
-%        fallback_node([seq_node([planWith(astar,point(GX,GY),CP1), moveto_leg(CP1,...)]),
-%                        seq_node([planWith(straight,point(GX,GY),CP2), moveto_leg(CP2,...)])])
+%        fallback_node([seq_node([planWith(astar,point(GX,GY),CP1,a1), moveto_leg(CP1,...)]),
+%                        seq_node([planWith(straight,point(GX,GY),CP2,a2), moveto_leg(CP2,...)])])
 %    NOT a single CP variable shared across both branches. Reusing one
 %    CP across fallback alternatives silently breaks: a FAILING
 %    planWith still SUCCEEDS as a do_node call (with Outcome=false,
@@ -1383,7 +1582,7 @@ plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, [], no_path, false) 
 %    CP to its own (non-empty) result then fails to unify, breaking
 %    the fallback in a confusing way that looks unrelated to variable
 %    scoping. This was hit directly while testing this exact feature.
-% SX,SY are rounded to position_merge_grid/1's own granularity (see
+% SX,SY are rounded to disc_step_position/1's own granularity (see
 % the MERGE-GRID QUANTIZATION note above dist/5's own section) before
 % being handed to plan_call/plan straight/plan_astar/... -- this is
 % what actually makes CP (hence the NEW leg's own startMoveto(CP,...)
@@ -1395,36 +1594,107 @@ plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, [], no_path, false) 
 % goal-tolerance checking in leg_status, first_hit/on_track/
 % verify_safe reporting) stays exact, unaffected -- only the position
 % a NEW leg gets planned FROM is coarsened.
-do_node(planWith(Algorithm, point(GX,GY), CP), S, do(planned(Algorithm,Reason), S), Status) :-
+%
+% ActionCode (a FOURTH argument now, one per planWith OCCURRENCE in
+% the tree, from the SAME var_pool.next_action_code() counter MoveTo's
+% own ActionCode already comes from -- codes stay unique tree-wide
+% regardless of node kind) is baked into the RECORDED Reason via
+% tag_reason/3, the EXACT same generic mechanism poss(haltMoveto(...))
+% already uses -- see that predicate's own note. Reason0 out of
+% plan_call/8 is always the bare atom completed/no_path; before
+% tagging, it's first rebuilt (via =..) to also carry Algorithm and
+% the point this call was actually working toward, so the FINAL
+% recorded Reason is completed(Algorithm,Goal,ActionCode) or
+% no_path(Algorithm,Goal,ActionCode) -- ActionCode LAST is not
+% arbitrary, it's what lets halted_with_pattern/3 (built generically
+% on "the recorded Reason's own trailing argument is ActionCode",
+% see that predicate's own note) work for planning outcomes with NO
+% change of its own. TWO mutually exclusive clauses below, split on
+% Algorithm's own shape, ONLY because follow_boarder has no real Goal
+% point to report (see follow_boarder(ObstacleId,Offset)'s own note
+% above plan_call/8) --
+% embedding the harmless point(0.0,0.0) placeholder threaded through
+% planWith's own second argument for template-sharing purposes would
+% be misleading if surfaced in a Reason meant to be read by a human/
+% query, so that case reports the honest atom `none` instead. The
+% explicit Algorithm \= follow_boarder(_,_) guard on the second clause
+% is NOT redundant with the first clause's own head shape: without it,
+% a follow_boarder call's own point(0.0,0.0) placeholder Goal argument
+% would ALSO unify against the second clause's point(GX,GY) head
+% pattern, giving ProbLog TWO derivations of the same fact instead of
+% one -- exactly the kind of silent solution-doubling this project has
+% already hit once (see match_wild/2's own history note) and now
+% checks for on purpose.
+do_node(planWith(follow_boarder(ObstacleId,Offset), _Goal, CP, ActionCode), S,
+        do(planned(follow_boarder(ObstacleId,Offset),Reason), S), Status) :-
     now(T, S), at(SXExact,SYExact,T,S),
-    position_merge_grid(Grid),
+    disc_step_position(Grid),
     quantize(SXExact, Grid, SX), quantize(SYExact, Grid, SY),
-    plan_call(Algorithm, SX,SY,GX,GY, CP, Reason, Status).
+    plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, CP, Reason0, Status),
+    Reason0 =.. [Functor],
+    Reason1 =.. [Functor, follow_boarder(ObstacleId,Offset), none],
+    tag_reason(Reason1, ActionCode, Reason).
+do_node(planWith(Algorithm, point(GX,GY), CP, ActionCode), S,
+        do(planned(Algorithm,Reason), S), Status) :-
+    Algorithm \= follow_boarder(_,_),
+    now(T, S), at(SXExact,SYExact,T,S),
+    disc_step_position(Grid),
+    quantize(SXExact, Grid, SX), quantize(SYExact, Grid, SY),
+    plan_call(Algorithm, SX,SY,GX,GY, CP, Reason0, Status),
+    Reason0 =.. [Functor],
+    Reason1 =.. [Functor, Algorithm, point(GX,GY)],
+    tag_reason(Reason1, ActionCode, Reason).
 
 % planned_with(+Algorithm, +Reason, +S): the direct parallel to
 % halted_with/2, for the (now-recorded) planning marker. Searches the
 % WHOLE history, so it can distinguish which of SEVERAL planning
 % attempts (across different legs, or different fallback branches)
-% produced a given Reason, and with which algorithm.
+% produced a given Reason, and with which algorithm -- though Reason
+% ITSELF now already carries Algorithm and ActionCode too (see
+% do_node(planWith(...))'s own note), so this predicate's own
+% Algorithm argument is redundant with Reason's own first argument in
+% practice; kept as-is since dropping it would be a needless interface
+% change for something already unambiguous.
 planned_with(Algorithm, Reason, do(planned(Algorithm,Reason), _)).
 planned_with(Algorithm, Reason, do(_A, S)) :- planned_with(Algorithm, Reason, S).
 
+% checked_with(+Code, -C, -Status, +S): the direct analogue of
+% planned_with/3 above, for cond(C,Code)'s own checked(Code,C,Status)
+% marker -- searches the WHOLE history for Code (same "search
+% everything, one solution per match" shape halted_with/2 and
+% planned_with/3 both already use), NOT just the most recent one: a
+% cond() leaf sitting inside a reactive_children/2 list can be
+% re-checked on every redescend, so a given Code can legitimately carry
+% more than one (possibly different) Status across a single resolved
+% world's own history -- each is reported as its own solution, exactly
+% mirroring how halted_with/2 already handles a Reason that could, in
+% principle, recur. Fails outright (no solution) for a Code whose own
+% cond() leaf was never reached in a given resolved world at all (e.g.
+% it sits in a Fallback branch that never got tried) -- same "absence,
+% not sentinel" convention as everywhere else in this file.
+checked_with(Code, C, Status, do(checked(Code,C,Status), _)).
+checked_with(Code, C, Status, do(_A, S)) :- checked_with(Code, C, Status, S).
+
 % -- SEQUENCE composite: stop and FAIL at the first failing child; --
 %    succeed only if every child succeeds, in order. A REACTIVE child
-%    (see leg_status/8's own note on the three-valued Status) stops
+%    (see leg_status/9's own note on the three-valued Status) stops
 %    the sequence too, same as false -- but is NOT the same as false:
-%    it propagates straight through, UNCHANGED, to whatever node
-%    contains THIS seq_node -- see the block comment above
-%    evaluate_plan/4, further down, for the full picture of why and
-%    where this eventually gets caught.
+%    it propagates straight through, UNCHANGED (Code and all -- this
+%    clause never inspects WHICH code it is, unlike reactivesequence/
+%    reactivefallback below), to whatever node contains THIS seq_node
+%    -- see the CONTROL-FLOW REDESCEND TARGETS note below for the full
+%    picture of why and where this eventually gets caught. A plain
+%    seq_node NEVER catches/redescends on its own, by design -- exactly
+%    matching real BT.cpp's own plain Sequence, which a ReactiveSequence
+%    is a genuinely DIFFERENT node type from, not a special case of.
 do_node(seq_node([]), S, S, true).
 do_node(seq_node([Child|Rest]), S, S1, Outcome) :-
     do_node(Child, S, S2, true),
     do_node(seq_node(Rest), S2, S1, Outcome).
 do_node(seq_node([Child|_]), S, S1, false) :-
     do_node(Child, S, S1, false).
-do_node(seq_node([Child|_]), S, S1, reactive) :-
-    do_node(Child, S, S1, reactive).
+do_node(seq_node([Child|_]), S, S1, reactive(Code)) :-
+    do_node(Child, S, S1, reactive(Code)).
 
 % -- FALLBACK (Selector) composite: stop and SUCCEED at the first ---
 %    succeeding child; fail only if every child fails, in order.
@@ -1437,16 +1707,142 @@ do_node(seq_node([Child|_]), S, S1, reactive) :-
 %    wherever the failed attempt left us," not "rewind and try the
 %    next option from the start." A REACTIVE child does NOT try the
 %    next sibling this way -- same as seq_node above, it propagates
-%    straight through unchanged instead (see evaluate_plan/4's own
-%    header further down).
+%    straight through unchanged instead (see the CONTROL-FLOW
+%    REDESCEND TARGETS note below).
 do_node(fallback_node([]), S, S, false).
 do_node(fallback_node([Child|_]), S, S1, true) :-
     do_node(Child, S, S1, true).
 do_node(fallback_node([Child|Rest]), S, S1, Outcome) :-
     do_node(Child, S, S2, false),
     do_node(fallback_node(Rest), S2, S1, Outcome).
-do_node(fallback_node([Child|_]), S, S1, reactive) :-
-    do_node(Child, S, S1, reactive).
+do_node(fallback_node([Child|_]), S, S1, reactive(Code)) :-
+    do_node(Child, S, S1, reactive(Code)).
+
+% -- INVERTER decorator: BT.cpp's built-in single-child negation ------
+%    node (<Inverter>C</Inverter>). Flips true<->false; a REACTIVE
+%    child's reactive(Code) status passes straight through UNCHANGED,
+%    same "never inspects, never catches" passthrough seq_node/
+%    fallback_node's own reactive clauses already do -- an interrupt
+%    signal isn't a true/false outcome to negate, it's a request to be
+%    caught by a MATCHING reactivesequence(Code)/reactivefallback(Code)
+%    further up, wherever that is; an Inverter never IS one (it takes
+%    no Code of its own -- see _REACTIVE_CONTROL_FLOW's own note in
+%    bt_to_prolog.py for why the guard-derivation machinery already
+%    treats Inverter as fully transparent for that purpose too, not
+%    just for do_node's own control flow).
+do_node(inverter(Child), S, S1, false) :-
+    do_node(Child, S, S1, true).
+do_node(inverter(Child), S, S1, true) :-
+    do_node(Child, S, S1, false).
+do_node(inverter(Child), S, S1, reactive(Code)) :-
+    do_node(Child, S, S1, reactive(Code)).
+
+% ---------------------------------------------------------------
+% CONTROL-FLOW REDESCEND TARGETS -- reactivesequence(Code) and
+% reactivefallback(Code) are the ONLY two node types that ever catch a
+% reactive(_) status and act on it; plain seq_node/fallback_node above
+% NEVER do (they just pass it straight up, unconditionally, forever).
+% This is the direct Prolog analogue of BT.cpp's own real distinction
+% between Sequence/Fallback (checked once, never re-monitored) and
+% ReactiveSequence/ReactiveFallback (continuously re-ticked) -- see
+% this project's own conversation log for the fuller discussion this
+% design came out of.
+%
+% Code is a plain atom (bt_to_prolog.py assigns one, e.g. rc1, rc2,
+% ..., to each ReactiveSequence/ReactiveFallback it translates,
+% uniquely across the whole tree) IDENTIFYING one specific reactive
+% composite. Every reactive-classified trigger name in the Triggers
+% list of every MoveTo leg underneath it (obstacle_in_bound(Threshold,
+% Code), battery_below(Threshold,Code), etc. -- see trigger_crossing_
+% time/11's own note) is tagged, at translation time, with THIS SAME
+% Code -- the code of its own NEAREST enclosing ReactiveSequence/
+% ReactiveFallback (an intervening plain seq_node/fallback_node
+% doesn't matter, since it never inspects Code at all -- reactive(Code)
+% passes straight through it unchanged either way). So when a leg
+% halts reactively, reactive(Code) bubbles up through zero or more
+% plain composites, completely inert, until it reaches the ONE
+% composite whose own Code matches -- which is, by construction,
+% always its own nearest enclosing reactive composite -- and THAT one
+% catches it.
+%
+% "Catching" means: instead of propagating further, re-run this same
+% composite's own children FRESH -- see reactive_children/2 (a
+% SEPARATE fact per reactive composite, one row per Code, generated by
+% bt_to_prolog.py) and why it has to be a separately-resolved fact,
+% not the SAME children term reused across restarts: exactly the
+% "planWith inside a fallback_node" gotcha documented above (a second
+% pass's own planWith would try to unify a genuinely different control-
+% point list against an ALREADY-BOUND CP left over from the first
+% pass, and fail outright) -- reactive_children/2 resolved as a FRESH
+% goal each time gives genuinely unbound variables on every pass,
+% exactly mirroring how plan(Node) itself already works for the
+% (now removed) whole-tree redescend evaluate_plan/4 used to do.
+%
+% Each reactive composite carries its OWN budget, read fresh from
+% replan_budget/1 on first entry (see reactivesequence_budgeted/5
+% below) and decremented on every restart -- exhausting it resolves to
+% world_too_large right there rather than continuing to restart or
+% propagating upward (mirrors evaluate_plan/4's own former clause 3,
+% just localized). This budget is what stands between a degenerate
+% zero-duration leg and an infinite restart loop -- see this project's
+% own conversation log for why a PER-composite budget is needed now
+% that redescend can happen below the root, not just at it.
+%
+% A reactive(_) that reaches THE ROOT of the whole tree without any
+% composite's own Code ever matching means bt_to_prolog.py tagged a
+% leg's own reactive trigger with a Code that no enclosing
+% ReactiveSequence/ReactiveFallback actually carries -- a TRANSLATOR
+% BUG (that generator also validates this at translation time, as a
+% hard failure, so this should never actually happen at runtime) --
+% see plan_outcome/1's own reactive_escaped clause further down for
+% how this is reported if it somehow does.
+do_node(reactivesequence(Code), S, S1, Outcome) :-
+    replan_budget(Budget),
+    reactivesequence_budgeted(Code, Budget, S, S1, Outcome).
+
+reactivesequence_budgeted(Code, Budget, S, S1, Outcome) :-
+    Budget > 0,
+    reactive_children(Code, Children),
+    do_node(seq_node(Children), S, S2, reactive(Code)),
+    Budget1 is Budget - 1,
+    reactivesequence_budgeted(Code, Budget1, S2, S1, Outcome).
+reactivesequence_budgeted(Code, 0, S, S, world_too_large) :-
+    reactive_children(Code, Children),
+    do_node(seq_node(Children), S, _, reactive(Code)).
+reactivesequence_budgeted(Code, Budget, S, S1, reactive(OtherCode)) :-
+    Budget > 0,
+    reactive_children(Code, Children),
+    do_node(seq_node(Children), S, S1, reactive(OtherCode)),
+    OtherCode \= Code.
+reactivesequence_budgeted(Code, Budget, S, S1, Outcome) :-
+    Budget > 0,
+    reactive_children(Code, Children),
+    do_node(seq_node(Children), S, S1, Outcome),
+    Outcome \= reactive(_).
+
+do_node(reactivefallback(Code), S, S1, Outcome) :-
+    replan_budget(Budget),
+    reactivefallback_budgeted(Code, Budget, S, S1, Outcome).
+
+reactivefallback_budgeted(Code, Budget, S, S1, Outcome) :-
+    Budget > 0,
+    reactive_children(Code, Children),
+    do_node(fallback_node(Children), S, S2, reactive(Code)),
+    Budget1 is Budget - 1,
+    reactivefallback_budgeted(Code, Budget1, S2, S1, Outcome).
+reactivefallback_budgeted(Code, 0, S, S, world_too_large) :-
+    reactive_children(Code, Children),
+    do_node(fallback_node(Children), S, _, reactive(Code)).
+reactivefallback_budgeted(Code, Budget, S, S1, reactive(OtherCode)) :-
+    Budget > 0,
+    reactive_children(Code, Children),
+    do_node(fallback_node(Children), S, S1, reactive(OtherCode)),
+    OtherCode \= Code.
+reactivefallback_budgeted(Code, Budget, S, S1, Outcome) :-
+    Budget > 0,
+    reactive_children(Code, Children),
+    do_node(fallback_node(Children), S, S1, Outcome),
+    Outcome \= reactive(_).
 
 % ---------------------------------------------------------------
 % holds/2: minimal condition language for cond(C) leaves -- standard
@@ -1460,7 +1856,13 @@ holds(neg(P),   S) :- \+ holds(P,S).
 
 % halted_with_cond(Reason): reads the LAST halt's Reason via
 % halted_with/2 -- lets a cond() leaf branch on how the PREVIOUS leg
-% ended, e.g. cond(halted_with_cond(battery_depleted)).
+% ended, e.g. cond(halted_with_cond(battery_depleted)). ACTION-
+% INDEPENDENT (see halted_with/2's own note): Reason can just as well
+% be a planning call's own completed(Algorithm,Goal,Code)/no_path
+% (Algorithm,Goal,Code), e.g. cond(halted_with_cond(no_path(_,_,_)))
+% to branch on "did the last planning attempt fail, regardless of
+% which algorithm/goal" -- same wildcard convention as every other
+% Reason shape below.
 %
 % TODO / KNOWN INTERFACE CHANGE: crashed/obstacle_in_bound/battery_under
 % Reasons are compound terms carrying extra info (crashed(ObstacleId),
@@ -1478,24 +1880,39 @@ holds(neg(P),   S) :- \+ holds(P,S).
 % written the same way: reason="crashed(_)" or reason="crashed(obs5)".
 holds(halted_with_cond(Reason), S) :- halted_with(Reason, S).
 
-% at_goal(GX,GY,Tol): true iff the CURRENT position (at the current
-% time, via now/2) is within Tol of the EXPLICIT point (GX,GY) --
+% distance_below(GX,GY,Threshold) / distance_equal(GX,GY,Threshold) /
+% distance_over(GX,GY,Threshold): true iff the CURRENT position (at
+% the current time, via now/2) is, respectively, below/exactly-equal-
+% to/above Threshold distance from the EXPLICIT point (GX,GY) --
 % PARAMETRIZED, same as obstacle_in_bound(Threshold)/battery_below
 % (Threshold)/etc., not a lookup against any global "the goal" fact
 % (there is no such fact anymore -- see the problem's own
 % goal_formula.pl for where a plan's own goal information now lives
-% entirely; at_goal is a DIFFERENT, complementary thing: a REACTIVE
-% in-tree check, evaluated possibly many times at different situations
-% as the policy runs, not a one-time post-hoc verification query).
+% entirely; distance_below is a DIFFERENT, complementary thing: a
+% REACTIVE in-tree check, evaluated possibly many times at different
+% situations as the policy runs, not a one-time post-hoc verification
+% query). This is also what used to be baked directly into
+% moveto_leg's own Status output (see leg_status/9's own note) --
+% factored out into its own explicit, inspectable condition node
+% instead, same as any other cond() leaf.
 % Typical use: a fallback child that skips moveto entirely if already
-% there --
-%   fallback_node([cond(at_goal(11.675,11.525,0.3)), moveto_leg(CP,[collision,battery])])
-% Pass the SAME point as whichever PlanAstar/PlanVoronoi/... node's own
+% there, or a check placed right after a MoveTo to confirm it actually
+% landed close enough to its own intended target --
+%   fallback_node([cond(distance_below(11.675,11.525,0.3)), moveto_leg(CP,[collision,battery])])
+% Pass the SAME point as whichever PlanWith node's own
 % goal port targets, if that's the intent -- being explicit here means
 % there is no longer a global/local goal-point mismatch to drift out
 % of sync (the risk a single shared goal/2 fact used to carry).
-holds(at_goal(GX,GY,Tol), S) :-
-    now(T, S), at(X,Y,T,S), dist(X,Y,GX,GY,D), D =< Tol.
+% distance_equal/distance_over exist for the SAME reason
+% battery_equal/battery_over exist alongside battery_below: a
+% caller-chosen threshold at a different comparison, not a
+% replacement.
+holds(distance_below(GX,GY,Threshold), S) :-
+    now(T, S), at(X,Y,T,S), dist(X,Y,GX,GY,D), D < Threshold.
+holds(distance_equal(GX,GY,Threshold), S) :-
+    now(T, S), at(X,Y,T,S), dist(X,Y,GX,GY,D), D =:= Threshold.
+holds(distance_over(GX,GY,Threshold), S) :-
+    now(T, S), at(X,Y,T,S), dist(X,Y,GX,GY,D), D > Threshold.
 
 % obstacle_in_bound(Threshold): true iff the CURRENT position (at the
 % current time, via now/2) is within Threshold of ANY obstacle. Same
@@ -1511,7 +1928,8 @@ holds(at_goal(GX,GY,Tol), S) :-
 % not "will it ever become true during this walk".
 holds(obstacle_in_bound(Threshold), S) :-
     now(T, S), at(X,Y,T,S),
-    obstacle_within_threshold(X,Y,Threshold).
+    clearance_adjusted_threshold(Threshold, AdjThreshold),
+    obstacle_within_threshold(X,Y,AdjThreshold).
 
 % line_of_sight_clear(ObstacleId,GX,GY): true iff the CURRENT position
 % is NOT occluded from (GX,GY) by ObstacleId's own boundary. Same
@@ -1537,10 +1955,11 @@ holds(line_of_sight_clear(ObstacleId,GX,GY), S) :-
 holds(obstacle_on_path(Threshold), S) :-
     current_walk(S, CP, Triggers, T0, SPrev),
     walk_duration(CP, Duration),
-    z(do(startMoveto(CP,Triggers,T0),SPrev), Z),
-    zt(do(startMoveto(CP,Triggers,T0),SPrev), Zt),
+    z(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Z),
+    zt(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Zt),
     now(T, S), at(X,Y,T,S),
-    obstacle_on_path_within_threshold(CP,T0,Duration,Z,Zt,X,Y,Threshold).
+    clearance_adjusted_threshold(Threshold, AdjThreshold),
+    obstacle_on_path_within_threshold(CP,T0,Duration,Z,Zt,X,Y,AdjThreshold).
 
 % battery_below(Threshold): true iff the CURRENT battery level (at the
 % current time, via now/2) is below Threshold. Same parameter, same
@@ -1571,6 +1990,150 @@ holds(battery_over(Threshold), S) :-
     Level > Threshold.
 
 % ---------------------------------------------------------------
+% holds_leg/9: the T-PARAMETERIZED twin of holds/2 above, used ONLY by
+% first_becomes_false_time/9 below (in turn used ONLY by the
+% guard_break(Cond,Code) trigger -- see trigger_crossing_time/11) --
+% NOT part of the do_node/cond() interface itself (holds/2 stays the
+% ONLY thing cond(C) ever calls). holds/2 always asks "is C true RIGHT
+% NOW" via now(T,S) -- which, for an IN-PROGRESS leg's own situation
+% term do(startMoveto(...),SPrev), always returns that leg's own START
+% time T0, never a later instant WITHIN the leg (see the "no bracket-
+% scan/bisection here" note above holds(obstacle_in_bound(...)) further
+% up) -- so it cannot be reused as-is to watch a condition CONTINUOUSLY
+% across a leg's own future. holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,T)
+% asks the SAME question at an EXPLICIT T instead, using the SAME flat
+% (CP,T0,Duration,Z,Zt,Zb,B0) signature every trigger_crossing_time/11
+% clause already receives (no situation term needed at all -- X,Y come
+% from walk_noisy_point/8, battery Level from battery_at_leg/6 above,
+% both already pure functions of T within one leg).
+%
+% ONE clause per condition in schema.yaml's conditions: list that can
+% MEANINGFULLY vary within a single leg (i.e. everything except
+% HaltedWith, which is history-based and cannot change mid-leg --
+% bt_to_prolog.py's own guard-derivation pass rejects HaltedWith as an
+% auto-derived guard BEFORE this predicate is ever reached, precisely
+% to avoid a missing clause here silently reading as "already false at
+% T0"). Adding a new schema.yaml condition later needs a matching
+% clause HERE for it to be usable as an automatically-derived reactive
+% guard -- or, if it genuinely can't vary mid-leg either, adding it to
+% _NON_CONTINUOUS_CONDITIONS in bt_to_prolog.py instead, same as
+% HaltedWith.
+holds_leg(and(P,Q), CP,T0,Duration,Z,Zt,Zb,B0,T) :-
+    holds_leg(P,CP,T0,Duration,Z,Zt,Zb,B0,T), holds_leg(Q,CP,T0,Duration,Z,Zt,Zb,B0,T).
+holds_leg(or(P,Q), CP,T0,Duration,Z,Zt,Zb,B0,T) :-
+    holds_leg(P,CP,T0,Duration,Z,Zt,Zb,B0,T) ; holds_leg(Q,CP,T0,Duration,Z,Zt,Zb,B0,T).
+holds_leg(neg(P), CP,T0,Duration,Z,Zt,Zb,B0,T) :-
+    \+ holds_leg(P,CP,T0,Duration,Z,Zt,Zb,B0,T).
+
+holds_leg(distance_below(GX,GY,Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+    walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
+    dist(X,Y,GX,GY,D), D < Threshold.
+holds_leg(distance_equal(GX,GY,Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+    walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
+    dist(X,Y,GX,GY,D), D =:= Threshold.
+holds_leg(distance_over(GX,GY,Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+    walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
+    dist(X,Y,GX,GY,D), D > Threshold.
+
+holds_leg(obstacle_in_bound(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+    walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
+    clearance_adjusted_threshold(Threshold, AdjThreshold),
+    obstacle_within_threshold(X,Y,AdjThreshold).
+
+holds_leg(obstacle_on_path(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+    walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
+    clearance_adjusted_threshold(Threshold, AdjThreshold),
+    obstacle_on_path_within_threshold(CP,T0,Duration,Z,Zt,X,Y,AdjThreshold).
+
+holds_leg(line_of_sight_clear(ObstacleId,GX,GY), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+    walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
+    line_of_sight_clear(X,Y,ObstacleId,GX,GY).
+
+holds_leg(battery_below(Threshold), _CP,T0,Duration,_Z,_Zt,Zb,B0,T) :-
+    battery_at_leg(T0,Duration,Zb,B0,T,Level), Level < Threshold.
+holds_leg(battery_equal(Threshold), _CP,T0,Duration,_Z,_Zt,Zb,B0,T) :-
+    battery_at_leg(T0,Duration,Zb,B0,T,Level), Level =:= Threshold.
+holds_leg(battery_over(Threshold), _CP,T0,Duration,_Z,_Zt,Zb,B0,T) :-
+    battery_at_leg(T0,Duration,Zb,B0,T,Level), Level > Threshold.
+
+% first_becomes_false_time(+Cond,+CP,+T0,+Duration,+Z,+Zt,+Zb,+B0,
+% -Tcross): the FIRST instant in (T0,T0+Duration] that Cond (already
+% polarity-adjusted by bt_to_prolog.py -- see guard_break/2's own note
+% in trigger_crossing_time/11 above) stops holding, given it holds at
+% T0 -- the same "already true at T0 / genuine future search" two-shape
+% convention every other first_*_time predicate in this file already
+% follows (two MUTUALLY EXCLUSIVE clauses, on \+holds_leg(...,T0) vs
+% holds_leg(...,T0), no cut needed -- same style as first_battery_
+% below_time above), just GENERIC over any holds_leg/9-recognized Cond
+% instead of one bespoke formula per condition. FAILS (no crossing) if
+% Cond holds for the WHOLE walk -- same "absence, not sentinel"
+% convention as everywhere else in this file.
+%
+% Bracket-scans bracket_samples/1 equal steps (the SAME config knob
+% first_threshold_crossing_time's own black-box search already uses --
+% see Section 0/verification.bracket_samples), then bisects the found
+% bracket down to crossing_eps/1 -- returning the HIGH (verified-FALSE)
+% end of the final bracket, never the low end or the midpoint, so a
+% merge-grid-quantized restart seeded from Tcross is never seeded
+% slightly EARLY (i.e. while Cond might still actually hold) -- same
+% "never let approximation look safer than reality" convention as
+% quantize_down/3.
+first_becomes_false_time(Cond,CP,T0,Duration,Z,Zt,Zb,B0,T0) :-
+    \+ holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,T0).
+first_becomes_false_time(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Tcross) :-
+    holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,T0),
+    bracket_samples(N),
+    TEnd is T0 + Duration,
+    guard_bracket_scan(Cond,CP,T0,Duration,Z,Zt,Zb,B0,N,1,TEnd,T0,Tlo,Thi),
+    crossing_eps(Eps),
+    guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tlo,Thi,Tcross).
+
+% guard_bracket_scan(...,+N,+I,+TEnd,+Tprev,-Tlo,-Thi): walk forward
+% from I=1 to N, one bracket_samples/1-th of the way from T0 to TEnd
+% each step, stopping at the FIRST step where Cond has flipped from
+% true (Tprev) to false (the current sample) -- Tlo/Thi bracket the
+% crossing. Fails (no crossing anywhere in the scan) once I exceeds N,
+% exactly mirroring every other first_*_time predicate's own "fails if
+% it never happens" convention -- Cond held at every single sample.
+% TWO MUTUALLY EXCLUSIVE clauses (on holds_leg(...,Ti) succeeding or
+% failing) rather than if-then-else -- ProbLog's own Prolog dialect
+% doesn't support '->'/2, same reason every other multi-case predicate
+% in this file (e.g. first_battery_below_time above) is written this
+% way instead.
+guard_bracket_scan(Cond,CP,T0,Duration,Z,Zt,Zb,B0,N,I,TEnd,Tprev,Tlo,Thi) :-
+    I =< N,
+    Ti is T0 + (TEnd-T0) * I / N,
+    holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Ti),
+    I1 is I + 1,
+    guard_bracket_scan(Cond,CP,T0,Duration,Z,Zt,Zb,B0,N,I1,TEnd,Ti,Tlo,Thi).
+guard_bracket_scan(Cond,CP,T0,Duration,Z,Zt,Zb,B0,N,I,TEnd,Tprev,Tprev,Ti) :-
+    I =< N,
+    Ti is T0 + (TEnd-T0) * I / N,
+    \+ holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Ti).
+
+% guard_bisect(...,+Eps,+Tlo,+Thi,-Tcross): standard bisection --
+% invariant Cond holds at Tlo, doesn't hold at Thi; narrows until the
+% bracket is under Eps wide, then reports the FALSE end (see
+% first_becomes_false_time's own note on why the high end, not the
+% midpoint or the low end). Same mutually-exclusive-clauses style as
+% guard_bracket_scan above, no '->'/2.
+guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tlo,Thi,Thi) :-
+    Width is Thi - Tlo,
+    Width =< Eps.
+guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tlo,Thi,Tcross) :-
+    Width is Thi - Tlo,
+    Width > Eps,
+    Tmid is (Tlo + Thi) / 2,
+    holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Tmid),
+    guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tmid,Thi,Tcross).
+guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tlo,Thi,Tcross) :-
+    Width is Thi - Tlo,
+    Width > Eps,
+    Tmid is (Tlo + Thi) / 2,
+    \+ holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Tmid),
+    guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tlo,Tmid,Tcross).
+
+% ---------------------------------------------------------------
 % 8. VERIFICATION-TIME SAMPLING (NOT part of the action theory) --
 %    a purely deterministic choice of how finely to CHECK/REPORT the
 %    already-closed-form at/4 fluent for VISUALIZATION purposes.
@@ -1584,92 +2147,128 @@ holds(battery_over(Threshold), S) :-
 
 sample_frac(I, Frac) :- num_samples(N), Frac is I / N.
 
-% evaluate_plan(+S0,-S,-Outcome,+Budget): drives plan/1's WHOLE
-% tree to a genuine true/false conclusion, re-descending it from its
-% own ROOT -- not from wherever a trigger fired -- every time do_node
-% comes back `reactive`. This is what "the plan re-evaluates itself
-% once a reactive condition changes" actually means in a one-shot
-% Golog theory like this one, where do_node/4 has no notion of ticking
-% or re-entering from partway through: a REACTIVE outcome propagates
-% UNCHANGED through every enclosing seq_node/fallback_node (see their
-% own do_node clauses above -- neither one applies its normal
-% Sequence/Fallback logic to `reactive`, it's just passed straight up,
-% exactly like an exception passing untouched through stack frames
-% that don't catch it) until it escapes the ENTIRE do_node(Node,...)
-% call for the whole tree and lands here. THIS predicate is the only
-% place a `reactive` outcome is ever actually acted on -- and what it
-% does is call do_node on the SAME root Node again, starting from S1
-% (wherever the just-halted walk left the robot), so the WHOLE tree --
-% including any condition nearer the root than where the trigger fired
-% -- gets a fresh chance to decide what happens next, potentially
-% taking a completely different branch than last time.
+% final_situation(+S)/plan_outcome(-Outcome): drive plan/1's tree to a
+% genuine true/false/world_too_large conclusion with a SINGLE do_node
+% call, from s0 -- NOT the redescend-from-root loop this predicate
+% used to be (see git history for that version, and this project's own
+% conversation log for why it was replaced). Redescending on a
+% reactive(_) halt is now entirely reactivesequence/reactivefallback's
+% own job (see the CONTROL-FLOW REDESCEND TARGETS note above
+% do_node(reactivesequence(...))) -- every reactive-classified trigger
+% is tagged, at translation time, with the code of its own nearest
+% enclosing reactive composite, which catches and locally restarts it,
+% so a bare reactive(_) should never reach THIS call at all.
 %
-% BUDGET: a hard cap on how many times this may re-descend before
-% giving up. This exists for ProbLog's own sake, not the robot's: this
-% predicate's recursion depth is driven by a PROBABILISTIC condition
-% (whether a given resolved world's noise draws make some trigger fire
-% again), not by the plan's own static structure the way seq_node/
-% fallback_node's list-recursion is -- Prolog (and so ProbLog's
-% grounding, which is the same SLD engine run once per resolved world)
-% handles that kind of recursion fine as long as it's GUARANTEED to
-% terminate for every world, and nothing here structurally guarantees
-% that on its own. It is tempting to assume battery depletion alone
-% would always eventually force a hard `false` and stop this -- it
-% doesn't, reliably: a degenerate zero-duration leg (e.g. a freshly
-% re-planned straight line whose start already equals its own target)
-% drains zero battery no matter how many times it's retried, and even
-% for ordinary legs the argument depends on config.yaml's own
-% moving_drain_rate/idle_drain_rate staying nonzero, which is a tuning
-% choice, not a theory-level invariant. Hence an explicit, unconditional
-% bound instead of relying on either of those. The bound is
-% deliberately large -- this is a safety net for a pathological world,
-% not a value meant to bind in any of this project's own problems; if
-% it ever does, world_too_large is a signal that something about the
-% plan or the map genuinely doesn't terminate, not something to fix by
-% casually raising the number.
-% Re-fetches plan(Node) FRESH on every attempt below, rather than
-% taking Node as a parameter reused across retries -- this matters,
-% not just style: plan/1's own term has FREE VARIABLES embedded in it
-% (e.g. problem3's own PathS/Obst1/PathFB, bound by planWith/cond calls
-% AS do_node descends it), and Prolog only gives you a FRESH, unbound
-% copy of a fact's own variables each time that fact is RESOLVED AS ITS
-% OWN GOAL. Passing an already-resolved Node into a second do_node call
-% reuses whatever THOSE variables got bound to on the FIRST attempt
-% (e.g. PathS already bound to leg 1's own control points) -- a SECOND
-% attempt's planWith(...,PathS) would then try to UNIFY its own freshly
-% computed (and generally DIFFERENT) control points against that stale
-% binding instead of producing a new one, which fails outright for any
-% plan whose reactive retry actually needs to re-plan. Re-querying
-% plan(Node) on each attempt is what gives every retry its own clean
-% set of variables, exactly as if do_node were being run for the very
-% first time.
-evaluate_plan(S0, S, Outcome, Budget) :-
-    Budget > 0,
-    plan(Node),
-    do_node(Node, S0, S1, reactive),
-    Budget1 is Budget - 1,
-    evaluate_plan(S1, S, Outcome, Budget1).
-evaluate_plan(S0, S1, Outcome, _Budget) :-
-    plan(Node),
-    do_node(Node, S0, S1, Outcome),
-    Outcome \== reactive.
-evaluate_plan(S0, S0, world_too_large, 0) :-
-    plan(Node),
-    do_node(Node, S0, _, reactive).
-
-replan_budget(1000).
-
+% If it somehow does (a translator bug -- bt_to_prolog.py is supposed
+% to catch this at translation time as a hard failure, so this is a
+% defense-in-depth check, not the primary guard), final_situation/1
+% simply has no solution in that world (the first clause's own
+% Outcome \= reactive(_) guard fails), and plan_outcome/1's OWN second
+% clause reports it explicitly as reactive_escaped rather than silently
+% folding it into any of the three legitimate outcomes -- P(plan_
+% outcome(reactive_escaped)) > 0 in a report is the signal that
+% something is structurally wrong with the translated plan, and is
+% never expected to be nonzero for a plan that translated cleanly.
 final_situation(S) :-
-    replan_budget(B), evaluate_plan(s0, S, _, B).
+    plan(Node),
+    do_node(Node, s0, S, Outcome),
+    Outcome \= reactive(_).
 
-% plan_outcome(Outcome): the WHOLE tree's true/false outcome, a
-% first-class query -- P(plan_outcome(true)) is the BT-level analogue
-% of verify_goal_formula, but based on Status/Outcome rather than an
-% explicit goal formula. Outcome is now one of true/false/world_too_large
-% (never reactive -- evaluate_plan/4 never returns that, by
-% construction; see its own header).
+% -- FULL OUTCOME ENUMERATION -----------------------------------------
+% outcome_entry(+Action, -Entry): Entry = Code-Value for whichever
+% ACTION or CONDITION marker carries a queryable outcome of its own --
+% Value is Reason with its own trailing ActionCode STRIPPED back off
+% (the exact same generic univ+append technique halted_with_pattern/3
+% already uses to do the reverse) for a MoveTo's haltMoveto or a
+% PlanWith's planned(...) marker, or simply Status for a cond(C,Code)'s
+% own checked(Code,C,Status) marker (see that predicate's own note).
+% Fails outright (no Entry, no choicepoint) for every other action
+% (startMoveto, interrupt) -- those carry no reportable outcome of
+% their own, only advance the clock/position.
+outcome_entry(haltMoveto(_,Reason,_), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
+outcome_entry(planned(_,Reason), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
+outcome_entry(checked(Code,_,Status), Code-Status).
+
+% history_outcomes(+S, -Entries): every outcome_entry/2 found ANYWHERE
+% in S's own history, oldest-first -- the one GENERIC pass behind
+% outcome_signature/1 below. UNLIKE halted_with/2 (finds ONE matching
+% Reason, nondeterministically, one solution per match), this COLLECTS
+% ALL of them at once, since a full outcome needs every action's/
+% condition's own contribution together, not one at a time. No sort/
+% dedup step needed: do_node/4 always visits a GIVEN tree's own
+% children in the SAME left-to-right structural order regardless of
+% which Reason/Status values actually occur, so two resolved worlds
+% that reach the same SET of codes always visited them in the same
+% relative order already -- Entries is already canonical across
+% worlds, for free.
+history_outcomes(s0, []).
+history_outcomes(do(A,S), [Entry|Rest]) :-
+    outcome_entry(A, Entry),
+    history_outcomes(S, Rest).
+history_outcomes(do(A,S), Rest) :-
+    \+ outcome_entry(A, _),
+    history_outcomes(S, Rest).
+
+% outcome_signature(-Sig): Sig is the full list of every Code-Value
+% pair this resolved world's own final_situation actually produced --
+% one entry per action Reason and per condition check reached along
+% the way, enclosing the WHOLE outcome of the system in one term rather
+% than the separate per-action/per-condition MARGINALS halted_with_
+% pattern/3 and any_condition_status/2 already report. Queried
+% DELIBERATELY NON-GROUND (query(outcome_signature(_))), reusing the
+% SAME "ProbLog reports one result row per distinct grounding instead
+% of aggregating" behavior halted_with_pattern_detail/3 already relies
+% on (see that predicate's own note) -- here that's exactly the wanted
+% behavior: one row per DISTINCT combination of Reason/Condition values
+% actually reached, each with its own aggregated probability, a full
+% enumeration of every possible outcome instead of one marginal at a
+% time. NOTE: a cond() leaf re-checked more than once in the SAME world
+% (e.g. one sitting inside a reactive_children/2 list that gets
+% redescended) contributes ONE Code-Value entry PER actual check, not
+% just its last one -- a redescended condition whose own Status
+% genuinely differed between checks shows up as two distinct entries
+% for the same Code in Sig, which is correct (both really happened in
+% that one world), if unusual to read.
+outcome_signature(Sig) :-
+    final_situation(S),
+    history_outcomes(S, Sig).
+
+% plan_outcome(Outcome): the WHOLE tree's own outcome, a first-class
+% query -- P(plan_outcome(true)) is the BT-level analogue of verify_
+% goal_formula, but based on Status/Outcome rather than an explicit
+% goal formula. Outcome is one of true/false/world_too_large (the
+% three legitimate outcomes; world_too_large now comes from a LOCAL
+% reactivesequence/reactivefallback exhausting its own budget, see
+% that note again) or reactive_escaped (a translator-bug signal, see
+% final_situation/1's own note just above -- should never actually be
+% nonzero).
 plan_outcome(Outcome) :-
-    replan_budget(B), evaluate_plan(s0, _, Outcome, B).
+    plan(Node),
+    do_node(Node, s0, _, Outcome),
+    Outcome \= reactive(_).
+plan_outcome(reactive_escaped) :-
+    plan(Node),
+    do_node(Node, s0, _, reactive(_)).
+
+% replan_budget/1: the STARTING budget every reactivesequence/
+% reactivefallback occurrence reads (fresh, independently) on its own
+% first entry -- see reactivesequence_budgeted/5 and
+% reactivefallback_budgeted/5 above. Previously this bounded ONE
+% global whole-tree redescend loop; now each reactive composite gets
+% its OWN counter seeded from this SAME shared value, decremented
+% independently as THAT composite restarts. Still exists for
+% ProbLog's own sake, not the robot's -- see the CONTROL-FLOW
+% REDESCEND TARGETS note's own discussion of why nothing guarantees
+% termination on its own (a degenerate zero-duration leg can restart
+% forever without this bound, same reasoning as before, now just
+% localized to whichever composite it's under).
+replan_budget(1000).
 
 % plan_time_span(+S, -T0, -TEnd): T0 is when the (most recent) walk
 % started; TEnd is the wall-clock time the PLAN actually ends at --
@@ -1682,11 +2281,11 @@ plan_time_span(S, T0, TEnd) :-
 
 last_action_time(do(haltMoveto(T,_,_),_), _, _, T).
 last_action_time(do(interrupt(T),_), _, _, T).
-last_action_time(do(startMoveto(_,_,_),_), CP, T0, TEnd) :-
+last_action_time(do(startMoveto(_,_,_,_),_), CP, T0, TEnd) :-
     walk_duration(CP, Duration),
     TEnd is T0 + Duration.
 last_action_time(do(A,S), CP, T0, TEnd) :-
-    A \= haltMoveto(_,_,_), A \= interrupt(_), A \= startMoveto(_,_,_),
+    A \= haltMoveto(_,_,_), A \= interrupt(_), A \= startMoveto(_,_,_,_),
     last_action_time(S, CP, T0, TEnd).
 
 sample_time(I, S, T) :-
@@ -1728,29 +2327,46 @@ sample_walk_frac(I, S, WalkFrac) :-
 %    situation's own history.
 % ---------------------------------------------------------------
 
-% halted_with(+Reason, +S): TRUE iff SOMEWHERE in S's action history a
-% haltMoveto occurred with exactly this Reason. Searches the WHOLE
-% history (not just the most recent halt), so a future multi-leg plan
-% where an earlier leg had a different fate than the final leg is
-% still handled correctly.
+% halted_with(+Reason, +S): TRUE iff SOMEWHERE in S's action history
+% EITHER a haltMoveto OR a planWith occurred with exactly this Reason
+% -- ACTION-INDEPENDENT on purpose: a query built on this (or on
+% halted_with_pattern/3 further down, which is layered directly on
+% top of this) shouldn't have to know or care whether a given Reason
+% came from a MoveTo leg finishing or a planning call finishing, only
+% that SOME action in the history produced it. The two Reason
+% vocabularies never collide by construction: a MoveTo's own Reasons
+% (completed(Code), crashed(ObstId,Code), battery_under(Threshold,Code),
+% ...) and a planning call's own (completed(Algorithm,Goal,Code),
+% no_path(Algorithm,Goal,Code)) differ in ARITY even where they share a
+% functor name (completed/1 vs completed/3), so Prolog unification
+% already keeps "any MoveTo completion" (completed(_)) and "any
+% planning success" (completed(_,_,_)) as two distinct, never-
+% overlapping queries with no extra disambiguation needed. Searches the
+% WHOLE history (not just the most recent halt/plan), so a future
+% multi-leg plan where an earlier leg/planning call had a different
+% fate than the final one is still handled correctly.
 halted_with(Reason, do(haltMoveto(_,Reason,_), _)).
+halted_with(Reason, do(planned(_Algorithm,Reason), _)).
 halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 
-% visited(+Loc, +S): TRUE iff the robot ACTUALLY ARRIVED at
-% Loc=point(GX,GY) -- the endpoint of SOME already-completed leg,
-% Status=true, not just Reason=completed (see leg_status/8's own
-% distinction: Reason=completed only means a leg's walk wasn't cut
-% short by a trigger, it says nothing about whether noise carried the
-% robot far enough off course to miss the target; Status=true is what
-% actually means "landed within goal_tolerance of that leg's own
-% endpoint," which is what "visited" should mean) -- anywhere in S's
+% visited(+Loc, +Tol, +S): TRUE iff the robot ACTUALLY ARRIVED at
+% Loc=point(GX,GY) -- the endpoint of SOME already-completed leg
+% (Reason=completed(_ActionCode), Status=true, i.e. the walk wasn't
+% cut short by a trigger), AND its own actual (noisy) final position
+% is within Tol of Loc. Status=true alone no longer implies this (see
+% leg_status/9's own note: that check used to be baked into Status,
+% but is now the separate, explicit distance_below/3 condition --
+% visited/3 re-derives the SAME dist/5 comparison directly, via at/4,
+% rather than depending on any particular BT node having been placed
+% in the tree to check it) -- anywhere in S's
 % history. SAME "search the whole history" shape as halted_with/2
 % above, and for the same reason needs no separate persistence/frame
 % axiom: situation histories only ever grow by appending do(...), so
 % "did this ever happen in S's past" is already monotonic for free --
 % a fluent that starts false and, once made true, stays true in every
 % situation built on top of that one, exactly the shape a multi-leg
-% "visited(A), visited(B), visited(C)" goal formula needs, verified
+% "visited(A,Tol,S), visited(B,Tol,S), visited(C,Tol,S)" goal formula
+% needs, verified
 % the same way verify_goal_formula/any_collision already are (P(...) over
 % resolved worlds, since a collision or battery depletion partway
 % through a multi-leg plan can genuinely truncate the history before
@@ -1761,13 +2377,16 @@ halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 % seq_node/1's own definition (do_node(seq_node([Child|Rest]),S,S1,
 % Outcome):-do_node(Child,S,S2,true),...) already REQUIRES each
 % child's Status=true before the next one even starts -- so checking
-% visited/2 on just the LAST waypoint already logically entails every
+% visited/3 on just the LAST waypoint already logically entails every
 % earlier one was visited too; only worth checking each individually
 % once a Fallback sits somewhere before the waypoint you care about.
-visited(point(GX,GY), do(haltMoveto(_T,completed,true), S)) :-
+visited(point(GX,GY), Tol, do(haltMoveto(T,completed(_ActionCode),true), S)) :-
     current_walk(S, CP, _Triggers, _T0, _SPrev),
-    leg_target(CP, GX, GY).
-visited(Loc, do(_A, S)) :- visited(Loc, S).
+    leg_target(CP, GX, GY),
+    at(X,Y,T, do(haltMoveto(T,completed(_ActionCode),true), S)),
+    dist(X,Y,GX,GY,D),
+    D =< Tol.
+visited(Loc, Tol, do(_A, S)) :- visited(Loc, Tol, S).
 
 % -- crashed_in(S) / battery_depleted_in(S) / obstacle_in_bound_in(S) /
 %    battery_under_in(S): trivial one-liners reading the actual Reason,
@@ -1779,13 +2398,17 @@ visited(Loc, do(_A, S)) :- visited(Loc, S).
 %    its Threshold. Any FUTURE trigger's own "did it actually fire"
 %    diagnostic is exactly this same one-liner pattern -- no
 %    trigger-specific re-derivation logic to get wrong.
-crashed_in(S) :- halted_with(crashed(_), S).
-battery_depleted_in(S) :- halted_with(battery_depleted, S).
-obstacle_in_bound_in(S) :- halted_with(obstacle_in_bound(_,_), S).
-obstacle_on_path_in(S) :- halted_with(obstacle_on_path(_,_), S).
-battery_under_in(S) :- halted_with(battery_under(_), S).
-battery_equal_in(S) :- halted_with(battery_equal(_), S).
-battery_over_in(S) :- halted_with(battery_over(_), S).
+% Every Reason shape below now carries an extra TRAILING ActionCode
+% argument (see tag_reason/3, above poss(haltMoveto(...))) -- one more
+% wildcard per functor, same "regardless of which" convention as the
+% obstacle/threshold wildcards already here.
+crashed_in(S) :- halted_with(crashed(_,_), S).
+battery_depleted_in(S) :- halted_with(battery_depleted(_), S).
+obstacle_in_bound_in(S) :- halted_with(obstacle_in_bound(_,_,_), S).
+obstacle_on_path_in(S) :- halted_with(obstacle_on_path(_,_,_), S).
+battery_under_in(S) :- halted_with(battery_under(_,_), S).
+battery_equal_in(S) :- halted_with(battery_equal(_,_), S).
+battery_over_in(S) :- halted_with(battery_over(_,_), S).
 
 % -- crashed_obstacle(ObstacleId,S) / obstacle_in_bound_obstacle
 %    (Threshold,ObstacleId,S) / obstacle_on_path_obstacle(Threshold,
@@ -1802,52 +2425,232 @@ battery_over_in(S) :- halted_with(battery_over(_), S).
 %    /2, at/4, and battery/3 above, all of which already had S last;
 %    fixed here since nothing outside this file's own definitions
 %    referenced the old argument order).
-crashed_obstacle(ObstacleId, S) :- halted_with(crashed(ObstacleId), S).
-obstacle_in_bound_obstacle(Threshold, ObstacleId, S) :- halted_with(obstacle_in_bound(Threshold,ObstacleId), S).
-obstacle_on_path_obstacle(Threshold, ObstacleId, S) :- halted_with(obstacle_on_path(Threshold,ObstacleId), S).
-battery_under_threshold(Threshold, S) :- halted_with(battery_under(Threshold), S).
-battery_equal_threshold(Threshold, S) :- halted_with(battery_equal(Threshold), S).
-battery_over_threshold(Threshold, S) :- halted_with(battery_over(Threshold), S).
+% One more trailing wildcard each, same reason as the *_in(S) family
+% above -- ActionCode itself isn't exposed as an argument HERE (these
+% predicates' own job is "which obstacle/threshold", unchanged); query
+% halted_with_cond(crashed(ObstacleId,ActionCode)) directly (see
+% tag_reason/3's own note) when ActionCode itself is what's wanted.
+crashed_obstacle(ObstacleId, S) :- halted_with(crashed(ObstacleId,_), S).
+obstacle_in_bound_obstacle(Threshold, ObstacleId, S) :- halted_with(obstacle_in_bound(Threshold,ObstacleId,_), S).
+obstacle_on_path_obstacle(Threshold, ObstacleId, S) :- halted_with(obstacle_on_path(Threshold,ObstacleId,_), S).
+battery_under_threshold(Threshold, S) :- halted_with(battery_under(Threshold,_), S).
+battery_equal_threshold(Threshold, S) :- halted_with(battery_equal(Threshold,_), S).
+battery_over_threshold(Threshold, S) :- halted_with(battery_over(Threshold,_), S).
+
+% -- GENERIC per-action safety-query machinery -----------------------
+% match_wild(+PatternArgs, +ActualArgs): PatternArgs unifies against
+% ActualArgs position-by-position, where the GROUND ATOM 'wild' in
+% PatternArgs matches ANY value at that position (an argmin ObstacleId
+% that's only known at RUNTIME, never at translation time) while every
+% OTHER PatternArgs element must match EXACTLY (a Threshold/GX/GY/Cond
+% already known when the query itself was generated). 'wild' is a
+% plain ATOM here, deliberately NOT a genuine unbound Prolog variable
+% (e.g. '_') -- see halted_with_pattern/3's own note on why that
+% distinction is exactly what keeps a query(...) declaration reporting
+% ONE aggregated probability instead of ProbLog silently splitting it
+% into one row per distinct grounding.
+match_wild([], []).
+match_wild([wild|Ws], [_|As]) :-
+    match_wild(Ws, As).
+match_wild([W|Ws], [W|As]) :-
+    W \= wild,
+    match_wild(Ws, As).
+
+% halted_with_pattern(+GroundPattern, +ActionCode, +S): true iff S's
+% history contains a halt OR a planning call (see halted_with/2's own
+% action-independence note) whose Reason, once ActionCode (tag_reason/
+% 3's own trailing argument -- see poss(haltMoveto(...)) and
+% do_node(planWith(...))'s own notes; ALWAYS the trailing argument,
+% regardless of which action produced it) is stripped back off,
+% MATCHES GroundPattern -- i.e. GroundPattern is the
+% UNTAGGED Reason0 shape (crashed(wild), guard_break(battery_over
+% (70.0)), battery_under(20), completed, ...), with any part that's
+% only known at RUNTIME (an argmin ObstacleId for crashed/obstacle_
+% in_bound/obstacle_on_path) written as the literal atom 'wild' by
+% whoever constructs it, and any part that's ALREADY known at
+% TRANSLATION time (a guard's own Cond, a trigger's own Threshold/
+% GX/GY) kept LITERAL -- this is what correctly distinguishes e.g.
+% guard_break(battery_over(70.0)) from guard_break(neg(obstacle_in_
+% bound(0.6))) as two separate rows, rather than collapsing every
+% guard into one combined "guard_break" total (a bare-functor grouping
+% would lose exactly that distinction, since guard_break's own
+% semantic identity lives entirely in its first argument, not its
+% functor name). GroundPattern MUST be fully ground (every position
+% either 'wild' or a literal, never a bare Prolog variable) -- a real
+% unbound variable here would make query(any_reason_pattern_by_action
+% (Pattern,ActionCode)) itself non-ground, and ProbLog reports ONE
+% result row per distinct GROUNDING of a non-ground query rather than
+% aggregating them (verified directly against ProbLog's own engine
+% before writing this) -- 'wild' avoids that entirely by keeping the
+% query term itself ground, while match_wild/2 still supplies the
+% "any value here" matching semantics internally, never exposed to the
+% query's own outer term. module/contracts/goal_formula_check.py's
+% generate_safety_queries builds exactly this GroundPattern per
+% (MoveTo, trigger) pair at translation time, mirroring bt_to_prolog.py
+% 's own trigger-name -> Reason-functor mapping (e.g. battery_below ->
+% battery_under).
+halted_with_pattern(GroundPattern, ActionCode, S) :-
+    halted_with(Reason, S),
+    Reason =.. [Functor|Args],
+    append(Args0, [ActionCode], Args),
+    GroundPattern =.. [Functor|WildArgs],
+    match_wild(WildArgs, Args0).
+
+% any_reason_pattern(+GroundPattern): P(GroundPattern occurred, from
+% ANY action) -- the auto-generated replacement for hand-picked
+% aggregates like the old any_collision/any_battery_depletion (now
+% any_reason_pattern(crashed(wild)) / any_reason_pattern(battery_
+% depleted), generated automatically for every reason this problem's
+% own tree can actually produce, not just the two someone thought to
+% hand-write).
+any_reason_pattern(GroundPattern) :-
+    final_situation(S), halted_with_pattern(GroundPattern, _ActionCode, S).
+
+% any_reason_pattern_by_action(+GroundPattern, +ActionCode): the SAME
+% probability, split by WHICH MoveTo occurrence produced it -- e.g.
+% any_reason_pattern_by_action(crashed(wild), a1) vs. (..., a2) is
+% exactly "20% on the goto-goal leg, 10% on the goto-home leg" for a
+% combined any_reason_pattern(crashed(wild)) of 30%.
+any_reason_pattern_by_action(GroundPattern, ActionCode) :-
+    final_situation(S), halted_with_pattern(GroundPattern, ActionCode, S).
+
+% halted_with_pattern_detail(+Pattern, +ActionCode, +S): the DELIBERATE
+% OPPOSITE of halted_with_pattern/3's own ground-only discipline --
+% Pattern here is expected to contain a genuine UNBOUND Prolog variable
+% at whichever position halted_with_pattern's own GroundPattern would
+% have written as the atom 'wild' (e.g. crashed(_) rather than
+% crashed(wild)). Plain unification via =.. does the matching, with NO
+% match_wild/2 involved -- this is intentional: a query built on THIS
+% predicate is exactly the non-ground case halted_with_pattern/3's own
+% note warns about, and that's the whole point here, not a bug to
+% avoid -- ProbLog reports one result row PER DISTINCT GROUNDING of a
+% non-ground query, so any_reason_pattern_detail_by_action(crashed(_),
+% a1) is what actually ENUMERATES every concrete obstacle a1 could
+% have crashed into, each with its own probability, as the sub-rows
+% underneath any_reason_pattern_by_action(crashed(wild),a1)'s own
+% single aggregated total -- see main.py's print_reason_breakdown for
+% how the two are nested together in the report.
+halted_with_pattern_detail(Pattern, ActionCode, S) :-
+    halted_with(Reason, S),
+    Reason =.. [Functor|Args],
+    append(Args0, [ActionCode], Args),
+    Pattern =.. [Functor|Args0].
+
+% any_reason_pattern_detail_by_action(+Pattern, +ActionCode): see
+% halted_with_pattern_detail/3's own note -- one query(...) declaration
+% here (Pattern containing a genuine variable, e.g. crashed(_)) yields
+% MANY result rows, one per obstacle/whatever-was-runtime-only actually
+% observed, each already showing its own CONCRETE value substituted in
+% (e.g. any_reason_pattern_detail_by_action(crashed(obs5),a1)) --
+% module/contracts/goal_formula_check.py's generate_safety_queries only
+% emits this companion query for a (Pattern,ActionCode) pair whose own
+% GroundPattern actually contains 'wild' somewhere; a Pattern with
+% nothing runtime-only in it (battery_under(20), guard_break(Cond),
+% completed, ...) has no meaningful detail level beyond its own
+% aggregate and gets no companion query at all.
+any_reason_pattern_detail_by_action(Pattern, ActionCode) :-
+    final_situation(S), halted_with_pattern_detail(Pattern, ActionCode, S).
+
+% any_condition_status(+Code, +Status): P(the cond() leaf identified by
+% Code was actually checked, AND its own Status came out this way, in
+% the world resolved by final_situation) -- the direct analogue of
+% any_reason_pattern_by_action/2 above, but for CONDITIONS instead of
+% action Reasons: Code identifies WHICH cond(C,Code) occurrence in the
+% tree (same per-occurrence-code idiom as ActionCode), Status is true
+% or false (never a Pattern -- a condition's own outcome has no
+% runtime-only argument structure to distinguish, unlike a MoveTo's own
+% Reason). module/contracts/goal_formula_check.py's generate_safety_
+% queries emits one query(any_condition_status(Code,true)) and one
+% query(any_condition_status(Code,false)) per condition occurrence
+% bt_to_prolog.py assigned a code to, mirroring exactly how it already
+% emits one any_reason_pattern_by_action query per (Pattern,ActionCode)
+% pair. Fails outright (contributes zero probability) in any world
+% where this Code's own cond() leaf was never reached at all -- same
+% "absence, not sentinel" convention checked_with/4 itself already
+% follows, so P(any_condition_status(Code,true)) + P(any_condition_
+% status(Code,false)) need NOT sum to 1.0 (exactly like a MoveTo's own
+% Reason probabilities not summing to 100% when the leg was never
+% reached in some worlds).
+any_condition_status(Code, Status) :-
+    final_situation(S), checked_with(Code, _C, Status, S).
 
 % last_halt(-Reason): a cond() leaf that reads off WHY the MOST RECENT
-% moveto_leg halted, without searching S's history at all. Works by
-% direct unification against S's own OUTERMOST layer: do_node(moveto_
-% leg(...),...) always ends with do_action(haltMoveto(_T,Reason,
-% Status), S2, S1) as its very last step (see moveto_leg's own do_node
-% clause above), and every seq_node/fallback_node `reactive` clause
-% passes that S1 straight through, UNCHANGED, all the way up to
-% evaluate_plan/4 -- no do_node level in between ever layers another
-% action on top of it. So whatever S evaluate_plan/4 re-descends from
-% is STRUCTURALLY GUARANTEED to be exactly do(haltMoveto(_,Reason,_),
-% _) at its outermost layer, and reading Reason back off it is a
-% single deterministic unification, not a search -- unlike halted_with
-% /2 above (which walks S's WHOLE history and can match more than one
-% past action), this can only ever produce the ONE most recent halt,
-% so it stays a single ProbLog world instead of branching into one
-% world per historical match. Fails outright (no solution) if S isn't
-% shaped like a just-halted moveto at all (e.g. S=s0, before any walk
-% has ever run) -- same "absence, not sentinel" convention as
-% everywhere else.
+% moveto_leg halted. Works by searching BACKWARD through S, but ONLY
+% ever skipping past BOOKKEEPING markers -- checked(_,_,_) from a
+% cond(C,Code) leaf (see do_node(cond(...))'s own note) and
+% planned(_,_) from a PlanWith call (see do_node(planWith(...))'s own
+% note) -- neither of which represents anything PHYSICALLY happening
+% (no time elapsed, no position/battery change, nothing that could make
+% "the last halt" stale); it genuinely STOPS (fails, no further skip)
+% at any OTHER action (startMoveto, interrupt), which DO mean something
+% new has happened since the last halt.
+%
+% UPDATED from an EARLIER version that pattern-matched ONLY S's own
+% OUTERMOST layer directly against do(haltMoveto(...),_), reasoning
+% that do_node(moveto_leg(...),...) always ends with haltMoveto as its
+% very last step and no do_node level (plain or reactive) ever layered
+% another action on top of that S1 on the way up -- which was true
+% right up until cond(C,Code) started recording its own checked(...)
+% marker (see that predicate's own note): a DistanceBelow placed right
+% after a MoveTo -- exactly this project's own now-standard idiom --
+% appends ONE MORE do(...) layer on top of the halt before a LATER
+% branch's own cond(last_halt(...)) (or recover_obstacle/1, built on
+% top of it) ever gets to read it, which the old direct-unification
+% version could no longer see through. Skipping bookkeeping markers
+% restores the original "single deterministic unification, not a
+% search" behavior for the REAL halt underneath, without giving up
+% cond()'s own traceability: this still can only ever produce the ONE
+% most recent halt (unlike halted_with/2, which walks the WHOLE history
+% and can match more than one past action), so it stays a single
+% ProbLog world instead of branching into one world per historical
+% match. Fails outright (no solution) if S isn't shaped like a
+% just-halted moveto (skipping bookkeeping markers) at all -- same
+% "absence, not sentinel" convention as everywhere else.
 %
 % NOT YET GENERIC across leaf/action types -- a caveat for whoever adds
 % the next reactive-capable leaf (e.g. a robotic-arm action halting via
-% its own haltArmMove(...) instead of haltMoveto(...)): this clause
-% will simply FAIL to match such an S, silently, not with an error --
-% do(haltArmMove(...),_) doesn't unify with do(haltMoveto(...),_), so
-% neg(last_halt(...))-based guards elsewhere would trivially succeed
-% even though something genuinely just halted. Two things have to keep
-% holding for last_halt/1 to stay correct as this theory grows: (1)
-% every new reactive-capable leaf type needs its OWN last_halt/1 clause
-% added here (or all leaves funneled through one shared halt-action
-% functor with a Kind tag, instead of a differently-named action per
-% leaf type), and (2) every future composite/decorator node's own
-% `reactive` do_node clause has to keep passing S through UNCHANGED, on
-% the way up, the same way seq_node/fallback_node already do -- a
-% future composite that layers so much as one more action on top of S1
-% before reactive reaches evaluate_plan/4 would break the "S's
-% outermost layer IS the most recent halt" guarantee this whole
-% predicate rests on.
+% its own haltArmMove(...) instead of haltMoveto(...)): the first
+% clause below will simply FAIL to match such an S, silently, not with
+% an error -- do(haltArmMove(...),_) doesn't unify with do(haltMoveto
+% (...),_), so neg(last_halt(...))-based guards elsewhere would
+% trivially succeed even though something genuinely just halted. Every
+% new reactive-capable leaf type needs its OWN base clause added here
+% (or all leaves funneled through one shared halt-action functor with a
+% Kind tag, instead of a differently-named action per leaf type).
 holds(last_halt(Reason), do(haltMoveto(_T,Reason,_Status),_SPrev)).
+holds(last_halt(Reason), do(checked(_,_,_), S)) :- holds(last_halt(Reason), S).
+holds(last_halt(Reason), do(planned(_,_), S)) :- holds(last_halt(Reason), S).
+
+% KNOWN LIMITATION, found while adding cond(C,Code)'s own checked(...)
+% marker (Option B): cond(neg(last_halt(...))) -- problem3's OWN Bug0
+% guard, "retry the direct path unless the last halt was an
+% obstacle_on_path" -- makes ProbLog's grounder raise a spurious
+% "non-ground probabilistic clause" error against z/2's own template
+% clause in config_generated.pl, even though the actual derivation
+% needs no such thing (verified directly: replan_budget(1) still fails
+% just as fast, so it isn't the known reactive-redescend blowup; a bare
+% cond(last_halt(...)) with NO neg() wrapper, or a cond() whose own
+% Status doesn't change do_node(cond(...))'s own S1 shape, both work
+% fine). The negation itself is the trigger -- ProbLog's own grounding
+% of \+ over a goal that (transitively, via this predicate's own
+% checked(...)-skipping clauses above) reaches back through the
+% situation apparently forces broader exploration than a plain,
+% non-negated call needs, tripping over z/2's non-ground template
+% clause somewhere in that wider search. Root-caused down to "negation
+% over last_halt/1 specifically, once cond() stopped being S1=S" but
+% NOT resolved further: every reformulation tried (recursion moved out
+% of holds/2 into a separate skip_bookkeeping/2 helper; a single do_node
+% (cond(...)) clause with a shared checked(...) term shape regardless
+% of Status) still reproduced it, pointing at something in ProbLog's
+% own negation-grounding internals rather than a fixable shape in this
+% theory's own clauses. Affects ONLY problem3's own hand-written
+% plan_generated.pl (the one tree in this project using neg(last_halt
+% (...)) at all) -- every translator-generated tree (problems 0/1/2/4)
+% neither uses last_halt/recover_obstacle nor is affected. problem3 was
+% already unable to complete a run within any practical timeout before
+% this (a separate, pre-existing reactive-redescend combinatorial
+% blowup, see perf_diag_two_hop/), so this is a new FAILURE MODE on an
+% already-nonfunctional tree, not a regression on a working one.
 
 % recover_obstacle(-ObstacleId): a cond() leaf that RETRIEVES which
 % obstacle the branch that led here just halted against, wildcarding
@@ -1855,8 +2658,8 @@ holds(last_halt(Reason), do(haltMoveto(_T,Reason,_Status),_SPrev)).
 % obstacle_on_path_obstacle/3 (see that predicate's own family comment
 % above it): a Fallback whose first branch plans+walks straight
 % (watching obstacle_on_path(Threshold) as a trigger) and whose SECOND
-% branch needs to know WHICH obstacle to hand FollowBoarder(ObstacleId,
-% ...) -- Golog's own fallback_node semantics threads the SITUATION S
+% branch needs to know WHICH obstacle to hand planWith(follow_boarder
+% (ObstacleId,...),...) -- Golog's own fallback_node semantics threads the SITUATION S
 % forward from a failed branch into the next one (see fallback_node's
 % own do_node note near the top of this section), but NEVER a raw
 % Prolog variable binding a failed branch happened to make, so the
@@ -1875,7 +2678,7 @@ holds(last_halt(Reason), do(haltMoveto(_T,Reason,_Status),_SPrev)).
 % guarded by cond(recover_obstacle(Obst)) simply doesn't apply unless
 % there really is one to recover.
 holds(recover_obstacle(ObstacleId), S) :-
-    holds(last_halt(obstacle_on_path(_Threshold,ObstacleId)), S).
+    holds(last_halt(obstacle_on_path(_Threshold,ObstacleId,_ActionCode)), S).
 
 % -- overall collision probability (exact) --------------------------
 any_collision :- final_situation(S), crashed_in(S).
@@ -1905,7 +2708,7 @@ sample_index_for_time(T,T0,Duration,I) :-
 %    final_situation(S) for a specific resolved situation.
 first_hit(I) :-
     final_situation(S),
-    S = do(haltMoveto(Tcross,crashed(_ObstacleId),_), _),
+    S = do(haltMoveto(Tcross,crashed(_ObstacleId,_ActionCode),_), _),
     current_walk(S, CP, _Triggers, T0, _SPrev),
     walk_duration(CP, Duration),
     sample_index_for_time(Tcross,T0,Duration,I).
@@ -1914,7 +2717,7 @@ first_hit(I) :-
 %    before reporting sample N) ----------------------------------
 hit_by(N) :-
     final_situation(S),
-    S = do(haltMoveto(Tcross,crashed(_ObstacleId),_), _),
+    S = do(haltMoveto(Tcross,crashed(_ObstacleId,_ActionCode),_), _),
     current_walk(S, CP, _Triggers, T0, _SPrev),
     walk_duration(CP, Duration),
     sample_index_for_time(Tcross,T0,Duration,I),
@@ -1971,7 +2774,7 @@ verify_safe :-
     current_walk(S, CP, Triggers, T0, SPrev),
     walk_duration(CP, Duration),
     leg_start_battery(T0, SPrev, B0),
-    earliest_halt(CP,Triggers,T0,Duration,0.0,0.0,0.0,B0, completed,_).
+    earliest_halt(CP,Triggers,T0,Duration,0.0,0.0,0.0,B0, completed,_,_).
 
 plan_route_blocked :- \+ verify_safe.
 
@@ -2077,12 +2880,12 @@ on_track(I) :-
 %
 % Since the translator handles arbitrary Sequence/Fallback nesting and
 % every schema.yaml action/condition, sequence/fallback/multi-leg
-% policies -- and conditions like AtGoal/HaltedWith/ObstacleInBound/
+% policies -- and conditions like DistanceBelow/HaltedWith/ObstacleInBound/
 % BatteryBelow -- are already expressible in the XML with no further
 % changes here; see
 % bt_to_prolog.py's own header for the blackboard-to-Prolog-variable
-% translation this relies on (e.g. giving two different PlanAstar/
-% PlanStraight nodes distinct blackboard keys, same as the CP1/CP2
+% translation this relies on (e.g. giving two different PlanWith
+% nodes distinct blackboard keys, same as the CP1/CP2
 % convention this file already documents for hand-written multi-leg
 % plans). Only the AUTOMATIC generation of multi-leg XML trees and
 % reacting to a planWith/moveto_leg FAILURE by re-planning are future
@@ -2094,7 +2897,7 @@ on_track(I) :-
 % full rationale and the "must be kept in sync with behavior_tree.xml"
 % caveat. This is the ONLY place a plan's own goal information lives --
 % there is no separate global goal/2 fact anywhere in this theory (see
-% at_goal/3's own note). It is a UNIFORM formula (Reiter's sense -- one
+% distance_below/3's own note). It is a UNIFORM formula (Reiter's sense -- one
 % free situation argument, every fluent inside applied to exactly it);
 % verify_goal_formula below is what actually applies it AT
 % final_situation, same "zero-arg convenience wrapper hardwired to
@@ -2107,28 +2910,30 @@ verify_goal_formula :- final_situation(S), goal_formula(S).
 % ============================================================
 % 10. QUERIES
 %
-% Trimmed to exactly the queries actually needed for the reactive-
-% redescend/merge-grid performance investigation: the problem's own
-% goal_formula.pl verification, whether the plan ever ends via
-% collision, and the BT's own three possible outcomes. hit_by/1,
-% first_hit/1, on_track/1, verify_safe/0, and plan_route_blocked/0 are
-% all still DEFINED above (Section 7/8) -- only their query(...)
-% declarations were removed, so they simply stay unground/uncomputed
-% (ProbLog only grounds what a query(...) or something IT depends on
-% actually reaches) rather than being deleted outright. Re-add
-% whichever query(...) line(s) you need if per-sample hazard/drift
-% reporting is wanted again later.
+% NONE hardcoded here anymore -- every query(...) this problem needs
+% (verify_goal_formula, plan_outcome(true/false/world_too_large),
+% plan_outcome(reactive_escaped), and one any_reason_pattern(...)/
+% any_reason_pattern_by_action(...,ActionCode) pair per Reason this
+% problem's own tree can actually produce) is written into this
+% problem's own queries_generated.pl by module/contracts/
+% goal_formula_check.py's generate_safety_queries, called right after
+% goal_formula.pl's own validation (see main.py) -- a problem-
+% independent theory file can't itself vary per-problem, but the
+% generated file it consults (via problem_data.pl -- see Section 0)
+% can, and now ALL of it does, not just the one any_battery_depletion
+% special case this used to carry by hand.
 %
-% query(any_battery_depletion) is NOT declared here, on purpose --
-% it's the one query about "finishing the battery", so it's emitted
-% instead by module/translators/config_to_prolog.py, conditionally on
-% this problem's own config.yaml battery.enabled flag (see that
-% generator's own header for why: a problem-independent theory file
-% can't itself vary per-problem, but the generated config_generated.pl
-% it consults can).
+% hit_by/1, first_hit/1, on_track/1, verify_safe/0, and
+% plan_route_blocked/0 are all still DEFINED above (Section 7/8) --
+% simply never queried by the generator, so they stay ungrounded
+% (ProbLog only grounds what a query(...) or something it depends on
+% actually reaches), not deleted. Add them to generate_safety_queries'
+% own output if per-sample hazard/drift reporting is wanted again.
+%
+% plan_outcome(reactive_escaped) remains the runtime safety net for
+% the "a reactive trigger's own code matched no enclosing reactive
+% composite" translator-bug case -- see final_situation/1 and
+% plan_outcome/1's own notes above. Always expected to be exactly 0
+% for a correctly-translated plan; a nonzero value here is a bug
+% report, not a legitimate outcome.
 % ============================================================
-query(verify_goal_formula).
-query(any_collision).
-query(plan_outcome(true)).
-query(plan_outcome(false)).
-query(plan_outcome(world_too_large)).

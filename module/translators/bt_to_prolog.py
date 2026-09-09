@@ -71,18 +71,19 @@ port TYPES, not a serialization -- see its own note pointing here):
     double / string     the attribute's own text, parsed by Python's
                          float()/left as-is respectively
 
-CONTROL-FLOW GUARD DERIVATION: a MoveTo's own Triggers list is no
-longer entirely hand-typed. For every <MoveTo>, this file now walks
+CONTROL-FLOW GUARD DERIVATION: a MoveTo's (or InstallTool's/
+UninstallTool's) own Triggers list is no longer entirely hand-typed.
+For every <MoveTo>/<InstallTool>/<UninstallTool>, this file now walks
 UP the tree from it to the root; at each ReactiveSequence/
 ReactiveFallback ancestor, every LEFT SIBLING of the branch leading to
-the MoveTo (optionally wrapped in one or more <Inverter>) that reduces
+it (optionally wrapped in one or more <Inverter>) that reduces
 to a single Condition leaf becomes an automatically-derived guard --
 a Sequence-shaped ancestor requires its left siblings to stay TRUE
 (interrupts on becoming false), a Fallback-shaped one requires them to
 stay FALSE (interrupts on becoming true; each <Inverter> flips this
 once), and the guard is tagged with THAT SPECIFIC ancestor's own code,
 not necessarily the nearest enclosing reactive composite (two nested
-reactive ancestors contributing guards to the same MoveTo get two
+reactive ancestors contributing guards to the same leaf get two
 DIFFERENT codes -- see _reduce_guard_condition's own note). Rather
 than looking up a pre-built "opposite" trigger name per condition
 (which would need both crossing directions hand-implemented for every
@@ -90,14 +91,23 @@ condition, and silently do the wrong thing for any gap), the required
 condition is built by NEGATING the actual Condition term when the
 guard's polarity calls for it (reusing holds/2's own neg/1
 combinator), and basic_action_theory.pl's guard_break(Cond,Code)
-trigger + holds_leg/9 do a GENERIC bracket-scan+bisection search for
-when THAT EXACT term stops holding -- see that file's own note above
-holds_leg/9. A left sibling that is a memory-level (plain Sequence/
-Fallback) guard, or that reduces to a HISTORY-based condition (e.g.
-HaltedWith -- see _NON_CONTINUOUS_CONDITIONS), or that reduces to
-neither a Condition leaf nor an <Inverter> chain over one, produces no
-Triggers entry / a hard BTValidationError respectively -- see
-_reduce_guard_condition.
+trigger + holds_leg/9 (MoveTo) or tool_holds_leg/6 (InstallTool/
+UninstallTool -- see that file's own TOOL TRIGGERS section) do a
+GENERIC bracket-scan+bisection search for when THAT EXACT term stops
+holding -- see that file's own note above holds_leg/9. A left sibling
+that is a memory-level (plain Sequence/Fallback) guard, or that
+reduces to a HISTORY-based condition (e.g. HaltedWith -- see
+_NON_CONTINUOUS_CONDITIONS), or that reduces to neither a Condition
+leaf nor an <Inverter> chain over one, produces no Triggers entry / a
+hard BTValidationError respectively -- see _reduce_guard_condition.
+guard_stack itself is built IDENTICALLY for every leaf kind (see
+_translate_node's own ReactiveSequence/ReactiveFallback branch) --
+InstallTool/UninstallTool additionally require every guard_stack
+entry they consume to be battery-only (see _guard_condition_is_
+battery_only and its own call site in _translate_leaf), a hard error
+otherwise, for the SAME reason their own triggers port is restricted
+to battery-related names: neither action ever moves the robot, so a
+motion-based guard has no meaningful geometry to watch.
 
 Every MoveTo also gets `collision` and (when this problem's own
 config.yaml has battery.enabled: true) `battery` ADDED AUTOMATICALLY,
@@ -448,6 +458,27 @@ def _is_battery_trigger(token):
 
 
 _BATTERY_CONDITION_RE = re.compile(r"\bbattery_(below|equal|over)\(")
+
+
+def _guard_condition_is_battery_only(cond_term):
+    """True if cond_term (an already-reduced guard condition -- see
+    _reduce_guard_condition, which only ever emits a bare leaf term or
+    one neg(...) wrapped around it, e.g. "battery_over(70.0)" or
+    "neg(battery_over(70.0))") IS a battery_below/equal/over term and
+    NOTHING else. The guard-derivation counterpart of _is_battery_
+    trigger above, but checking the FULL reduced term (a single leaf,
+    optionally neg-wrapped) rather than a bare trigger token's own
+    functor prefix -- used by install_tool/uninstall_tool's own
+    _translate_leaf branch to enforce the SAME restriction its manual
+    triggers port already enforces (see _is_battery_trigger's own call
+    site there): {tag} never moves, so a left-sibling Condition testing
+    robot position/obstacles has no meaningful geometry for a guard
+    here to watch, same reasoning as the motion-trigger rejection."""
+    inner = cond_term
+    if inner.startswith("neg(") and inner.endswith(")"):
+        inner = inner[len("neg("):-1]
+    functor = inner.split("(", 1)[0].strip()
+    return functor in ("battery_below", "battery_equal", "battery_over")
 
 
 def _guard_condition_mentions_battery(cond_term):
@@ -903,6 +934,47 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
                 else:
                     tagged_manual.append(t)
 
+            # Structural guards, auto-derived from every enclosing
+            # ReactiveSequence/ReactiveFallback's own left siblings --
+            # the SAME guard_stack MoveTo's own moveto_leg branch above
+            # reads (it's built identically for every leaf by
+            # _translate_node's ReactiveSequence/ReactiveFallback
+            # branch, not specially for MoveTo), RESTRICTED to battery-
+            # only conditions for the SAME reason manual triggers are
+            # restricted above: {tag} never moves, so a left-sibling
+            # Condition testing robot position/obstacles has no
+            # meaningful "does it still hold at time T" question to ask
+            # here. This is a HARD error (unlike the battery_enabled
+            # filter just below it), independent of battery_enabled --
+            # a motion-based guard can never be supported here, whereas
+            # a battery-based one merely goes unused while battery
+            # modeling is off, same as MoveTo's own guards do. Reuses
+            # basic_action_theory.pl's own guard_break(Cond,Code)
+            # trigger, backed by tool_holds_leg/tool_first_becomes_
+            # false_time -- the battery-only twin of holds_leg/first_
+            # becomes_false_time the moving phase uses (see that file's
+            # own note on why they can't just be the same predicate).
+            non_battery_guards = [
+                cond_term for cond_term, _code in guard_stack
+                if not _guard_condition_is_battery_only(cond_term)
+            ]
+            if non_battery_guards:
+                raise BTValidationError(
+                    f"<{tag}> sits under a ReactiveSequence/ReactiveFallback "
+                    f"whose left sibling(s) reduce to {non_battery_guards} -- "
+                    f"{tag} never moves the robot, so an auto-derived guard "
+                    f"here must be battery-related (battery_below(...), "
+                    f"battery_equal(...), battery_over(...), optionally "
+                    f"negated via <Inverter>), same restriction as its own "
+                    f"triggers port. Move this {tag} out from under that "
+                    f"left sibling, or replace the sibling with a "
+                    f"battery-only Condition.")
+            derived_tokens = [
+                f"guard_break({cond_term},{code})"
+                for cond_term, code in guard_stack
+                if battery_enabled or not _guard_condition_mentions_battery(cond_term)
+            ]
+
             # Universal hazard -- ALWAYS battery (the fixed 0%-depletion
             # one), only when this problem models battery at all -- the
             # SAME "not something the tree author has to write" default
@@ -910,7 +982,7 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             # (never meaningful here).
             default_tokens = ["battery"] if battery_enabled else []
 
-            triggers = "[" + ",".join(default_tokens + tagged_manual) + "]"
+            triggers = "[" + ",".join(default_tokens + tagged_manual + derived_tokens) + "]"
             action_code = var_pool.next_action_code()
 
             # Tool is LITERAL here (known at translation time, like
@@ -923,6 +995,10 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             reason_patterns += [_reason_pattern_for_manual_trigger(t) for t in default_tokens]
             reason_patterns += [_reason_pattern_for_manual_trigger(t) for t in manual_tokens
                                  if t.split("(", 1)[0].strip() != "battery"]
+            # guard_break's own pattern, same treatment as MoveTo's own
+            # moveto_leg branch above -- see that one's own note.
+            reason_patterns += [f"guard_break({cond_term})" for cond_term, _code in guard_stack
+                                 if battery_enabled or not _guard_condition_mentions_battery(cond_term)]
             var_pool.reason_patterns_by_action[action_code] = reason_patterns
             var_pool.action_labels[action_code] = _with_branch_suffix(f"{tag}({tool})", branch_name)
 

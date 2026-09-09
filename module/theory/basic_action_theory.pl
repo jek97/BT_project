@@ -944,6 +944,28 @@ first_tool_battery_equal_time(T0,Duration,B0,Zb,Threshold,Tcross) :-
 first_tool_battery_over_time(T0,_Duration,B0,_Zb,Threshold,T0) :-
     B0 > Threshold.
 
+% tool_battery_at_leg(+T0,+Duration,+Zb,+B0,+T,-Level): Level(T) during
+% ONE install_tool/uninstall_tool leg, as a function of T alone -- the
+% EXACT SAME formula as battery/3's own do(start_install_tool(...),S)/
+% do(start_uninstall_tool(...),S) clauses above (leg_start_battery
+% (T0,S,B0) resolved to a plain value, not re-derived from S), just
+% without S -- the install_tool/uninstall_tool analogue of battery_at_
+% leg/6 above, idle_drain_rate in place of moving_drain_rate, used by
+% tool_holds_leg/6 below (in turn used ONLY by tool_first_becomes_
+% false_time/6's own guard_break search -- see the TOOL TRIGGERS
+% section further down). MUST be kept in sync BY HAND with battery/3's
+% own do(start_install_tool(...),S)/do(start_uninstall_tool(...),S)
+% clauses, same caveat battery_at_leg/6 itself carries.
+tool_battery_at_leg(T0,Duration,Zb,B0,T,Level) :-
+    Elapsed0 is T - T0,
+    Elapsed is max(0.0, min(Elapsed0, Duration)),
+    idle_drain_rate(IdleRate),
+    sigma_battery(SigmaB),
+    Deviation is Zb * SigmaB * Elapsed / sqrt(Duration),
+    NominalDrain is IdleRate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B0 - TotalDrain)).
+
 % ---------------------------------------------------------------
 % TRIGGERS -- the TEMPLATE mechanism. A leg's Triggers argument is
 % the COMPLETE list of halting conditions this leg reacts to --
@@ -1207,6 +1229,47 @@ earliest_of([R1-T1-C1|Rest], Result) :-
 % "never fires". No new special-casing anywhere: this is the SAME
 % graceful-absence idiom used throughout this theory, just arrived at
 % by a SMALLER trigger vocabulary rather than an explicit guard.
+%
+% guard_break(Cond,Code) is the install_tool/uninstall_tool analogue of
+% trigger_crossing_time/11's own guard_break clause -- see the module
+% docstring's CONTROL-FLOW GUARD DERIVATION note in bt_to_prolog.py,
+% now extended to these two actions as well as MoveTo. It reuses
+% tool_first_becomes_false_time/6 below, the battery-only twin of
+% first_becomes_false_time/9 (which itself needs CP/Z/Zt for its own
+% motion-based holds_leg/9 clauses -- meaningless here, same reason
+% the trigger clauses above have no motion-based counterpart at all).
+% bt_to_prolog.py enforces at translation time that Cond can ONLY ever
+% be a battery_below/equal/over term (optionally neg-wrapped) for these
+% two actions (see its own _guard_condition_is_battery_only). tool_
+% cond_supported/1 is the SAME "unrecognized = contributes nothing"
+% defense-in-depth the trigger clauses above get from tool_trigger_
+% crossing_time simply having no matching clause -- guard_break can't
+% get that for free the same way (it has exactly ONE clause, covering
+% every possible Cond shape, not one clause per recognized name), so it
+% needs this EXPLICIT gate instead: without it, a hand-written plan_
+% generated.pl (bypassing translator validation, same as problem3's
+% own) supplying some OTHER Cond would make tool_holds_leg/6 have no
+% matching clause for it, which tool_first_becomes_false_time/6's own
+% first clause would misread as "already false at T0" -- firing
+% IMMEDIATELY instead of never, the opposite of "contributes nothing."
+tool_trigger_crossing_time(guard_break(Cond,Code), T0,Duration,Zb,B0, guard_break(Cond), Tcross, Code) :-
+    tool_cond_supported(Cond),
+    tool_first_becomes_false_time(Cond,T0,Duration,Zb,B0,Tcross).
+
+% tool_cond_supported(+Cond): TRUE iff every leaf inside Cond (through
+% and/or/neg composition -- the ONLY composition _reduce_guard_
+% condition can ever emit today, see its own scope note) is one
+% tool_holds_leg/6 actually has a clause for. Kept as its OWN predicate
+% (mirroring Cond's structure) rather than inlined into the guard_break
+% clause above, so tool_holds_leg/6 and this stay trivially in sync by
+% eye -- add a battery_* clause to one, add its matching fact here.
+tool_cond_supported(and(P,Q)) :- tool_cond_supported(P), tool_cond_supported(Q).
+tool_cond_supported(or(P,Q)) :- tool_cond_supported(P), tool_cond_supported(Q).
+tool_cond_supported(neg(P)) :- tool_cond_supported(P).
+tool_cond_supported(battery_below(_)).
+tool_cond_supported(battery_equal(_)).
+tool_cond_supported(battery_over(_)).
+
 tool_trigger_crossing_time(battery, T0,Duration,Zb,B0, battery_depleted, Tcross, none) :-
     first_tool_battery_depletion_time(T0,Duration,B0,Zb,Tcross).
 tool_trigger_crossing_time(battery_below(Threshold,Code), T0,Duration,Zb,B0, battery_under(Threshold), Tcross, Code) :-
@@ -1223,6 +1286,90 @@ all_tool_trigger_candidates([Trig|Rest], T0,Duration,Zb,B0, [Reason-Tcross-Code|
 all_tool_trigger_candidates([Trig|Rest], T0,Duration,Zb,B0, RestCands) :-
     \+ tool_trigger_crossing_time(Trig, T0,Duration,Zb,B0, _,_,_),
     all_tool_trigger_candidates(Rest, T0,Duration,Zb,B0, RestCands).
+
+% ---------------------------------------------------------------
+% tool_holds_leg/6: the install_tool/uninstall_tool analogue of holds_
+% leg/9 above -- BATTERY-ONLY (see tool_cond_supported/1's own note on
+% why that's enforced one level up, not by this predicate silently
+% having no clause), over the SAME restricted (T0,Duration,Zb,B0)
+% signature tool_trigger_crossing_time/8 already uses -- no CP/Z/Zt at
+% all, since a motion-based Cond can never reach here (tool_cond_
+% supported/1 rejects it before tool_first_becomes_false_time/6 ever
+% calls this). and/or/neg stay fully generic, same clauses as holds_
+% leg/9's own (Cond composition doesn't care which leaf family it's
+% built from); battery_below/equal/over use tool_battery_at_leg/6
+% (idle_drain_rate, Duration-normalized) instead of battery_at_leg/6
+% (moving_drain_rate) -- the SAME substitution tool_trigger_crossing_
+% time/8's own battery clauses already make relative to trigger_
+% crossing_time/11's.
+tool_holds_leg(and(P,Q), T0,Duration,Zb,B0,T) :-
+    tool_holds_leg(P,T0,Duration,Zb,B0,T), tool_holds_leg(Q,T0,Duration,Zb,B0,T).
+tool_holds_leg(or(P,Q), T0,Duration,Zb,B0,T) :-
+    tool_holds_leg(P,T0,Duration,Zb,B0,T) ; tool_holds_leg(Q,T0,Duration,Zb,B0,T).
+tool_holds_leg(neg(P), T0,Duration,Zb,B0,T) :-
+    \+ tool_holds_leg(P,T0,Duration,Zb,B0,T).
+
+tool_holds_leg(battery_below(Threshold), T0,Duration,Zb,B0,T) :-
+    tool_battery_at_leg(T0,Duration,Zb,B0,T,Level), Level < Threshold.
+tool_holds_leg(battery_equal(Threshold), T0,Duration,Zb,B0,T) :-
+    tool_battery_at_leg(T0,Duration,Zb,B0,T,Level), Level =:= Threshold.
+tool_holds_leg(battery_over(Threshold), T0,Duration,Zb,B0,T) :-
+    tool_battery_at_leg(T0,Duration,Zb,B0,T,Level), Level > Threshold.
+
+% tool_first_becomes_false_time(+Cond,+T0,+Duration,+Zb,+B0,-Tcross):
+% the install_tool/uninstall_tool analogue of first_becomes_false_
+% time/9 above -- SAME two-mutually-exclusive-clauses shape (already
+% false at T0 / genuine bracket-scan+bisect search), SAME bracket_
+% samples/1 and crossing_eps/1 config knobs, just over tool_holds_leg/6
+% instead of holds_leg/9 and with no CP/Z/Zt to thread through. Only
+% ever called (via tool_trigger_crossing_time/8's own guard_break
+% clause) after tool_cond_supported/1 has already confirmed Cond is
+% battery-only, so tool_holds_leg/6 is guaranteed a matching clause at
+% every T this predicate ever queries it at -- see tool_cond_
+% supported/1's own note on why that gate exists.
+tool_first_becomes_false_time(Cond,T0,Duration,Zb,B0,T0) :-
+    \+ tool_holds_leg(Cond,T0,Duration,Zb,B0,T0).
+tool_first_becomes_false_time(Cond,T0,Duration,Zb,B0,Tcross) :-
+    tool_holds_leg(Cond,T0,Duration,Zb,B0,T0),
+    bracket_samples(N),
+    TEnd is T0 + Duration,
+    tool_guard_bracket_scan(Cond,T0,Duration,Zb,B0,N,1,TEnd,T0,Tlo,Thi),
+    crossing_eps(Eps),
+    tool_guard_bisect(Cond,T0,Duration,Zb,B0,Eps,Tlo,Thi,Tcross).
+
+% tool_guard_bracket_scan/10, tool_guard_bisect/9: the install_tool/
+% uninstall_tool analogues of guard_bracket_scan/12 and guard_bisect/12
+% above -- IDENTICAL algorithm (forward scan to find a true->false
+% bracket, then bisect it down to crossing_eps/1, reporting the FALSE
+% end same as every other first_*_time predicate's own "never let
+% approximation look safer than reality" convention), just calling
+% tool_holds_leg/6 and with no CP/Z/Zt to thread through.
+tool_guard_bracket_scan(Cond,T0,Duration,Zb,B0,N,I,TEnd,Tprev,Tlo,Thi) :-
+    I =< N,
+    Ti is T0 + (TEnd-T0) * I / N,
+    tool_holds_leg(Cond,T0,Duration,Zb,B0,Ti),
+    I1 is I + 1,
+    tool_guard_bracket_scan(Cond,T0,Duration,Zb,B0,N,I1,TEnd,Ti,Tlo,Thi).
+tool_guard_bracket_scan(Cond,T0,Duration,Zb,B0,N,I,TEnd,Tprev,Tprev,Ti) :-
+    I =< N,
+    Ti is T0 + (TEnd-T0) * I / N,
+    \+ tool_holds_leg(Cond,T0,Duration,Zb,B0,Ti).
+
+tool_guard_bisect(Cond,T0,Duration,Zb,B0,Eps,Tlo,Thi,Thi) :-
+    Width is Thi - Tlo,
+    Width =< Eps.
+tool_guard_bisect(Cond,T0,Duration,Zb,B0,Eps,Tlo,Thi,Tcross) :-
+    Width is Thi - Tlo,
+    Width > Eps,
+    Tmid is (Tlo + Thi) / 2,
+    tool_holds_leg(Cond,T0,Duration,Zb,B0,Tmid),
+    tool_guard_bisect(Cond,T0,Duration,Zb,B0,Eps,Tmid,Thi,Tcross).
+tool_guard_bisect(Cond,T0,Duration,Zb,B0,Eps,Tlo,Thi,Tcross) :-
+    Width is Thi - Tlo,
+    Width > Eps,
+    Tmid is (Tlo + Thi) / 2,
+    \+ tool_holds_leg(Cond,T0,Duration,Zb,B0,Tmid),
+    tool_guard_bisect(Cond,T0,Duration,Zb,B0,Eps,Tlo,Tmid,Tcross).
 
 % tool_earliest_halt(+Triggers,+T0,+Duration,+Zb,+B0, -Reason,-T,-Code):
 % the install_tool/uninstall_tool analogue of earliest_halt/11 above --

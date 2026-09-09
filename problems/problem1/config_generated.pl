@@ -34,4 +34,7 @@ disc_step_time(20).
 0.5::zbatt(0.0) ;
 0.25::zbatt(1.0).
 
+0.5::sample_result(S,ActionCode,true) ;
+0.5::sample_result(S,ActionCode,false).
+
 query(any_battery_depletion).

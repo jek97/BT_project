@@ -146,6 +146,12 @@ _ACTION_DISPATCH = {
     # per schema entry -- see _PLAN_ALGORITHMS below and the "planWith"
     # kind's own branch in _translate_leaf.
     "PlanWith": {"kind": "planWith"},
+    # take_sample(ActionCode) -- INSTANTANEOUS, no ports at all (see
+    # schema.yaml's own TakeSample entry): unlike MoveTo/PlanWith,
+    # nothing about its own Reason universe depends on this occurrence's
+    # own attributes, so its "kind" branch in _translate_leaf below
+    # needs no attrs at all beyond assigning it a fresh ActionCode.
+    "TakeSample": {"kind": "take_sample"},
 }
 
 # The only valid values for PlanWith's own `algorithm` port. astar/
@@ -779,6 +785,24 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             var_pool.action_labels[action_code] = _with_branch_suffix(plan_label, branch_name)
 
             return f"planWith({algorithm_term},{goal_term},{cp_var},{action_code})"
+
+        if info["kind"] == "take_sample":
+            # No ports to read at all (schema.yaml declares none) --
+            # the reason universe is FIXED, the same two patterns for
+            # every occurrence, unlike MoveTo (depends on Triggers) or
+            # PlanWith (depends on algorithm/goal). 'wild' for X,Y --
+            # both are only ever known at RUNTIME (the robot's actual
+            # position when this action ran), same "known only at
+            # runtime -> wild, not a genuine variable" rule
+            # _reason_pattern_for_manual_trigger's own note documents
+            # for an argmin ObstacleId.
+            action_code = var_pool.next_action_code()
+            var_pool.reason_patterns_by_action[action_code] = [
+                "sample_success(wild,wild)",
+                "sample_failure(wild,wild)",
+            ]
+            var_pool.action_labels[action_code] = _with_branch_suffix("TakeSample", branch_name)
+            return f"take_sample({action_code})"
 
     if tag in _CONDITION_DISPATCH:
         condition_code = var_pool.next_condition_code()

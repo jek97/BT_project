@@ -1402,6 +1402,56 @@ do_action(A, S, do(A,S)) :- primitive_action(A), poss(A, S).
 do_node(cond(C,Code), S, do(checked(Code,C,true), S), true)  :- holds(C, S).
 do_node(cond(C,Code), S, do(checked(Code,C,false),S), false) :- \+ holds(C, S).
 
+% -- ACTION leaf: take_sample -------------------------------------------
+% take_sample(ActionCode) -- INSTANTANEOUS, like PlanWith (see that
+% do_node clause's own note): no primitive_action, no Poss, no
+% Duration/Triggers/continuous trajectory of any kind, just a single
+% do(...) layer recording the outcome. UNLIKE cond(C,Code) above,
+% though, this outcome is NOT determined by the current situation at
+% all -- it's a genuine new probabilistic choice, sample_result/3
+% (this problem's own config.yaml, sample.success_probability -- see
+% config_generated.pl), an annotated disjunction keyed by (S,
+% ActionCode): a FRESH draw for a genuinely new situation, but the
+% SAME cached draw if the exact same (S,ActionCode) pair is ever
+% re-derived (e.g. two upstream noise realizations that landed on the
+% same merge-grid-quantized point before reaching this node) -- same
+% "keyed on the situation term" convention z/2 and zt/2 already use
+% for their own per-startMoveto draws, so "does the same PHYSICAL
+% STATE always sample the same way" is emphatically NOT what this
+% guarantees; only an identical SITUATION TERM does.
+%
+% X,Y (the robot's own CURRENT position, at/4, already resolved -- no
+% further noise of its own here) is baked directly into the Reason,
+% sample_success(X,Y) or sample_failure(X,Y), then tagged with
+% ActionCode via the SAME generic tag_reason/3 haltMoveto/PlanWith
+% already use -- giving sample_success(X,Y,ActionCode)/sample_failure
+% (X,Y,ActionCode), the standard "trailing ActionCode" Reason shape
+% every other action in this theory produces. This still needed its
+% OWN dedicated clauses at every "outermost do(...) layer" pattern-
+% match site -- halted_with/2 (halted_with(Reason,do(sampled(Reason),
+% _))) and outcome_entry/2, mirroring haltMoveto/planned's own
+% clauses at each -- verified directly (a standalone ProbLog run
+% caught any_reason_pattern(sample_success(wild,wild)) silently
+% reading 0% before this clause was added: halted_with/2's own
+% GENERIC do(_A,S) clause only SKIPS an unrecognized marker while
+% searching deeper, it does not also try to unify Reason against
+% whatever's inside it, so this doesn't come "for free" the way
+% at/4/battery/3/moving/1/now/2's OWN generic pass-through clauses do
+% for a bare marker with no Reason of its own to extract). Once
+% halted_with/2 sees it, any_reason_pattern(_by_action) and the
+% outcome-enumeration table (outcome_entry/2's own new clause below)
+% both work correctly with no further changes. See also
+% sample_success_at/3 further down, for querying WHERE a successful
+% sample landed.
+do_node(take_sample(ActionCode), S, do(sampled(Reason),S), true) :-
+    now(T, S), at(X,Y,T,S),
+    sample_result(S, ActionCode, true),
+    tag_reason(sample_success(X,Y), ActionCode, Reason).
+do_node(take_sample(ActionCode), S, do(sampled(Reason),S), false) :-
+    now(T, S), at(X,Y,T,S),
+    sample_result(S, ActionCode, false),
+    tag_reason(sample_failure(X,Y), ActionCode, Reason).
+
 % -- ACTION leaf --------------------------------------------------------
 % moveto_leg(CP,Triggers) -- Triggers is ALWAYS given explicitly here;
 % there is deliberately NO sugar/default form (no moveto_leg/1, no
@@ -2194,6 +2244,10 @@ outcome_entry(planned(_,Reason), Code-Pattern) :-
     append(Args0, [Code], Args),
     Pattern =.. [Functor|Args0].
 outcome_entry(checked(Code,_,Status), Code-Status).
+outcome_entry(sampled(Reason), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
 
 % history_outcomes(+S, -Entries): every outcome_entry/2 found ANYWHERE
 % in S's own history, oldest-first -- the one GENERIC pass behind
@@ -2347,6 +2401,7 @@ sample_walk_frac(I, S, WalkFrac) :-
 % fate than the final one is still handled correctly.
 halted_with(Reason, do(haltMoveto(_,Reason,_), _)).
 halted_with(Reason, do(planned(_Algorithm,Reason), _)).
+halted_with(Reason, do(sampled(Reason), _)).
 halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 
 % visited(+Loc, +Tol, +S): TRUE iff the robot ACTUALLY ARRIVED at
@@ -2387,6 +2442,21 @@ visited(point(GX,GY), Tol, do(haltMoveto(T,completed(_ActionCode),true), S)) :-
     dist(X,Y,GX,GY,D),
     D =< Tol.
 visited(Loc, Tol, do(_A, S)) :- visited(Loc, Tol, S).
+
+% sample_success_at(+Loc,+Tol,+S): the take_sample analogue of
+% visited/3 above -- TRUE iff SOME take_sample action SUCCEEDED
+% (Reason=sample_success(X,Y,_ActionCode) -- see do_node(take_sample
+% (...)) further up) anywhere in S's history, at a recorded position
+% within Tol of Loc=point(GX,GY). Same monotonic, whole-history-search
+% shape as visited/3 (once true for a situation, true for every
+% situation built on top of it), so "did you take the sample at THESE
+% locations" is exactly "sample_success_at(point(GX1,GY1),Tol,S),
+% sample_success_at(point(GX2,GY2),Tol,S), ..." in a goal formula --
+% one conjunct per location, same idiom multi-waypoint goal formulas
+% already use for visited/3.
+sample_success_at(point(GX,GY), Tol, do(sampled(sample_success(X,Y,_ActionCode)), _S)) :-
+    dist(X,Y,GX,GY,D), D =< Tol.
+sample_success_at(Loc, Tol, do(_A, S)) :- sample_success_at(Loc, Tol, S).
 
 % -- crashed_in(S) / battery_depleted_in(S) / obstacle_in_bound_in(S) /
 %    battery_under_in(S): trivial one-liners reading the actual Reason,
@@ -2620,6 +2690,7 @@ any_condition_status(Code, Status) :-
 holds(last_halt(Reason), do(haltMoveto(_T,Reason,_Status),_SPrev)).
 holds(last_halt(Reason), do(checked(_,_,_), S)) :- holds(last_halt(Reason), S).
 holds(last_halt(Reason), do(planned(_,_), S)) :- holds(last_halt(Reason), S).
+holds(last_halt(Reason), do(sampled(_), S)) :- holds(last_halt(Reason), S).
 
 % KNOWN LIMITATION, found while adding cond(C,Code)'s own checked(...)
 % marker (Option B): cond(neg(last_halt(...))) -- problem3's OWN Bug0

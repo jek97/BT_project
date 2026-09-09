@@ -663,12 +663,89 @@ battery(Level, T, do(interrupt(T1), S)) :-
     noisy_drain(NominalDrain, Deviation, TotalDrain),
     Level is max(0, min(100, B1 - TotalDrain)).
 
-% pass-through: any future non-movement action doesn't change how
-% battery is computed -- it's a pure function of T and of whichever
-% startMoveto/haltMoveto/interrupt anchors exist in the history, same
-% principle as at/4's own pass-through clause.
+% install_tool/uninstall_tool: OWN Duration-normalized anchor clauses,
+% EXACTLY mirroring startMoveto/haltMoveto above -- idle_drain_rate in
+% place of moving_drain_rate, install_tool_duration(Tool,Duration) (or
+% uninstall_tool_duration(Tool,Duration)) in place of walk_duration
+% (CP,Duration). Even though install_tool/uninstall_tool never move
+% the robot, each one is still a FIXED-DURATION leg exactly like a
+% MoveTo leg is -- so it gets the SAME "nominal drain minus a
+% Duration-normalized signed deviation" treatment that keeps Level
+% EXACTLY LINEAR in elapsed time within the leg (needed for first_
+% tool_battery_depletion_time's own closed-form algebraic solve below,
+% same reason startMoveto's own comment gives), rather than the open-
+% ended sqrt(Elapsed) idle formula the post-halt clauses below (and
+% interrupt's) use -- that one is for a genuinely UNBOUNDED wait, where
+% no Duration is known ahead of time, which is not the case here. The
+% post-halt clauses are themselves an EXACT copy of haltMoveto's own
+% post-halt clause (new idle anchor at the halt instant, idle drain
+% resumes from there) -- once the leg ends the robot is just idle
+% again, no different from after a walk halts.
+battery(Level, T, do(start_install_tool(Tool,_Triggers,_ActionCode,T0), S)) :-
+    leg_start_battery(T0, S, B0),
+    install_tool_duration(Tool, Duration),
+    Elapsed0 is T - T0,
+    Elapsed is max(0.0, min(Elapsed0, Duration)),
+    idle_drain_rate(IdleRate),
+    sigma_battery(SigmaB),
+    zbatt(Zb),
+    Deviation is Zb * SigmaB * Elapsed / sqrt(Duration),
+    NominalDrain is IdleRate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B0 - TotalDrain)).
+
+battery(Level, T, do(halt_install_tool(T1,Reason,Status), S)) :-
+    T =< T1,
+    battery(Level, T, S).
+battery(Level, T, do(halt_install_tool(T1,Reason,Status), S)) :-
+    T > T1,
+    battery(B1, T1, S),
+    idle_drain_rate(IdleRate),
+    sigma_battery(SigmaB),
+    zbatt(Zb),
+    Elapsed is T - T1,
+    Deviation is Zb * SigmaB * sqrt(Elapsed),
+    NominalDrain is IdleRate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B1 - TotalDrain)).
+
+battery(Level, T, do(start_uninstall_tool(Tool,_Triggers,_ActionCode,T0), S)) :-
+    leg_start_battery(T0, S, B0),
+    uninstall_tool_duration(Tool, Duration),
+    Elapsed0 is T - T0,
+    Elapsed is max(0.0, min(Elapsed0, Duration)),
+    idle_drain_rate(IdleRate),
+    sigma_battery(SigmaB),
+    zbatt(Zb),
+    Deviation is Zb * SigmaB * Elapsed / sqrt(Duration),
+    NominalDrain is IdleRate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B0 - TotalDrain)).
+
+battery(Level, T, do(halt_uninstall_tool(T1,Reason,Status), S)) :-
+    T =< T1,
+    battery(Level, T, S).
+battery(Level, T, do(halt_uninstall_tool(T1,Reason,Status), S)) :-
+    T > T1,
+    battery(B1, T1, S),
+    idle_drain_rate(IdleRate),
+    sigma_battery(SigmaB),
+    zbatt(Zb),
+    Elapsed is T - T1,
+    Deviation is Zb * SigmaB * sqrt(Elapsed),
+    NominalDrain is IdleRate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B1 - TotalDrain)).
+
+% pass-through: any future non-movement, non-tool action doesn't change
+% how battery is computed -- it's a pure function of T and of whichever
+% startMoveto/haltMoveto/interrupt/start_install_tool/halt_install_tool/
+% start_uninstall_tool/halt_uninstall_tool anchors exist in the
+% history, same principle as at/4's own pass-through clause.
 battery(Level, T, do(A,S)) :-
     A \= startMoveto(_,_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
+    A \= start_install_tool(_,_,_,_), A \= halt_install_tool(_,_,_),
+    A \= start_uninstall_tool(_,_,_,_), A \= halt_uninstall_tool(_,_,_),
     battery(Level, T, S).
 
 % first_battery_depletion_time(+CP,+T0,+Duration,+B0,+Zb,-Tcross):
@@ -798,90 +875,73 @@ battery_at_leg(T0,Duration,Zb,B0,T,Level) :-
     noisy_drain(NominalDrain, Deviation, TotalDrain),
     Level is max(0, min(100, B0 - TotalDrain)).
 
-% -- IDLE-PHASE battery crossing time -- install_tool/uninstall_tool's
+% -- TOOL-LEG battery crossing time -- install_tool/uninstall_tool's
 %    OWN battery-trigger family (see the TOOL TRIGGERS section further
-%    down), NOT a generalization of first_battery_depletion_time/
+%    down). Each one is a FIXED-DURATION leg exactly like a MoveTo leg
+%    is (install_tool_duration/uninstall_tool_duration, not open-ended
+%    idle wait), and now gets battery/3's own Duration-normalized
+%    anchor clause to match (see do(start_install_tool(...),S)/do(halt_
+%    install_tool(...),S) above) -- so these four predicates are the
+%    SAME closed-form LINEAR mechanism as first_battery_depletion_time/
 %    first_battery_below_time/first_battery_equal_time/first_battery_
-%    over_time above: those are the MOVING-phase formula specifically
-%    (moving_drain_rate, Elapsed/sqrt(Duration) scaling -- exactly
-%    linear in Elapsed, hence a direct linear solve). install_tool/
-%    uninstall_tool never move the robot -- battery/3's own generic
-%    pass-through clause means the IDLE-phase formula (idle_drain_rate,
-%    sqrt(Elapsed) scaling -- battery/3's own s0/after-halt/after-
-%    interrupt clauses) is what ALREADY governs battery throughout
-%    their span, with NO changes needed to battery/3 itself (see
-%    do_node(install_tool_leg(...))'s own note). Solving Level(T)=
-%    Threshold under sqrt(Elapsed) scaling is NOT linear in Elapsed --
-%    it's a QUADRATIC in sqrt(Elapsed) -- still genuinely CLOSED-FORM
-%    (not bracket-scan+bisection), just one degree higher:
-%        IdleRate*Elapsed - Zb*SigmaB*sqrt(Elapsed) = B0-Threshold
-%    Substituting X = sqrt(Elapsed) turns this into the plain quadratic
-%    IdleRate*X^2 - Zb*SigmaB*X - (B0-Threshold) = 0, solved by the
-%    standard quadratic formula, positive root only (the OTHER root is
-%    provably non-positive whenever B0-Threshold > 0: the two roots'
-%    product is -(B0-Threshold)/IdleRate < 0, so they have opposite
-%    signs -- there is exactly one valid non-negative solution, always
-%    the "+" root, regardless of Zb's own sign). No CP argument at all
-%    (unlike the moving-phase family above, which threads one through
-%    unused) -- there is no path to thread through for an action that
-%    never moves.
-first_idle_battery_depletion_time(T0,_Duration,B0,_Zb,T0) :-
-    B0 =< 0.
-first_idle_battery_depletion_time(T0,Duration,B0,Zb,Tcross) :-
-    B0 > 0,
+%    over_time above, just idle_drain_rate in place of moving_drain_
+%    rate. Duration is passed straight in (install_tool_duration(Tool,
+%    Duration)/uninstall_tool_duration(Tool,Duration) resolved at the
+%    call site, see poss(halt_install_tool(...))/poss(halt_uninstall_
+%    tool(...))) rather than looked up from a CP -- no CP argument at
+%    all (unlike the moving-phase family above, which threads one
+%    through unused), there is no path to thread through for an action
+%    that never moves.
+first_tool_battery_depletion_time(T0,Duration,B0,Zb,Tcross) :-
     idle_drain_rate(IdleRate),
     sigma_battery(SigmaB),
-    Disc is (Zb*SigmaB)**2 + 4*IdleRate*B0,
-    X is (Zb*SigmaB + sqrt(Disc)) / (2*IdleRate),
-    Elapsed is X*X,
-    Tcross0 is T0 + Elapsed,
+    EffectiveRate is IdleRate - Zb*SigmaB/sqrt(Duration),
+    EffectiveRate > 0,
+    Tcross0 is T0 + B0/EffectiveRate,
     Tcross0 =< T0 + Duration,
     Tcross = Tcross0.
 
-% first_idle_battery_below_time/6: the SAME "already true at T0" grace
+% first_tool_battery_below_time/6: the SAME "already true at T0" grace
 % clause first_battery_below_time/7 (moving-phase) has, generalized to
 % an arbitrary Threshold instead of hardcoded Level=0 -- see that
 % predicate's own note for why the grace clause is needed here but not
 % for plain depletion.
-first_idle_battery_below_time(T0,_Duration,B0,_Zb,Threshold,T0) :-
+first_tool_battery_below_time(T0,_Duration,B0,_Zb,Threshold,T0) :-
     B0 =< Threshold.
-first_idle_battery_below_time(T0,Duration,B0,Zb,Threshold,Tcross) :-
+first_tool_battery_below_time(T0,Duration,B0,Zb,Threshold,Tcross) :-
     B0 > Threshold,
     idle_drain_rate(IdleRate),
     sigma_battery(SigmaB),
-    D is B0 - Threshold,
-    Disc is (Zb*SigmaB)**2 + 4*IdleRate*D,
-    X is (Zb*SigmaB + sqrt(Disc)) / (2*IdleRate),
-    Elapsed is X*X,
-    Tcross0 is T0 + Elapsed,
+    EffectiveRate is IdleRate - Zb*SigmaB/sqrt(Duration),
+    EffectiveRate > 0,
+    Tcross0 is T0 + (B0-Threshold)/EffectiveRate,
     Tcross0 =< T0 + Duration,
     Tcross = Tcross0.
 
-% first_idle_battery_equal_time/6: mirrors first_battery_equal_time/7
+% first_tool_battery_equal_time/6: mirrors first_battery_equal_time/7
 % (moving-phase) EXACTLY -- exact-equality grace at T0, NO "already
 % below" grace (see that predicate's own note for why: already-below
 % means it passed through Threshold at an earlier, already-elapsed
 % instant this action never sees).
-first_idle_battery_equal_time(T0,_Duration,B0,_Zb,Threshold,T0) :-
+first_tool_battery_equal_time(T0,_Duration,B0,_Zb,Threshold,T0) :-
     B0 =:= Threshold.
-first_idle_battery_equal_time(T0,Duration,B0,Zb,Threshold,Tcross) :-
+first_tool_battery_equal_time(T0,Duration,B0,Zb,Threshold,Tcross) :-
     B0 > Threshold,
     idle_drain_rate(IdleRate),
     sigma_battery(SigmaB),
-    D is B0 - Threshold,
-    Disc is (Zb*SigmaB)**2 + 4*IdleRate*D,
-    X is (Zb*SigmaB + sqrt(Disc)) / (2*IdleRate),
-    Elapsed is X*X,
-    Tcross0 is T0 + Elapsed,
+    EffectiveRate is IdleRate - Zb*SigmaB/sqrt(Duration),
+    EffectiveRate > 0,
+    Tcross0 is T0 + (B0-Threshold)/EffectiveRate,
     Tcross0 =< T0 + Duration,
     Tcross = Tcross0.
 
-% first_idle_battery_over_time/6: mirrors first_battery_over_time/7's
+% first_tool_battery_over_time/6: mirrors first_battery_over_time/7's
 % own "already true at T0, no future clause written" shape and
 % rationale EXACTLY (battery only ever drains under noisy_drain/3's own
-% clamp, moving OR idle phase alike, so there is nothing for a future-
-% crossing clause to compute today -- see that predicate's own note).
-first_idle_battery_over_time(T0,_Duration,B0,_Zb,Threshold,T0) :-
+% clamp, moving OR tool-leg phase alike, so there is nothing for a
+% future-crossing clause to compute today -- see that predicate's own
+% note).
+first_tool_battery_over_time(T0,_Duration,B0,_Zb,Threshold,T0) :-
     B0 > Threshold.
 
 % ---------------------------------------------------------------
@@ -1135,24 +1195,26 @@ earliest_of([R1-T1-C1|Rest], Result) :-
 % "return an infinite crossing time" -- rather than error or attempt a
 % nonsensical geometry check. tool_trigger_crossing_time/8 below
 % achieves exactly this BY OMISSION: it has a clause ONLY for the
-% battery-related trigger names (using the IDLE-phase closed-form
-% family above, NOT the moving-phase trigger_crossing_time/11's own
-% battery clauses -- see those predicates' own note on why the two
-% differ), so any OTHER trigger name has no matching clause at all,
-% and all_tool_trigger_candidates/6's own third clause -- the EXACT
-% same "unrecognized trigger, silently skipped" convention all_trigger_
-% candidates/9 already uses -- treats that identically to "never
-% fires". No new special-casing anywhere: this is the SAME graceful-
-% absence idiom used throughout this theory, just arrived at by a
-% SMALLER trigger vocabulary rather than an explicit guard.
+% battery-related trigger names (using the TOOL-LEG closed-form family
+% above -- the SAME Duration-normalized linear mechanism as trigger_
+% crossing_time/11's own moving-phase battery clauses, idle_drain_rate
+% in place of moving_drain_rate, since battery/3 now anchors install_
+% tool/uninstall_tool the same way it anchors a walk -- see those
+% predicates' own note), so any OTHER trigger name has no matching
+% clause at all, and all_tool_trigger_candidates/6's own third clause
+% -- the EXACT same "unrecognized trigger, silently skipped" convention
+% all_trigger_candidates/9 already uses -- treats that identically to
+% "never fires". No new special-casing anywhere: this is the SAME
+% graceful-absence idiom used throughout this theory, just arrived at
+% by a SMALLER trigger vocabulary rather than an explicit guard.
 tool_trigger_crossing_time(battery, T0,Duration,Zb,B0, battery_depleted, Tcross, none) :-
-    first_idle_battery_depletion_time(T0,Duration,B0,Zb,Tcross).
+    first_tool_battery_depletion_time(T0,Duration,B0,Zb,Tcross).
 tool_trigger_crossing_time(battery_below(Threshold,Code), T0,Duration,Zb,B0, battery_under(Threshold), Tcross, Code) :-
-    first_idle_battery_below_time(T0,Duration,B0,Zb,Threshold,Tcross).
+    first_tool_battery_below_time(T0,Duration,B0,Zb,Threshold,Tcross).
 tool_trigger_crossing_time(battery_equal(Threshold,Code), T0,Duration,Zb,B0, battery_equal(Threshold), Tcross, Code) :-
-    first_idle_battery_equal_time(T0,Duration,B0,Zb,Threshold,Tcross).
+    first_tool_battery_equal_time(T0,Duration,B0,Zb,Threshold,Tcross).
 tool_trigger_crossing_time(battery_over(Threshold,Code), T0,Duration,Zb,B0, battery_over(Threshold), Tcross, Code) :-
-    first_idle_battery_over_time(T0,Duration,B0,Zb,Threshold,Tcross).
+    first_tool_battery_over_time(T0,Duration,B0,Zb,Threshold,Tcross).
 
 all_tool_trigger_candidates([], _,_,_,_, []).
 all_tool_trigger_candidates([Trig|Rest], T0,Duration,Zb,B0, [Reason-Tcross-Code|RestCands]) :-
@@ -1315,9 +1377,10 @@ now(T, do(interrupt(T),_)).
 % time to REACH (T0 is when the install itself begins, exactly
 % mirroring startMoveto's own T0), and halt_install_tool(...) reports
 % the instant it ends, exactly mirroring haltMoveto's own T. UNLIKE
-% at/4/battery/3/moving/1/current_walk/6 (whose own generic pass-
-% through clauses already handle these four new action functors
-% correctly with no changes at all -- see do_node(install_tool_leg
+% at/4/moving/1/current_walk/6 (whose own generic pass-through clauses
+% already handle these four new action functors correctly with no
+% changes at all) and battery/3 (which DOES need its own new anchor
+% clauses for these four functors -- see do_node(install_tool_leg
 % (...))'s own note), now/2 would be WRONG without these: its own
 % generic pass-through simply reuses whatever "now" already was,
 % which is only correct for a bookkeeping MARKER with no clock effect
@@ -1843,13 +1906,19 @@ do_node(moveto_leg(CP,Triggers,ActionCode), S, S1, Status) :-
 % (...)),do_action(halt_install_tool(...))), just with a FIXED,
 % config-driven Duration (install_tool_duration(Tool,Duration) -- see
 % config_generated.pl) instead of one derived from spline arc length,
-% and no continuous position/noise of its own at all: the robot never
-% moves, so at/4's/battery/3's/moving/1's/current_walk/6's own EXISTING
-% generic pass-through clauses already handle these two new action
-% functors correctly with NO changes needed to any of them (only
-% now/2 needed new explicit clauses -- see that predicate's own note --
-% since it's the one fluent whose generic pass-through would otherwise
-% silently ignore a genuine clock advance). Triggers is the SAME
+% and no continuous position of its own at all: the robot never moves,
+% so at/4's/moving/1's/current_walk/6's own EXISTING generic pass-
+% through clauses already handle these two new action functors
+% correctly with NO changes needed to any of them. battery/3 and now/2
+% both DO need their own new explicit clauses (see each predicate's
+% own note) -- now/2's generic pass-through would otherwise silently
+% ignore a genuine clock advance, and battery/3 needed a real Duration-
+% normalized anchor (the SAME shape as startMoveto/haltMoveto's own,
+% idle_drain_rate in place of moving_drain_rate) so its own Level
+% computation during the leg stays consistent with the closed-form
+% crossing-time search below (first_tool_battery_depletion_time and
+% friends) -- both need to agree on the SAME Elapsed basis (from T0,
+% not from whatever idle anchor came before it). Triggers is the SAME
 % mechanism as moveto_leg's own, RESTRICTED to battery-related names
 % only (see the TOOL TRIGGERS section, above tool_trigger_crossing_
 % time/8, for why and how motion-based ones gracefully contribute

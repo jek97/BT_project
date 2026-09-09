@@ -1248,6 +1248,27 @@ poss(interrupt(T), S) :-
     earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, _Reason,Tend,_Code),
     T >= T0, T < Tend.
 
+% poss(take_sample(ActionCode,Reason,Status), S): take_sample's own
+% ONE precondition -- \+ moving(S), can't take a sample mid-walk (the
+% robot's own position is only meaningfully "where I am right now" once
+% a walk has actually stopped -- see at/4's own note on freezing after
+% a halt). Otherwise derives X,Y (at/4, already resolved) and draws
+% sample_result/3, binding Reason/Status TOGETHER -- the SAME "Poss
+% derives the action term's own output arguments" idiom
+% poss(haltMoveto(T,Reason,Status),S) already uses above. See
+% do_node(take_sample(...))'s own note (Section 5, ACTION leaf) for
+% the full picture.
+poss(take_sample(ActionCode,Reason,true), S) :-
+    \+ moving(S),
+    now(T, S), at(X,Y,T,S),
+    sample_result(S, ActionCode, true),
+    tag_reason(sample_success(X,Y), ActionCode, Reason).
+poss(take_sample(ActionCode,Reason,false), S) :-
+    \+ moving(S),
+    now(T, S), at(X,Y,T,S),
+    sample_result(S, ActionCode, false),
+    tag_reason(sample_failure(X,Y), ActionCode, Reason).
+
 % ---------------------------------------------------------------
 % 6. THE POSITION FLUENT -- pure situation-calculus regression.
 %    at(X,Y,T,S): position of the robot at time T in situation S.
@@ -1385,6 +1406,7 @@ nominal_at(X,Y,Frac,ControlPoints) :- spline_point(ControlPoints, Frac, X, Y).
 primitive_action(startMoveto(_,_,_,_)).
 primitive_action(haltMoveto(_,_,_)).
 primitive_action(interrupt(_)).
+primitive_action(take_sample(_,_,_)).
 
 do_action(A, S, do(A,S)) :- primitive_action(A), poss(A, S).
 
@@ -1403,22 +1425,30 @@ do_node(cond(C,Code), S, do(checked(Code,C,true), S), true)  :- holds(C, S).
 do_node(cond(C,Code), S, do(checked(Code,C,false),S), false) :- \+ holds(C, S).
 
 % -- ACTION leaf: take_sample -------------------------------------------
-% take_sample(ActionCode) -- INSTANTANEOUS, like PlanWith (see that
-% do_node clause's own note): no primitive_action, no Poss, no
-% Duration/Triggers/continuous trajectory of any kind, just a single
-% do(...) layer recording the outcome. UNLIKE cond(C,Code) above,
-% though, this outcome is NOT determined by the current situation at
-% all -- it's a genuine new probabilistic choice, sample_result/3
-% (this problem's own config.yaml, sample.success_probability -- see
-% config_generated.pl), an annotated disjunction keyed by (S,
-% ActionCode): a FRESH draw for a genuinely new situation, but the
-% SAME cached draw if the exact same (S,ActionCode) pair is ever
-% re-derived (e.g. two upstream noise realizations that landed on the
-% same merge-grid-quantized point before reaching this node) -- same
-% "keyed on the situation term" convention z/2 and zt/2 already use
-% for their own per-startMoveto draws, so "does the same PHYSICAL
-% STATE always sample the same way" is emphatically NOT what this
-% guarantees; only an identical SITUATION TERM does.
+% take_sample(ActionCode) -- INSTANTANEOUS (no Duration/Triggers/
+% continuous trajectory of any kind), but UNLIKE PlanWith/cond(C,Code)
+% above, it DOES go through the full primitive_action/poss/do_action
+% machinery every OTHER genuine action in this theory uses -- Reiter's
+% own convention gates EVERY action on a Poss precondition regardless
+% of whether it takes time; PlanWith/cond are the deliberate
+% exceptions (pure computation / a fact about the CURRENT situation
+% with no precondition of its own to state), not the default. The one
+% precondition, for now: \+ moving(S) -- can't take a sample while
+% mid-walk. See primitive_action(take_sample(_,_,_)) and
+% poss(take_sample(...),S) further up/down (grep for both).
+%
+% Its own outcome is a genuine new probabilistic choice, NOT determined
+% by the current situation at all (unlike cond(C,Code)'s own
+% holds(C,S)) -- sample_result/3 (this problem's own config.yaml,
+% sample.success_probability -- see config_generated.pl), an annotated
+% disjunction keyed by (S,ActionCode): a FRESH draw for a genuinely new
+% situation, but the SAME cached draw if the exact same (S,ActionCode)
+% pair is ever re-derived (e.g. two upstream noise realizations that
+% landed on the same merge-grid-quantized point before reaching this
+% node) -- same "keyed on the situation term" convention z/2 and zt/2
+% already use for their own per-startMoveto draws, so "does the same
+% PHYSICAL STATE always sample the same way" is emphatically NOT what
+% this guarantees; only an identical SITUATION TERM does.
 %
 % X,Y (the robot's own CURRENT position, at/4, already resolved -- no
 % further noise of its own here) is baked directly into the Reason,
@@ -1426,31 +1456,27 @@ do_node(cond(C,Code), S, do(checked(Code,C,false),S), false) :- \+ holds(C, S).
 % ActionCode via the SAME generic tag_reason/3 haltMoveto/PlanWith
 % already use -- giving sample_success(X,Y,ActionCode)/sample_failure
 % (X,Y,ActionCode), the standard "trailing ActionCode" Reason shape
-% every other action in this theory produces. This still needed its
-% OWN dedicated clauses at every "outermost do(...) layer" pattern-
-% match site -- halted_with/2 (halted_with(Reason,do(sampled(Reason),
-% _))) and outcome_entry/2, mirroring haltMoveto/planned's own
-% clauses at each -- verified directly (a standalone ProbLog run
-% caught any_reason_pattern(sample_success(wild,wild)) silently
-% reading 0% before this clause was added: halted_with/2's own
-% GENERIC do(_A,S) clause only SKIPS an unrecognized marker while
-% searching deeper, it does not also try to unify Reason against
-% whatever's inside it, so this doesn't come "for free" the way
-% at/4/battery/3/moving/1/now/2's OWN generic pass-through clauses do
-% for a bare marker with no Reason of its own to extract). Once
-% halted_with/2 sees it, any_reason_pattern(_by_action) and the
-% outcome-enumeration table (outcome_entry/2's own new clause below)
-% both work correctly with no further changes. See also
+% every other action in this theory produces, all bound TOGETHER by
+% Poss -- the exact same "Poss derives the action term's own output
+% arguments" idiom poss(haltMoveto(T,Reason,Status),S) already uses,
+% now that take_sample is a genuine primitive_action too. This still
+% needed its OWN dedicated clauses at every "outermost do(...) layer"
+% pattern-match site -- halted_with/2 and outcome_entry/2, mirroring
+% haltMoveto/planned's own clauses at each -- verified directly (a
+% standalone ProbLog run caught any_reason_pattern(sample_success
+% (wild,wild)) silently reading 0% before those clauses were added:
+% halted_with/2's own GENERIC do(_A,S) clause only SKIPS an
+% unrecognized marker while searching deeper, it does not also try to
+% unify Reason against whatever's inside it, so this doesn't come "for
+% free" the way at/4/battery/3/moving/1/now/2's OWN generic pass-
+% through clauses do for a bare marker with no Reason of its own to
+% extract). Once halted_with/2 sees it, any_reason_pattern(_by_action)
+% and the outcome-enumeration table (outcome_entry/2's own new clause
+% below) both work correctly with no further changes. See also
 % sample_success_at/3 further down, for querying WHERE a successful
 % sample landed.
-do_node(take_sample(ActionCode), S, do(sampled(Reason),S), true) :-
-    now(T, S), at(X,Y,T,S),
-    sample_result(S, ActionCode, true),
-    tag_reason(sample_success(X,Y), ActionCode, Reason).
-do_node(take_sample(ActionCode), S, do(sampled(Reason),S), false) :-
-    now(T, S), at(X,Y,T,S),
-    sample_result(S, ActionCode, false),
-    tag_reason(sample_failure(X,Y), ActionCode, Reason).
+do_node(take_sample(ActionCode), S, S1, Status) :-
+    do_action(take_sample(ActionCode,_Reason,Status), S, S1).
 
 % -- ACTION leaf --------------------------------------------------------
 % moveto_leg(CP,Triggers) -- Triggers is ALWAYS given explicitly here;
@@ -2244,7 +2270,7 @@ outcome_entry(planned(_,Reason), Code-Pattern) :-
     append(Args0, [Code], Args),
     Pattern =.. [Functor|Args0].
 outcome_entry(checked(Code,_,Status), Code-Status).
-outcome_entry(sampled(Reason), Code-Pattern) :-
+outcome_entry(take_sample(_ActionCode,Reason,_Status), Code-Pattern) :-
     Reason =.. [Functor|Args],
     append(Args0, [Code], Args),
     Pattern =.. [Functor|Args0].
@@ -2401,7 +2427,7 @@ sample_walk_frac(I, S, WalkFrac) :-
 % fate than the final one is still handled correctly.
 halted_with(Reason, do(haltMoveto(_,Reason,_), _)).
 halted_with(Reason, do(planned(_Algorithm,Reason), _)).
-halted_with(Reason, do(sampled(Reason), _)).
+halted_with(Reason, do(take_sample(_ActionCode,Reason,_Status), _)).
 halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 
 % visited(+Loc, +Tol, +S): TRUE iff the robot ACTUALLY ARRIVED at
@@ -2454,7 +2480,7 @@ visited(Loc, Tol, do(_A, S)) :- visited(Loc, Tol, S).
 % sample_success_at(point(GX2,GY2),Tol,S), ..." in a goal formula --
 % one conjunct per location, same idiom multi-waypoint goal formulas
 % already use for visited/3.
-sample_success_at(point(GX,GY), Tol, do(sampled(sample_success(X,Y,_ActionCode)), _S)) :-
+sample_success_at(point(GX,GY), Tol, do(take_sample(_ActionCode,sample_success(X,Y,_ActionCode),true), _S)) :-
     dist(X,Y,GX,GY,D), D =< Tol.
 sample_success_at(Loc, Tol, do(_A, S)) :- sample_success_at(Loc, Tol, S).
 
@@ -2690,7 +2716,7 @@ any_condition_status(Code, Status) :-
 holds(last_halt(Reason), do(haltMoveto(_T,Reason,_Status),_SPrev)).
 holds(last_halt(Reason), do(checked(_,_,_), S)) :- holds(last_halt(Reason), S).
 holds(last_halt(Reason), do(planned(_,_), S)) :- holds(last_halt(Reason), S).
-holds(last_halt(Reason), do(sampled(_), S)) :- holds(last_halt(Reason), S).
+holds(last_halt(Reason), do(take_sample(_,_,_), S)) :- holds(last_halt(Reason), S).
 
 % KNOWN LIMITATION, found while adding cond(C,Code)'s own checked(...)
 % marker (Option B): cond(neg(last_halt(...))) -- problem3's OWN Bug0

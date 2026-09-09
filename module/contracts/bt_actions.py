@@ -44,6 +44,16 @@ DistanceBelow/DistanceEqual/DistanceOver/HaltedWith are native Prolog
 conditions over a situation; Python has no situation to evaluate them
 against on its own.
 
+TakeSample, despite ALSO being part of the stochastic action theory
+(its outcome is a genuine ProbLog annotated disjunction, sample_result/3
+in basic_action_theory.pl -- see that predicate's own note), DOES get a
+real, directly-executable implementation below (bt_take_sample), same
+"callable" treatment as PlanWith -- unlike MoveTo's continuous noisy
+trajectory, its own randomness is a single, closed-form Bernoulli(p)
+draw with no approximation or partial-reimplementation risk: a plain
+random.random() < p reproduces basic_action_theory.pl's own
+sample_result/3 EXACTLY, not just approximately.
+
 What IS provided for all three is their INTERFACE (matching
 schema.yaml's ports exactly) plus a TERM BUILDER -- a function
 translating bound port values into the corresponding
@@ -57,6 +67,7 @@ implements this translator directly rather than through this file);
 this file only provides the per-node building blocks it documents.
 """
 import os
+import random
 import sys
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -146,6 +157,36 @@ _PLAN_ALGORITHM_FUNCS = {
     "straight": bt_plan_straight,
     "voronoi": bt_plan_voronoi,
 }
+
+
+def bt_take_sample(success_probability=0.5):
+    """
+    BT.cpp-compatible implementation of TakeSample -- a single
+    fixed-probability coin flip, matching basic_action_theory.pl's own
+    sample_result/3 EXACTLY (see this module's own header for why this
+    gets a real implementation, unlike MoveTo). success_probability is
+    NOT read from config.yaml here -- this file never touches
+    config.yaml directly; the caller supplies it, same as every other
+    parameter throughout this file (a future BT.cpp bridge would read
+    this problem's own config.yaml sample.success_probability itself
+    and pass it through).
+
+    Returns {reason, status} matching TakeSample's own two output
+    ports in schema.yaml -- reason is the BARE outcome ("sample_success"
+    or "sample_failure"), the same "no ActionCode, no extra info" shape
+    bt_plan_astar's own reason ("completed"/"no_path") already uses:
+    ActionCode-tagging and recording the robot's own position (X,Y)
+    happen ONLY on the ProbLog/translation side (see
+    basic_action_theory.pl's own do_node(take_sample(...)) and
+    tag_reason/3), not something this plain-Python callable needs to
+    reproduce -- a real BT.cpp caller already knows its own current
+    position without this function echoing it back.
+    """
+    success = random.random() < success_probability
+    return {
+        "reason": "sample_success" if success else "sample_failure",
+        "status": success,
+    }
 
 
 def bt_plan_with(algorithm, sx, sy, gx=None, gy=None, obstacle_id=None, offset=None):
@@ -372,6 +413,11 @@ ACTIONS = {
         "kind": "callable",
         "prolog_action": "planWith",
         "func": bt_plan_with,
+    },
+    "TakeSample": {
+        "kind": "callable",
+        "prolog_action": "take_sample",
+        "func": bt_take_sample,
     },
 }
 

@@ -551,29 +551,38 @@ def main():
         # map.yaml is the single source of truth for the obstacle
         # layout (see module/translators/occgrid_to_problog.py), same
         # automatic-every-run treatment config.yaml/behavior_tree.xml
-        # already get. clearance_m (robot_radius+safety_buffer, read
-        # straight from this SAME problem's own config.yaml -- exactly
-        # safety_margin/1's own formula in basic_action_theory.pl) is
-        # passed through so the extracted obstacle_polygon/2 facts are
-        # ALREADY inflated by the robot's full safety clearance -- see
-        # occgrid_to_problog.py's own module docstring for why this
-        # lives here (a map-preprocessing step) rather than as a
-        # runtime distance check.
+        # already get. TWO clearance amounts, both read straight from
+        # THIS SAME problem's own config.yaml, are passed through --
+        # see occgrid_to_problog.py's own module docstring ("TWO
+        # INFLATION LEVELS, ONE FILE") for exactly which downstream
+        # caller reads which and why:
+        #   collision_clearance_m = robot_radius+safety_buffer, exactly
+        #     safety_margin/1's own formula in basic_action_theory.pl
+        #     -> obstacle_polygon/2 (collision_geometry.py's own
+        #     collision/obstacle_in_bound/obstacle_on_path geometry).
+        #   planning_clearance_m = robot_radius ALONE, no safety_buffer
+        #     -> obstacle_polygon_planning/2 (planners.py's own Voronoi
+        #     roadmap -- a planned path only needs the robot's physical
+        #     BODY clear, not the extra reactive buffer collision
+        #     detection already watches for live).
         if TRANSLATORS_DIR not in sys.path:
             sys.path.insert(0, TRANSLATORS_DIR)
         try:
             from occgrid_to_problog import generate as generate_obstacles
             from config_to_prolog import load_config
             _robot_config = load_config(config_path=os.path.join(problem_dir, "config.yaml"))
-            clearance_m = (float(_robot_config["robot"]["radius"])
-                            + float(_robot_config["robot"]["safety_buffer"]))
+            robot_radius_m = float(_robot_config["robot"]["radius"])
+            collision_clearance_m = robot_radius_m + float(_robot_config["robot"]["safety_buffer"])
+            planning_clearance_m = robot_radius_m
             generated_obstacles_path = generate_obstacles(
                 yaml_path=os.path.join(problem_dir, "map.yaml"),
                 output_path=os.path.join(problem_dir, "obstacles_generated.pl"),
-                clearance_m=clearance_m)
+                collision_clearance_m=collision_clearance_m,
+                planning_clearance_m=planning_clearance_m)
             tee(f"  Obstacles   : {generated_obstacles_path} (regenerated from "
-                f"{os.path.join(problem_dir, 'map.yaml')}, inflated by "
-                f"{clearance_m:.3f}m robot clearance)")
+                f"{os.path.join(problem_dir, 'map.yaml')}, collision clearance "
+                f"{collision_clearance_m:.3f}m, planning clearance "
+                f"{planning_clearance_m:.3f}m)")
         except Exception as e:
             tee(f"\n  [ERROR] Could not regenerate obstacles_generated.pl: {e}")
             sys.exit(1)

@@ -36,6 +36,22 @@ same underlying A*/spline computation and neither should reimplement it:
      There is deliberately no Goal parameter here -- see
      _follow_boarder_control_points's own header.
 
+     OBSTACLE INFLATION -- plan_astar (via PLANNING_INFLATE_M, its own
+     raster-grid inflation) and plan_voronoi (via
+     _PLANNING_OBSTACLE_POLYGONS, obstacle_polygon_planning/2 in
+     obstacles_generated.pl) BOTH plan through space inflated by
+     robot_radius ALONE, no safety_buffer -- a planned route only needs
+     the robot's own physical body clear, not the EXTRA reactive margin
+     collision detection (basic_action_theory.pl's own safety_margin/1,
+     robot_radius+safety_buffer) already watches for live and
+     independently. follow_boarder is the one exception: it reads
+     _OBSTACLE_POLYGONS, the FULLY safety_margin-inflated family, since
+     its own ObstacleId always came FROM collision detection and has to
+     resolve against the SAME polygon set that Id was reported against
+     -- see this file's own note above the obstacle-polygon loading,
+     and occgrid_to_problog.py's own module docstring ("TWO INFLATION
+     LEVELS, ONE FILE"), for the full reasoning.
+
   2. PLAIN-PYTHON API for a BT.cpp / bt_actions.py caller that has
      nothing to do with ProbLog -- plan_astar_points/plan_straight_points/
      plan_voronoi_points/follow_boarder_points below, returning plain
@@ -85,6 +101,7 @@ import heapq
 import math
 import os
 import re
+import sys
 
 import numpy as np
 from scipy.interpolate import splprep, insert
@@ -101,6 +118,19 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
 # imported directly for testing) with no environment variable set.
 _DEFAULT_PROBLEM_DIR = os.path.join(_PROJECT_ROOT, "problems", "problem0")
 _PROBLEM_DIR = os.environ.get("BT_PROBLEM_DIR", _DEFAULT_PROBLEM_DIR)
+
+# robot.radius -- this problem's own config.yaml, same file/loader
+# collision_geometry.py already uses for its own config-driven constants
+# -- read here ONLY for PLANNING_INFLATE_M below (the A*-planning grid's
+# own inflation amount, robot_radius ALONE with no safety_buffer -- see
+# that constant's own note).
+_TRANSLATORS_DIR = os.path.join(_PROJECT_ROOT, "module", "translators")
+if _TRANSLATORS_DIR not in sys.path:
+    sys.path.insert(0, _TRANSLATORS_DIR)
+from config_to_prolog import load_config  # noqa: E402
+
+_config = load_config(config_path=os.path.join(_PROBLEM_DIR, "config.yaml"))
+ROBOT_RADIUS_M = float(_config["robot"]["radius"])
 
 
 # --------------------------------------------------------------------------
@@ -367,8 +397,22 @@ def bspline_to_bezier_chain(tck):
 MAP_YAML_PATH = os.path.join(_PROBLEM_DIR, "map.yaml")
 _OBSTACLES_PATH = os.path.join(_PROBLEM_DIR, "obstacles_generated.pl")
 
-# Same default inflation as this project's own former --inflate default.
-PLANNING_INFLATE_M = 0.5
+# A*'s own raster-grid inflation amount -- robot_radius ALONE (this
+# problem's own config.yaml, ROBOT_RADIUS_M above), no safety_buffer:
+# a planned path only needs to keep the robot's own physical BODY clear
+# of obstacles, not the EXTRA reactive safety_buffer margin collision
+# detection already watches for live and independently (see
+# basic_action_theory.pl's own safety_margin/1 and
+# clearance_adjusted_threshold/2 notes) -- baking safety_buffer in here
+# too would needlessly narrow, or altogether block, routes a real walk
+# could still safely attempt. Used to be a hardcoded 0.5m (this
+# project's own former --inflate default), unrelated to any actual
+# robot geometry -- now genuinely config-driven, matching
+# obstacle_polygon_planning/2's own inflation amount in
+# obstacles_generated.pl (see occgrid_to_problog.py's own module
+# docstring, "TWO INFLATION LEVELS, ONE FILE") for the SAME reasoning
+# applied to the OTHER (polygon-based) planner, plan_voronoi, below.
+PLANNING_INFLATE_M = ROBOT_RADIUS_M
 OCC_THRESH = 50
 CONNECTIVITY = 8
 
@@ -386,7 +430,7 @@ except Exception as exc:  # noqa: BLE001 -- deliberately broad: ANY load
     _MAP_LOAD_ERROR = exc
 
 
-# -- load obstacle polygons ONCE at import time, for follow_boarder ------
+# -- load obstacle polygons ONCE at import time, TWO families -----------
 # Same source file, same tiny regex parser as collision_geometry.py's own
 # OBSTACLE_POLYGONS -- DELIBERATELY duplicated rather than imported from
 # there: both files are independently `:- use_module(...)`'d by ProbLog
@@ -399,6 +443,22 @@ except Exception as exc:  # noqa: BLE001 -- deliberately broad: ANY load
 # box in this project already owns its own data loading independently
 # (this file's own map.yaml load above, collision_geometry.py's
 # obstacles_generated.pl load) -- this follows the same convention.
+#
+# obstacles_generated.pl now carries TWO independent fact families (see
+# occgrid_to_problog.py's own module docstring, "TWO INFLATION LEVELS,
+# ONE FILE") -- both parsed here, from the SAME file, by the SAME
+# functor-parametrized helper below:
+#   _OBSTACLE_POLYGONS (obstacle_polygon/2, safety_margin-inflated) --
+#     used ONLY by follow_boarder, which looks up an ObstacleId that
+#     came FROM collision detection (recover_obstacle/1, built on
+#     last_halt/1) and so has to stay on collision_geometry.py's OWN
+#     polygon set, the one that Id was actually resolved against.
+#   _PLANNING_OBSTACLE_POLYGONS (obstacle_polygon_planning/2,
+#     robot_radius-only-inflated) -- used by plan_voronoi's own roadmap
+#     (_voronoi_sites/_segment_crosses_any_obstacle below): a planned
+#     route only needs the robot's own physical body clear, not the
+#     extra safety_buffer margin, same reasoning as PLANNING_INFLATE_M
+#     above for A*.
 _POINT_RE = re.compile(r"point\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)")
 
 
@@ -406,11 +466,18 @@ def _strip_prolog_comments(text):
     return re.sub(r"%.*$", "", text, flags=re.MULTILINE)
 
 
-def _parse_obstacle_polygons(text):
-    """Returns [(id, [(x,y),...]), ...] -- see collision_geometry.py's
-    own identical function for the full rationale."""
+def _parse_named_polygons(text, functor):
+    """Returns [(id, [(x,y),...]), ...] for every functor(Id,[...]).
+    fact in text -- see collision_geometry.py's own identical function
+    for the full rationale. functor is matched literally immediately
+    before '(' (e.g. "obstacle_polygon" does NOT also match
+    "obstacle_polygon_planning" -- the '_planning' suffix sits between
+    the functor name and its own '(', so re.escape(functor)+r"\(" never
+    matches it), so the two families never cross-contaminate each
+    other despite the shared name prefix."""
     polys = []
-    for m in re.finditer(r"obstacle_polygon\(([^,]+),\s*\[(.*?)\]\s*\)\s*\.", text, re.S):
+    pattern = re.escape(functor) + r"\(([^,]+),\s*\[(.*?)\]\s*\)\s*\."
+    for m in re.finditer(pattern, text, re.S):
         obstacle_id = m.group(1).strip()
         pts = [(float(x), float(y)) for x, y in _POINT_RE.findall(m.group(2))]
         if len(pts) >= 3:
@@ -420,9 +487,12 @@ def _parse_obstacle_polygons(text):
 
 try:
     with open(_OBSTACLES_PATH) as f:
-        _OBSTACLE_POLYGONS = _parse_obstacle_polygons(_strip_prolog_comments(f.read()))
+        _obstacles_text = _strip_prolog_comments(f.read())
+    _OBSTACLE_POLYGONS = _parse_named_polygons(_obstacles_text, "obstacle_polygon")
+    _PLANNING_OBSTACLE_POLYGONS = _parse_named_polygons(_obstacles_text, "obstacle_polygon_planning")
 except FileNotFoundError:
     _OBSTACLE_POLYGONS = []
+    _PLANNING_OBSTACLE_POLYGONS = []
 
 
 # =====================================================================
@@ -589,7 +659,15 @@ def _follow_boarder_control_points(sx, sy, obstacle_id, offset):
     FULL clockwise loop back to that same starting sample -- no
     stopping condition of its own; see this section's own header for
     why. Returns [(x,y), ...] control points, or None if obstacle_id
-    names no known obstacle or its polygon is degenerate."""
+    names no known obstacle or its polygon is degenerate.
+
+    Deliberately looks obstacle_id up in _OBSTACLE_POLYGONS (the
+    collision/safety_margin-inflated family), NOT
+    _PLANNING_OBSTACLE_POLYGONS: obstacle_id always came FROM collision
+    detection (recover_obstacle/1, built on last_halt/1 -- see
+    basic_action_theory.pl's own note there), so it's only ever a valid
+    Id in THAT family -- see this file's own note above the obstacle-
+    polygon loading for the full reasoning."""
     polygon = None
     for oid, pts in _OBSTACLE_POLYGONS:
         if oid == obstacle_id:
@@ -655,13 +733,16 @@ _VORONOI_EDGE_CHECK_SAMPLES = 6
 
 
 def _voronoi_sites():
-    """Dense points sampled along every obstacle polygon's own
-    boundary -- the SITES scipy.spatial.Voronoi builds its diagram
-    from. Same per-edge sampling idea as follow_boarder's own
+    """Dense points sampled along every PLANNING obstacle polygon's own
+    boundary (_PLANNING_OBSTACLE_POLYGONS, robot_radius-only-inflated
+    -- NOT the collision/safety_margin-inflated _OBSTACLE_POLYGONS
+    follow_boarder uses, see this file's own note above that load) --
+    the SITES scipy.spatial.Voronoi builds its diagram from. Same
+    per-edge sampling idea as follow_boarder's own
     _offset_boundary_clockwise above, just without any outward
     offset."""
     sites = []
-    for _oid, poly in _OBSTACLE_POLYGONS:
+    for _oid, poly in _PLANNING_OBSTACLE_POLYGONS:
         for (ax, ay), (bx, by) in _polygon_edges(poly):
             for k in range(_VORONOI_SAMPLES_PER_EDGE):
                 frac = k / _VORONOI_SAMPLES_PER_EDGE
@@ -671,13 +752,14 @@ def _voronoi_sites():
 
 def _segment_crosses_any_obstacle(ax, ay, bx, by):
     """True iff the segment (ax,ay)-(bx,by), sampled at
-    _VORONOI_EDGE_CHECK_SAMPLES points, passes through ANY obstacle's
-    interior -- the filter that turns a plain Voronoi tessellation
-    into a roadmap using only free-space edges."""
+    _VORONOI_EDGE_CHECK_SAMPLES points, passes through ANY PLANNING
+    obstacle's interior (_PLANNING_OBSTACLE_POLYGONS, same family
+    _voronoi_sites uses above) -- the filter that turns a plain Voronoi
+    tessellation into a roadmap using only free-space edges."""
     for k in range(_VORONOI_EDGE_CHECK_SAMPLES + 1):
         frac = k / _VORONOI_EDGE_CHECK_SAMPLES
         x, y = ax + (bx-ax)*frac, ay + (by-ay)*frac
-        for _oid, poly in _OBSTACLE_POLYGONS:
+        for _oid, poly in _PLANNING_OBSTACLE_POLYGONS:
             if _inside_polygon(x, y, poly):
                 return True
     return False

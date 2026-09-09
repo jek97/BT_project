@@ -270,6 +270,15 @@ safety_margin(M) :- robot_radius(R), safety_buffer(B), M is R + B.
 % below, used at every one of their call sites (trigger_crossing_time/11,
 % holds/2, and holds_leg/9).
 %
+% obstacles_generated.pl also carries a SECOND, SEPARATE family,
+% obstacle_polygon_planning/2 -- inflated by robot_radius ALONE, no
+% safety_buffer -- that collision_geometry.py never reads at all; it
+% is planners.py's own plan_voronoi that routes through it (and
+% plan_astar's raster grid, independently, at the same robot_radius-
+% only amount). See occgrid_to_problog.py's own module docstring, "TWO
+% INFLATION LEVELS, ONE FILE", and planners.py's own module docstring
+% for the full split.
+%
 % clearance_adjusted_threshold(+Threshold, -Adjusted): Adjusted is
 % Threshold minus safety_margin -- can go negative (a caller asking for
 % a bound TIGHTER than the robot's own physical clearance), which

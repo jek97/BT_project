@@ -41,11 +41,21 @@ install_tool_duration(cart, 10.0).
 install_tool_duration(plow, 10.0).
 uninstall_tool_duration(cart, 10.0).
 uninstall_tool_duration(plow, 10.0).
+install_tool_drain_rate(0.05).
+uninstall_tool_drain_rate(0.05).
 
 0.9::install_tool_result(S,ActionCode,true) ;
 0.09999999999999998::install_tool_result(S,ActionCode,false).
 
 0.9::uninstall_tool_result(S,ActionCode,true) ;
 0.09999999999999998::uninstall_tool_result(S,ActionCode,false).
+
+tool_speed(free, 1.0).
+tool_speed(cart, 1.0).
+tool_speed(plow, 1.0).
+
+tool_moving_drain_rate(free, 0.5).
+tool_moving_drain_rate(cart, 0.5).
+tool_moving_drain_rate(plow, 0.5).
 
 query(any_battery_depletion).

@@ -551,16 +551,29 @@ def main():
         # map.yaml is the single source of truth for the obstacle
         # layout (see module/translators/occgrid_to_problog.py), same
         # automatic-every-run treatment config.yaml/behavior_tree.xml
-        # already get.
+        # already get. clearance_m (robot_radius+safety_buffer, read
+        # straight from this SAME problem's own config.yaml -- exactly
+        # safety_margin/1's own formula in basic_action_theory.pl) is
+        # passed through so the extracted obstacle_polygon/2 facts are
+        # ALREADY inflated by the robot's full safety clearance -- see
+        # occgrid_to_problog.py's own module docstring for why this
+        # lives here (a map-preprocessing step) rather than as a
+        # runtime distance check.
         if TRANSLATORS_DIR not in sys.path:
             sys.path.insert(0, TRANSLATORS_DIR)
         try:
             from occgrid_to_problog import generate as generate_obstacles
+            from config_to_prolog import load_config
+            _robot_config = load_config(config_path=os.path.join(problem_dir, "config.yaml"))
+            clearance_m = (float(_robot_config["robot"]["radius"])
+                            + float(_robot_config["robot"]["safety_buffer"]))
             generated_obstacles_path = generate_obstacles(
                 yaml_path=os.path.join(problem_dir, "map.yaml"),
-                output_path=os.path.join(problem_dir, "obstacles_generated.pl"))
+                output_path=os.path.join(problem_dir, "obstacles_generated.pl"),
+                clearance_m=clearance_m)
             tee(f"  Obstacles   : {generated_obstacles_path} (regenerated from "
-                f"{os.path.join(problem_dir, 'map.yaml')})")
+                f"{os.path.join(problem_dir, 'map.yaml')}, inflated by "
+                f"{clearance_m:.3f}m robot clearance)")
         except Exception as e:
             tee(f"\n  [ERROR] Could not regenerate obstacles_generated.pl: {e}")
             sys.exit(1)

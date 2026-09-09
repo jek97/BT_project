@@ -247,6 +247,39 @@ sum_list([H|T], Sum) :- sum_list(T, SumT), Sum is H + SumT.
 % trigger-list entry's argument.
 safety_margin(M) :- robot_radius(R), safety_buffer(B), M is R + B.
 
+% MAP-PREPROCESSING INFLATION: <problem>/obstacles_generated.pl's own
+% obstacle_polygon/2 facts are no longer the map's raw occupied cells --
+% module/translators/occgrid_to_problog.py's own generate() now
+% inflates the occupied mask by safety_margin/1's own value (main.py
+% passes robot_radius+safety_buffer straight through, computed from
+% THIS SAME problem's own config.yaml) BEFORE extracting polygons -- see
+% that file's own module docstring. So `collision` (a robot's own
+% CENTER point coming into physical contact with an obstacle, once its
+% own radius+buffer are accounted for) is now a bare containment/
+% contact test against the ALREADY-INFLATED polygon -- first_collision_
+% time/7 below calls the generalized machinery at Threshold=0.0, not
+% safety_margin, and needs no distance comparison at all beyond
+% "is the point on or inside the (inflated) obstacle". Every OTHER
+% distance-based test that still means "how close to the REAL,
+% uninflated obstacle surface" -- obstacle_in_bound(Threshold) and
+% obstacle_on_path(Threshold), whose own Threshold argument keeps its
+% documented meaning unchanged -- must correct for the same inflation
+% by subtracting safety_margin back out before calling into
+% collision_geometry.py's distance primitives (which only ever see the
+% inflated polygons): see clearance_adjusted_threshold/2 immediately
+% below, used at every one of their call sites (trigger_crossing_time/11,
+% holds/2, and holds_leg/9).
+%
+% clearance_adjusted_threshold(+Threshold, -Adjusted): Adjusted is
+% Threshold minus safety_margin -- can go negative (a caller asking for
+% a bound TIGHTER than the robot's own physical clearance), which
+% correctly degrades to "never fires beyond what collision itself
+% already would", same not-yet-validated "Threshold > safety_margin"
+% caveat this file already documented above, now just enforced
+% arithmetically instead of geometrically.
+clearance_adjusted_threshold(Threshold, Adjusted) :-
+    safety_margin(M), Adjusted is Threshold - M.
+
 % within_obstacle_threshold/3 (the generalized "is (PX,PY) within
 % Threshold of the nearest obstacle" test, parametrized by threshold so
 % the SAME primitive serves collision, obstacle_in_bound, and any
@@ -727,20 +760,26 @@ battery_at_leg(T0,Duration,Zb,B0,T,Level) :-
 % TODO note near holds(halted_with_cond(...)) for the one place this is
 % user-facing.
 %
-% collision (fixed threshold=safety_margin) and battery (fixed
-% threshold=exactly-0, Reason=battery_depleted) are the ORIGINAL,
-% UNPARAMETRIZED trigger names -- kept exactly as they were, on
-% request, rather than folded into the generic versions below.
-% obstacle_in_bound(Threshold) and battery_below(Threshold) are
-% GENUINELY SEPARATE, ADDITIONAL trigger names -- a leg can react to
-% EITHER or BOTH of a fixed floor and an arbitrary per-call threshold
-% at once, e.g. Triggers=[collision,battery,battery_below(20)] halts on
-% whichever of "hits an obstacle", "hits exactly empty", or "drops
-% under 20%" happens earliest. obstacle_in_bound is what "obstacle
-% sighted" was renamed to (see the note above first_threshold_crossing_
-% time below for why sight_threshold/1 is gone): it reuses
+% collision (fixed threshold=0.0 against the ALREADY safety_margin-
+% inflated obstacle_polygon/2 geometry -- a bare contact/containment
+% test, see the MAP-PREPROCESSING INFLATION note above
+% clearance_adjusted_threshold/2) and battery (fixed threshold=exactly-0,
+% Reason=battery_depleted) are the ORIGINAL, UNPARAMETRIZED trigger
+% names -- kept exactly as they were, on request, rather than folded
+% into the generic versions below. obstacle_in_bound(Threshold) and
+% battery_below(Threshold) are GENUINELY SEPARATE, ADDITIONAL trigger
+% names -- a leg can react to EITHER or BOTH of a fixed floor and an
+% arbitrary per-call threshold at once, e.g.
+% Triggers=[collision,battery,battery_below(20)] halts on whichever of
+% "hits an obstacle", "hits exactly empty", or "drops under 20%"
+% happens earliest. obstacle_in_bound is what "obstacle sighted" was
+% renamed to (see the note above first_threshold_crossing_time below
+% for why sight_threshold/1 is gone): it reuses
 % first_threshold_crossing_time DIRECTLY, with Threshold now the
-% CALLER'S OWN argument instead of a fixed config constant -- the exact
+% CALLER'S OWN argument (still meant as "distance from the REAL,
+% uninflated obstacle surface" -- clearance_adjusted_threshold/2
+% corrects for the polygon's own inflation before the call, see that
+% predicate's own note) instead of a fixed config constant -- the exact
 % same black box collision already used, no new machinery. Reason
 % carries Threshold too, not just ObstacleId (unlike collision's
 % crashed(ObstacleId)) -- so two obstacle_in_bound(...) triggers at
@@ -845,10 +884,12 @@ trigger_crossing_time(battery, CP,T0,Duration,_Z,_Zt,Zb,B0, battery_depleted, Tc
     first_battery_depletion_time(CP,T0,Duration,B0,Zb,Tcross).
 
 trigger_crossing_time(obstacle_in_bound(Threshold,Code), CP,T0,Duration,Z,Zt,_Zb,_B0, obstacle_in_bound(Threshold,ObstacleId), Tcross, Code) :-
-    first_threshold_crossing_time(CP,T0,Duration,Z,Zt,Threshold,Tcross,ObstacleId).
+    clearance_adjusted_threshold(Threshold, AdjThreshold),
+    first_threshold_crossing_time(CP,T0,Duration,Z,Zt,AdjThreshold,Tcross,ObstacleId).
 
 trigger_crossing_time(obstacle_on_path(Threshold,Code), CP,T0,Duration,Z,Zt,_Zb,_B0, obstacle_on_path(Threshold,ObstacleId), Tcross, Code) :-
-    first_on_path_crossing_time(CP,T0,Duration,Z,Zt,Threshold,Tcross,ObstacleId).
+    clearance_adjusted_threshold(Threshold, AdjThreshold),
+    first_on_path_crossing_time(CP,T0,Duration,Z,Zt,AdjThreshold,Tcross,ObstacleId).
 
 trigger_crossing_time(battery_below(Threshold,Code), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_under(Threshold), Tcross, Code) :-
     first_battery_below_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
@@ -943,14 +984,16 @@ earliest_of([R1-T1-C1|Rest], Result) :-
 % FIRST-THRESHOLD-CROSSING-TIME -- a NATURAL (not chosen) event: the
 % earliest time, within a given resolved world (fixed Z), at which
 % the noisy trajectory comes within a given distance THRESHOLD of an
-% obstacle. GENERALIZED over the threshold (rather than hardcoded to
-% collision's safety_margin) so the SAME machinery serves collision
-% (threshold=safety_margin, via first_collision_time/6 below),
-% obstacle_in_bound(Threshold) (called DIRECTLY with the caller's own
-% Threshold -- see trigger_crossing_time/9 above and
-% holds(obstacle_in_bound(...)) below, no separate wrapper predicate
-% needed since this black box was already threshold-generic), and any
-% future distance-based trigger.
+% (already safety_margin-inflated, see the MAP-PREPROCESSING INFLATION
+% note above clearance_adjusted_threshold/2) obstacle. GENERALIZED over
+% the threshold so the SAME machinery serves collision (threshold=0.0,
+% via first_collision_time/6 below -- a bare contact test against the
+% inflated polygon), obstacle_in_bound(Threshold) (called with the
+% caller's own Threshold, corrected for the inflation via
+% clearance_adjusted_threshold/2 -- see trigger_crossing_time/9 above
+% and holds(obstacle_in_bound(...)) below, no separate wrapper
+% predicate needed since this black box was already threshold-generic),
+% and any future distance-based trigger.
 %
 % first_threshold_crossing_time(+ControlPoints,+T0,+Duration,+Z,+Zt,
 % +Threshold,-Tcross,-ObstacleId) is now a BLACK-BOX Python predicate,
@@ -976,12 +1019,15 @@ earliest_of([R1-T1-C1|Rest], Result) :-
 % this theory.
 
 % first_collision_time/6 kept as a thin, name-preserving wrapper over
-% the generalized machinery, at threshold=safety_margin -- every
-% EXISTING caller (crashed_in, verify_safe, etc.) is unaffected beyond
-% the new ObstacleId output.
+% the generalized machinery, now at threshold=0.0 (obstacle_polygon/2
+% is already inflated by safety_margin -- see the MAP-PREPROCESSING
+% INFLATION note above clearance_adjusted_threshold/2 -- so "within
+% safety_margin of the real obstacle" is now just "on or inside the
+% obstacle" against the already-inflated polygon) -- every EXISTING
+% caller (crashed_in, verify_safe, etc.) is unaffected beyond the new
+% ObstacleId output.
 first_collision_time(CP,T0,Duration,Z,Zt,Tcross,ObstacleId) :-
-    safety_margin(M),
-    first_threshold_crossing_time(CP,T0,Duration,Z,Zt,M,Tcross,ObstacleId).
+    first_threshold_crossing_time(CP,T0,Duration,Z,Zt,0.0,Tcross,ObstacleId).
 
 % ---------------------------------------------------------------
 % Poss AXIOMS for the primitive actions.
@@ -1873,7 +1919,8 @@ holds(distance_over(GX,GY,Threshold), S) :-
 % not "will it ever become true during this walk".
 holds(obstacle_in_bound(Threshold), S) :-
     now(T, S), at(X,Y,T,S),
-    obstacle_within_threshold(X,Y,Threshold).
+    clearance_adjusted_threshold(Threshold, AdjThreshold),
+    obstacle_within_threshold(X,Y,AdjThreshold).
 
 % line_of_sight_clear(ObstacleId,GX,GY): true iff the CURRENT position
 % is NOT occluded from (GX,GY) by ObstacleId's own boundary. Same
@@ -1902,7 +1949,8 @@ holds(obstacle_on_path(Threshold), S) :-
     z(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Z),
     zt(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Zt),
     now(T, S), at(X,Y,T,S),
-    obstacle_on_path_within_threshold(CP,T0,Duration,Z,Zt,X,Y,Threshold).
+    clearance_adjusted_threshold(Threshold, AdjThreshold),
+    obstacle_on_path_within_threshold(CP,T0,Duration,Z,Zt,X,Y,AdjThreshold).
 
 % battery_below(Threshold): true iff the CURRENT battery level (at the
 % current time, via now/2) is below Threshold. Same parameter, same
@@ -1980,11 +2028,13 @@ holds_leg(distance_over(GX,GY,Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
 
 holds_leg(obstacle_in_bound(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
     walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
-    obstacle_within_threshold(X,Y,Threshold).
+    clearance_adjusted_threshold(Threshold, AdjThreshold),
+    obstacle_within_threshold(X,Y,AdjThreshold).
 
 holds_leg(obstacle_on_path(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
     walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
-    obstacle_on_path_within_threshold(CP,T0,Duration,Z,Zt,X,Y,Threshold).
+    clearance_adjusted_threshold(Threshold, AdjThreshold),
+    obstacle_on_path_within_threshold(CP,T0,Duration,Z,Zt,X,Y,AdjThreshold).
 
 holds_leg(line_of_sight_clear(ObstacleId,GX,GY), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
     walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),

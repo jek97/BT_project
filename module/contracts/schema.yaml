@@ -377,6 +377,110 @@ actions:
         type: bool
         description: "true iff reason is sample_success(...)."
 
+  # ----------------------------------------------------------------
+  # InstallTool / UninstallTool -- correspond to install_tool_leg
+  # (Tool,Triggers,ActionCode)/uninstall_tool_leg(Tool,Triggers,
+  # ActionCode) in basic_action_theory.pl: DURATIVE actions, same
+  # start/halt shape as MoveTo (a fixed-Duration analogue of one
+  # startMoveto/haltMoveto pair -- see that action's own do_node note),
+  # but the robot never moves: no CP/position noise of its own at all.
+  # Duration is FIXED per (action, tool) pair (this problem's own
+  # config.yaml, tool.install.duration_seconds.<tool>/tool.uninstall.
+  # duration_seconds.<tool> -- defaults to 10 seconds if omitted), not
+  # derived from spline arc length. Preconditions (see basic_action_
+  # theory.pl's own poss(start_install_tool(...))/poss(start_uninstall_
+  # tool(...))): neither can start while the robot is moving;
+  # InstallTool additionally requires hitch(free,S) (nothing already
+  # attached); UninstallTool requires hitch(Tool,S) (THIS SPECIFIC tool
+  # -- not just "something" -- currently attached). Success/failure is
+  # a genuine coin flip too, same "not a deterministic function of
+  # geometry" shape as TakeSample above (tool.install.success_
+  # probability/tool.uninstall.success_probability, this problem's own
+  # config.yaml, default 0.9) -- but ONLY once the full Duration
+  # elapses with nothing halting it early; a battery trigger firing
+  # first halts it with THAT Reason instead, same "earliest wins"
+  # mechanism MoveTo's own Triggers already use.
+  # ----------------------------------------------------------------
+  - id: InstallTool
+    prolog_action: install_tool_leg
+    description: >
+      Runs a fixed-Duration install of `tool` (cart or plow), halting
+      early on whichever of `triggers` occurs first, or resolving a
+      success/failure coin flip once the full Duration elapses with
+      nothing halting it early (see this entry's own header above for
+      the full mechanism). Only battery-related trigger names are
+      accepted -- the robot never moves during this action, so a
+      motion-based trigger has no meaningful geometry to check (see
+      the triggers port's own description below).
+    ports:
+      - name: tool
+        direction: input
+        type: std::string
+        required: true
+        description: "cart or plow -- the ONLY two tool kinds accepted."
+      - name: triggers
+        direction: input
+        type: std::vector<std::string>
+        required: false
+        description: >
+          EXTRA halting conditions, beyond the automatic battery=0%
+          one -- OPTIONAL, may be omitted or empty. RESTRICTED to
+          battery-related names ONLY: battery_below(Threshold),
+          battery_equal(Threshold), battery_over(Threshold) (see
+          MoveTo's own triggers port for what each means -- the
+          semantics are identical, just evaluated against the IDLE
+          drain rate, since this action never moves the robot). A
+          motion-based name (collision, obstacle_in_bound(...),
+          obstacle_on_path(...), line_of_sight_clear(...),
+          crosses_segment(...)) is a HARD translation-time error here
+          -- there is no path/geometry for it to check.
+      - name: reason
+        direction: output
+        type: std::string
+        description: >
+          install_tool_success(Tool,ActionCode)/install_tool_failure
+          (Tool,ActionCode) if the full Duration elapsed, or
+          battery_depleted/battery_under(Threshold)/battery_equal
+          (Threshold)/battery_over(Threshold) if a battery trigger
+          fired first (same Reason vocabulary MoveTo's own battery
+          triggers use).
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is install_tool_success(...)."
+
+  - id: UninstallTool
+    prolog_action: uninstall_tool_leg
+    description: >
+      The mirror image of InstallTool above -- same ports/mechanism,
+      uninstall_tool_success(Tool,ActionCode)/uninstall_tool_failure
+      (Tool,ActionCode) in place of install_tool_success/
+      install_tool_failure. Requires hitch(Tool,S) to start (THIS
+      SPECIFIC tool currently attached), not just hitch(free,S)'s own
+      negation.
+    ports:
+      - name: tool
+        direction: input
+        type: std::string
+        required: true
+        description: "cart or plow -- must be the tool CURRENTLY attached."
+      - name: triggers
+        direction: input
+        type: std::vector<std::string>
+        required: false
+        description: "Same battery-only restriction as InstallTool's own triggers port."
+      - name: reason
+        direction: output
+        type: std::string
+        description: >
+          uninstall_tool_success(Tool,ActionCode)/uninstall_tool_failure
+          (Tool,ActionCode), or a battery Reason -- same shape as
+          InstallTool's own reason port.
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is uninstall_tool_success(...)."
+
 conditions:
 
   # ----------------------------------------------------------------

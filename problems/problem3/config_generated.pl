@@ -37,4 +37,15 @@ disc_step_time(20).
 0.5::sample_result(S,ActionCode,true) ;
 0.5::sample_result(S,ActionCode,false).
 
+install_tool_duration(cart, 10.0).
+install_tool_duration(plow, 10.0).
+uninstall_tool_duration(cart, 10.0).
+uninstall_tool_duration(plow, 10.0).
+
+0.9::install_tool_result(S,ActionCode,true) ;
+0.09999999999999998::install_tool_result(S,ActionCode,false).
+
+0.9::uninstall_tool_result(S,ActionCode,true) ;
+0.09999999999999998::uninstall_tool_result(S,ActionCode,false).
+
 query(any_battery_depletion).

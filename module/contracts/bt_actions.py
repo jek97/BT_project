@@ -42,7 +42,14 @@ deterministic stand-in would silently misrepresent what the theory
 actually says happens -- worse than no implementation at all.
 DistanceBelow/DistanceEqual/DistanceOver/HaltedWith are native Prolog
 conditions over a situation; Python has no situation to evaluate them
-against on its own.
+against on its own. InstallTool/UninstallTool join this same
+interface-only group -- UNLIKE TakeSample below, their own outcome
+isn't just a bare coin flip: it's a fixed-Duration walk-alike with its
+own battery-only Triggers/earliest-halt search (tool_earliest_halt/8
+in basic_action_theory.pl) gating WHETHER the coin flip even happens,
+the same non-trivial "stochastic action theory with real preconditions
+and a trigger race" shape MoveTo has, just without the continuous
+trajectory -- no faithful plain-Python stand-in for that either.
 
 TakeSample, despite ALSO being part of the stochastic action theory
 (its outcome is a genuine ProbLog annotated disjunction, sample_result/3
@@ -228,6 +235,38 @@ def moveto_leg_term(control_points, triggers):
         f"point({float(x)},{float(y)})" for x, y in control_points) + "]"
     trig_text = "[" + ",".join(str(t) for t in triggers) + "]"
     return f"moveto_leg({cp_text},{trig_text})"
+
+
+# =====================================================================
+# ACTIONS -- interface-only (InstallTool/UninstallTool): term builders
+# =====================================================================
+def install_tool_leg_term(tool, triggers, action_code):
+    """
+    Build the basic_action_theory.pl TERM TEXT for one InstallTool
+    node's bound inputs -- install_tool_leg(Tool,Triggers,ActionCode).
+    triggers is REQUIRED (pass [] for none), same convention as
+    moveto_leg_term above, but RESTRICTED to battery-related names only
+    -- see schema.yaml's own InstallTool entry.
+
+    tool: "cart" or "plow", as text (a bare Prolog atom, unquoted).
+    triggers: list of strings (e.g. ["battery","battery_below(20)"]).
+    action_code: a free Prolog variable name or bound atom, as text
+        (e.g. "a5").
+
+    Returns Prolog source text, e.g.:
+        "install_tool_leg(cart,[battery],a5)"
+    """
+    trig_text = "[" + ",".join(str(t) for t in triggers) + "]"
+    return f"install_tool_leg({tool},{trig_text},{action_code})"
+
+
+def uninstall_tool_leg_term(tool, triggers, action_code):
+    """Build the basic_action_theory.pl TERM TEXT for one
+    UninstallTool node's bound inputs -- uninstall_tool_leg(Tool,
+    Triggers,ActionCode). Same shape/rationale as install_tool_leg_term
+    above."""
+    trig_text = "[" + ",".join(str(t) for t in triggers) + "]"
+    return f"uninstall_tool_leg({tool},{trig_text},{action_code})"
 
 
 # =====================================================================
@@ -418,6 +457,16 @@ ACTIONS = {
         "kind": "callable",
         "prolog_action": "take_sample",
         "func": bt_take_sample,
+    },
+    "InstallTool": {
+        "kind": "interface_only",
+        "prolog_action": "install_tool_leg",
+        "term_builder": install_tool_leg_term,
+    },
+    "UninstallTool": {
+        "kind": "interface_only",
+        "prolog_action": "uninstall_tool_leg",
+        "term_builder": uninstall_tool_leg_term,
     },
 }
 

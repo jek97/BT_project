@@ -113,8 +113,9 @@ def _gaussian_disjunction(functor, args_prefix, discretized_gaussian):
     return "\n".join(lines)
 
 
-def _sample_result_block(success_probability):
-    """Build take_sample's own annotated disjunction:
+def _binary_result_block(functor, success_probability):
+    """Build a two-outcome annotated disjunction keyed by (S,ActionCode),
+    e.g. for functor="sample_result":
         0.5::sample_result(S,ActionCode,true) ;
         0.5::sample_result(S,ActionCode,false).
     S and ActionCode are free variables in the head -- ProbLog grounds
@@ -124,7 +125,9 @@ def _sample_result_block(success_probability):
     always gets an independent draw, while an identical situation term
     reached twice (via ProbLog's own proof-sharing) shares the SAME
     cached one -- see basic_action_theory.pl's own do_node(take_sample
-    (...)) note. failure_probability is DERIVED as
+    (...))/do_node(install_tool_leg(...)) notes, the three callers of
+    this same shape (sample_result/3, install_tool_result/3,
+    uninstall_tool_result/3). failure_probability is DERIVED as
     1-success_probability, never taken as a second config value, so
     the two outcomes can never fail to sum to 1.0 -- avoiding the
     exact missing-annotated-disjunction-mass bug _check_gaussian_
@@ -132,8 +135,39 @@ def _sample_result_block(success_probability):
     validation."""
     p_success = _format_number(success_probability)
     p_failure = _format_number(1.0 - success_probability)
-    return (f"{p_success}::sample_result(S,ActionCode,true) ;\n"
-            f"{p_failure}::sample_result(S,ActionCode,false).")
+    return (f"{p_success}::{functor}(S,ActionCode,true) ;\n"
+            f"{p_failure}::{functor}(S,ActionCode,false).")
+
+
+# The only two tool kinds install_tool/uninstall_tool currently accept
+# -- see module/translators/bt_to_prolog.py's own _TOOL_KINDS (the
+# SAME set, validated at translation time against a BT XML's own
+# tool="..." port).
+_TOOL_KINDS = ("cart", "plow")
+_DEFAULT_TOOL_DURATION_S = 10.0
+_DEFAULT_TOOL_SUCCESS_PROBABILITY = 0.9
+
+
+def _tool_duration_facts(functor, duration_cfg):
+    """Build one Duration fact per tool kind, e.g. for
+    functor="install_tool_duration":
+        install_tool_duration(cart, 10.0).
+        install_tool_duration(plow, 10.0).
+    duration_cfg is config.yaml's own tool.install.duration_seconds (or
+    tool.uninstall.*) mapping -- EACH tool defaults independently to
+    _DEFAULT_TOOL_DURATION_S if its own key is missing (same per-key-
+    default style disc_step_position/disc_step_battery/disc_step_time
+    already use above), so config.yaml never needs a tool.* section at
+    all unless a problem actually wants to override it -- see
+    basic_action_theory.pl's own install_tool_duration/2 note. Genuinely
+    PER-TOOL from day one (not a single shared constant retrofitted
+    later), per this feature's own request, even though both tools
+    currently default to the SAME value."""
+    lines = []
+    for tool in _TOOL_KINDS:
+        duration = float(duration_cfg.get(tool, _DEFAULT_TOOL_DURATION_S))
+        lines.append(f"{functor}({tool}, {_format_number(duration)}).")
+    return "\n".join(lines)
 
 
 def render_prolog(config):
@@ -177,7 +211,27 @@ def render_prolog(config):
     # above, unlike the core physical constants (robot_radius, sigma,
     # ...) which have no default and are required.
     sample_success_probability = config.get("sample", {}).get("success_probability", 0.5)
-    sample_block = _sample_result_block(float(sample_success_probability))
+    sample_block = _binary_result_block("sample_result", float(sample_success_probability))
+
+    # tool.install/tool.uninstall default entirely if the whole `tool:`
+    # section is omitted -- same "optional feature" treatment as
+    # sample: above (not every problem's tree uses <InstallTool/>/
+    # <UninstallTool/>). SEPARATE success_probability for install vs
+    # uninstall (this feature's own request: physically different
+    # operations, no reason to share one number) -- both default to
+    # _DEFAULT_TOOL_SUCCESS_PROBABILITY if their own key is missing.
+    install_cfg = config.get("tool", {}).get("install", {})
+    uninstall_cfg = config.get("tool", {}).get("uninstall", {})
+    install_success_probability = float(
+        install_cfg.get("success_probability", _DEFAULT_TOOL_SUCCESS_PROBABILITY))
+    uninstall_success_probability = float(
+        uninstall_cfg.get("success_probability", _DEFAULT_TOOL_SUCCESS_PROBABILITY))
+    install_tool_result_block = _binary_result_block("install_tool_result", install_success_probability)
+    uninstall_tool_result_block = _binary_result_block("uninstall_tool_result", uninstall_success_probability)
+    install_tool_duration_facts = _tool_duration_facts(
+        "install_tool_duration", install_cfg.get("duration_seconds", {}))
+    uninstall_tool_duration_facts = _tool_duration_facts(
+        "uninstall_tool_duration", uninstall_cfg.get("duration_seconds", {}))
 
     lines = [
         "% AUTO-GENERATED by module/translators/config_to_prolog.py from",
@@ -212,6 +266,13 @@ def render_prolog(config):
         zbatt_block,
         "",
         sample_block,
+        "",
+        install_tool_duration_facts,
+        uninstall_tool_duration_facts,
+        "",
+        install_tool_result_block,
+        "",
+        uninstall_tool_result_block,
         "",
     ]
 

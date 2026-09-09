@@ -96,6 +96,24 @@ predicates:
       conjunct per location in a goal formula, same idiom visited/3
       already uses for multi-waypoint goals.
 
+  - name: hitch
+    arity: 2
+    situation_arg: 2
+    args:
+      - {position: 1, name: State, type: atom, description: "free, or the tool's own name (cart/plow) -- which tool (if any) is currently attached."}
+      - {position: 2, name: S, type: situation, description: "The situation to check at."}
+    description: >
+      TRUE iff State is the tool currently attached to the hitch (or
+      the atom `free` if nothing is) in S -- starts free in s0, flips
+      to Tool only on a SUCCESSFUL install_tool halt, back to free only
+      on a SUCCESSFUL uninstall_tool halt (a failed attempt leaves it
+      unchanged -- see basic_action_theory.pl's own hitch/2 note for
+      the full state machine). A plain persistent fluent (like at/4/
+      battery/3), not a whole-history search like visited/3/
+      sample_success_at/3 above -- State is whatever it currently is,
+      checked directly at S, e.g. "goal_formula(S) :- hitch(plow,S)."
+      for "the plow is attached by the end of the mission."
+
   - name: halted_with
     arity: 2
     situation_arg: 2

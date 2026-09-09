@@ -433,6 +433,69 @@ current_walk(do(A,S), CP, Triggers, ActionCode, T0, SPrev) :-
     current_walk(S, CP, Triggers, ActionCode, T0, SPrev).
 
 % ---------------------------------------------------------------
+% 5b. INSTALLING_TOOL / UNINSTALLING_TOOL -- the install_tool/
+%     uninstall_tool analogue of moving/1 above: true while a fixed-
+%     Duration install (or uninstall) is in progress, between
+%     start_install_tool(Tool,...)/start_uninstall_tool(Tool,...) and
+%     whichever halt_install_tool(...)/halt_uninstall_tool(...) ends
+%     it -- there is no interrupt(...) counterpart for either (not
+%     asked for; the plan never voluntarily cuts one short the way it
+%     can a walk). Tool is carried in the base clause's own head so a
+%     caller can ask "is THIS tool currently being installed" (used as
+%     halt_install_tool's own PRECONDITION, per this action's own
+%     request) as well as just "is something being installed".
+installing_tool(Tool, do(start_install_tool(Tool,_,_,_), _)).
+installing_tool(Tool, do(A,S)) :-
+    A \= halt_install_tool(_,_,_),
+    installing_tool(Tool, S).
+
+uninstalling_tool(Tool, do(start_uninstall_tool(Tool,_,_,_), _)).
+uninstalling_tool(Tool, do(A,S)) :-
+    A \= halt_uninstall_tool(_,_,_),
+    uninstalling_tool(Tool, S).
+
+% current_install_tool(+S, -Tool,-Triggers,-ActionCode,-T0,-SPrev):
+% the install_tool analogue of current_walk/6 above -- the most recent
+% start_install_tool in S's history, generically skipping over any
+% OTHER action layered on top (same pass-through shape). No CP slot at
+% all -- install_tool has no path, nothing to recover. Used exactly
+% where current_walk/6 is: recovering a leg's own parameters at
+% poss(halt_install_tool(...)) time.
+current_install_tool(do(start_install_tool(Tool,Triggers,ActionCode,T0),SPrev), Tool, Triggers, ActionCode, T0, SPrev).
+current_install_tool(do(A,S), Tool, Triggers, ActionCode, T0, SPrev) :-
+    A \= start_install_tool(_,_,_,_),
+    current_install_tool(S, Tool, Triggers, ActionCode, T0, SPrev).
+
+current_uninstall_tool(do(start_uninstall_tool(Tool,Triggers,ActionCode,T0),SPrev), Tool, Triggers, ActionCode, T0, SPrev).
+current_uninstall_tool(do(A,S), Tool, Triggers, ActionCode, T0, SPrev) :-
+    A \= start_uninstall_tool(_,_,_,_),
+    current_uninstall_tool(S, Tool, Triggers, ActionCode, T0, SPrev).
+
+% ---------------------------------------------------------------
+% 5c. THE HITCH FLUENT -- which tool (if any) is currently attached:
+%     free (nothing attached), or the tool's own name (cart/plow).
+%     Starts free in s0. Flips to Tool ONLY on a SUCCESSFUL
+%     halt_install_tool(Tool,...) (a FAILED attempt leaves it
+%     unchanged -- nothing actually got attached), and back to free
+%     ONLY on a SUCCESSFUL halt_uninstall_tool(...) -- per this
+%     action's own request. Monotonic-persistence (frame axiom) is the
+%     generic pass-through clause, same shape as at/4's/battery/3's own
+%     -- everything else in the history leaves hitch/2 unchanged.
+%     Reason (install_tool_success(Tool,ActionCode)/uninstall_tool_
+%     success(Tool,ActionCode)) is matched here in its FULLY TAGGED
+%     shape (see tag_reason/3) -- halt_install_tool/halt_uninstall_tool
+%     always carry the tagged Reason directly as their own 2nd
+%     argument (see do_node(install_tool_leg(...))'s own note further
+%     down), so there is no separate untagged form to also match here.
+hitch(free, s0).
+hitch(Tool, do(halt_install_tool(_T,install_tool_success(Tool,_ActionCode),true), _)).
+hitch(free, do(halt_uninstall_tool(_T,uninstall_tool_success(_Tool,_ActionCode),true), _)).
+hitch(State, do(A,S)) :-
+    A \= halt_install_tool(_,install_tool_success(_,_),true),
+    A \= halt_uninstall_tool(_,uninstall_tool_success(_,_),true),
+    hitch(State, S).
+
+% ---------------------------------------------------------------
 % 4b. THE BATTERY FLUENT -- a second clock fluent, on the exact same
 %     footing as at/4: battery(Level,T,S) is the charge level (0..100,
 %     percent) at real clock-time T in situation S.
@@ -735,6 +798,92 @@ battery_at_leg(T0,Duration,Zb,B0,T,Level) :-
     noisy_drain(NominalDrain, Deviation, TotalDrain),
     Level is max(0, min(100, B0 - TotalDrain)).
 
+% -- IDLE-PHASE battery crossing time -- install_tool/uninstall_tool's
+%    OWN battery-trigger family (see the TOOL TRIGGERS section further
+%    down), NOT a generalization of first_battery_depletion_time/
+%    first_battery_below_time/first_battery_equal_time/first_battery_
+%    over_time above: those are the MOVING-phase formula specifically
+%    (moving_drain_rate, Elapsed/sqrt(Duration) scaling -- exactly
+%    linear in Elapsed, hence a direct linear solve). install_tool/
+%    uninstall_tool never move the robot -- battery/3's own generic
+%    pass-through clause means the IDLE-phase formula (idle_drain_rate,
+%    sqrt(Elapsed) scaling -- battery/3's own s0/after-halt/after-
+%    interrupt clauses) is what ALREADY governs battery throughout
+%    their span, with NO changes needed to battery/3 itself (see
+%    do_node(install_tool_leg(...))'s own note). Solving Level(T)=
+%    Threshold under sqrt(Elapsed) scaling is NOT linear in Elapsed --
+%    it's a QUADRATIC in sqrt(Elapsed) -- still genuinely CLOSED-FORM
+%    (not bracket-scan+bisection), just one degree higher:
+%        IdleRate*Elapsed - Zb*SigmaB*sqrt(Elapsed) = B0-Threshold
+%    Substituting X = sqrt(Elapsed) turns this into the plain quadratic
+%    IdleRate*X^2 - Zb*SigmaB*X - (B0-Threshold) = 0, solved by the
+%    standard quadratic formula, positive root only (the OTHER root is
+%    provably non-positive whenever B0-Threshold > 0: the two roots'
+%    product is -(B0-Threshold)/IdleRate < 0, so they have opposite
+%    signs -- there is exactly one valid non-negative solution, always
+%    the "+" root, regardless of Zb's own sign). No CP argument at all
+%    (unlike the moving-phase family above, which threads one through
+%    unused) -- there is no path to thread through for an action that
+%    never moves.
+first_idle_battery_depletion_time(T0,_Duration,B0,_Zb,T0) :-
+    B0 =< 0.
+first_idle_battery_depletion_time(T0,Duration,B0,Zb,Tcross) :-
+    B0 > 0,
+    idle_drain_rate(IdleRate),
+    sigma_battery(SigmaB),
+    Disc is (Zb*SigmaB)**2 + 4*IdleRate*B0,
+    X is (Zb*SigmaB + sqrt(Disc)) / (2*IdleRate),
+    Elapsed is X*X,
+    Tcross0 is T0 + Elapsed,
+    Tcross0 =< T0 + Duration,
+    Tcross = Tcross0.
+
+% first_idle_battery_below_time/6: the SAME "already true at T0" grace
+% clause first_battery_below_time/7 (moving-phase) has, generalized to
+% an arbitrary Threshold instead of hardcoded Level=0 -- see that
+% predicate's own note for why the grace clause is needed here but not
+% for plain depletion.
+first_idle_battery_below_time(T0,_Duration,B0,_Zb,Threshold,T0) :-
+    B0 =< Threshold.
+first_idle_battery_below_time(T0,Duration,B0,Zb,Threshold,Tcross) :-
+    B0 > Threshold,
+    idle_drain_rate(IdleRate),
+    sigma_battery(SigmaB),
+    D is B0 - Threshold,
+    Disc is (Zb*SigmaB)**2 + 4*IdleRate*D,
+    X is (Zb*SigmaB + sqrt(Disc)) / (2*IdleRate),
+    Elapsed is X*X,
+    Tcross0 is T0 + Elapsed,
+    Tcross0 =< T0 + Duration,
+    Tcross = Tcross0.
+
+% first_idle_battery_equal_time/6: mirrors first_battery_equal_time/7
+% (moving-phase) EXACTLY -- exact-equality grace at T0, NO "already
+% below" grace (see that predicate's own note for why: already-below
+% means it passed through Threshold at an earlier, already-elapsed
+% instant this action never sees).
+first_idle_battery_equal_time(T0,_Duration,B0,_Zb,Threshold,T0) :-
+    B0 =:= Threshold.
+first_idle_battery_equal_time(T0,Duration,B0,Zb,Threshold,Tcross) :-
+    B0 > Threshold,
+    idle_drain_rate(IdleRate),
+    sigma_battery(SigmaB),
+    D is B0 - Threshold,
+    Disc is (Zb*SigmaB)**2 + 4*IdleRate*D,
+    X is (Zb*SigmaB + sqrt(Disc)) / (2*IdleRate),
+    Elapsed is X*X,
+    Tcross0 is T0 + Elapsed,
+    Tcross0 =< T0 + Duration,
+    Tcross = Tcross0.
+
+% first_idle_battery_over_time/6: mirrors first_battery_over_time/7's
+% own "already true at T0, no future clause written" shape and
+% rationale EXACTLY (battery only ever drains under noisy_drain/3's own
+% clamp, moving OR idle phase alike, so there is nothing for a future-
+% crossing clause to compute today -- see that predicate's own note).
+first_idle_battery_over_time(T0,_Duration,B0,_Zb,Threshold,T0) :-
+    B0 > Threshold.
+
 % ---------------------------------------------------------------
 % TRIGGERS -- the TEMPLATE mechanism. A leg's Triggers argument is
 % the COMPLETE list of halting conditions this leg reacts to --
@@ -970,6 +1119,87 @@ earliest_of([R1-T1-C1|Rest], Result) :-
     T1 > T2,
     Result = R2-T2-C2.
 
+% ---------------------------------------------------------------
+% TOOL TRIGGERS -- install_tool/uninstall_tool's OWN, RESTRICTED
+% analogue of the TRIGGERS section above (all_trigger_candidates/9,
+% trigger_crossing_time/11): install_tool/uninstall_tool never move
+% the robot, so a MOTION-based trigger (collision, obstacle_in_bound,
+% obstacle_on_path, line_of_sight_clear, crosses_segment) has NO
+% meaningful geometry to check -- there is no CP, no path, nothing for
+% walk_noisy_point to evaluate. Per this action's own design: such a
+% trigger, if it somehow ends up in an install_tool/uninstall_tool's
+% own Triggers list (module/translators/bt_to_prolog.py validates
+% against this at translation time -- see its own _TOOL_TRIGGER_
+% FUNCTORS -- but a hand-written plan_generated.pl, same as problem3's
+% own, bypasses that validation entirely), should contribute NOTHING --
+% "return an infinite crossing time" -- rather than error or attempt a
+% nonsensical geometry check. tool_trigger_crossing_time/8 below
+% achieves exactly this BY OMISSION: it has a clause ONLY for the
+% battery-related trigger names (using the IDLE-phase closed-form
+% family above, NOT the moving-phase trigger_crossing_time/11's own
+% battery clauses -- see those predicates' own note on why the two
+% differ), so any OTHER trigger name has no matching clause at all,
+% and all_tool_trigger_candidates/6's own third clause -- the EXACT
+% same "unrecognized trigger, silently skipped" convention all_trigger_
+% candidates/9 already uses -- treats that identically to "never
+% fires". No new special-casing anywhere: this is the SAME graceful-
+% absence idiom used throughout this theory, just arrived at by a
+% SMALLER trigger vocabulary rather than an explicit guard.
+tool_trigger_crossing_time(battery, T0,Duration,Zb,B0, battery_depleted, Tcross, none) :-
+    first_idle_battery_depletion_time(T0,Duration,B0,Zb,Tcross).
+tool_trigger_crossing_time(battery_below(Threshold,Code), T0,Duration,Zb,B0, battery_under(Threshold), Tcross, Code) :-
+    first_idle_battery_below_time(T0,Duration,B0,Zb,Threshold,Tcross).
+tool_trigger_crossing_time(battery_equal(Threshold,Code), T0,Duration,Zb,B0, battery_equal(Threshold), Tcross, Code) :-
+    first_idle_battery_equal_time(T0,Duration,B0,Zb,Threshold,Tcross).
+tool_trigger_crossing_time(battery_over(Threshold,Code), T0,Duration,Zb,B0, battery_over(Threshold), Tcross, Code) :-
+    first_idle_battery_over_time(T0,Duration,B0,Zb,Threshold,Tcross).
+
+all_tool_trigger_candidates([], _,_,_,_, []).
+all_tool_trigger_candidates([Trig|Rest], T0,Duration,Zb,B0, [Reason-Tcross-Code|RestCands]) :-
+    tool_trigger_crossing_time(Trig, T0,Duration,Zb,B0, Reason,Tcross,Code),
+    all_tool_trigger_candidates(Rest, T0,Duration,Zb,B0, RestCands).
+all_tool_trigger_candidates([Trig|Rest], T0,Duration,Zb,B0, RestCands) :-
+    \+ tool_trigger_crossing_time(Trig, T0,Duration,Zb,B0, _,_,_),
+    all_tool_trigger_candidates(Rest, T0,Duration,Zb,B0, RestCands).
+
+% tool_earliest_halt(+Triggers,+T0,+Duration,+Zb,+B0, -Reason,-T,-Code):
+% the install_tool/uninstall_tool analogue of earliest_halt/11 above --
+% SAME "natural completion vs. earliest trigger" combinator, just over
+% the smaller battery-only candidate set. Reason=natural_tool_end (a
+% SENTINEL, not a genuine Reason atom any other part of this theory
+% ever sees) marks "reached the full Duration with nothing halting it
+% early" -- poss(halt_install_tool(...))/poss(halt_uninstall_tool(...))
+% below are what turn THAT specific outcome into the actual install/
+% uninstall success-or-failure coin flip (install_tool_result/3 --
+% see that predicate's own note); a genuine trigger firing first is
+% used AS-IS, exactly like earliest_halt/11's own ExtraCandidates.
+tool_earliest_halt(Triggers,T0,Duration,Zb,B0, Reason,T,Code) :-
+    all_tool_trigger_candidates(Triggers, T0,Duration,Zb,B0, ExtraCandidates),
+    NaturalEnd is T0 + Duration,
+    earliest_of([natural_tool_end-NaturalEnd-none], ExtraCandidates, Reason-T-Code).
+
+% tool_leg_status(+Reason,+Code,-Status): the install_tool/
+% uninstall_tool analogue of leg_status/9 above -- but NOTE the
+% difference from moveto's own rule: reaching "natural completion" is
+% NOT itself a success (unlike moveto's Reason=completed->true) --
+% *_tool_success(Tool,_)/*_tool_failure(Tool,_) are BOTH possible
+% outcomes of natural completion (the coin flip already resolved which
+% one -- see poss(halt_install_tool(...)) below), so THIS predicate
+% only ever sees the ALREADY-DECIDED Reason, never the natural_tool_end
+% sentinel itself. battery_depleted is the one hard, non-reactive
+% failure (mirroring battery_depleted's own classification in
+% leg_status/9); every OTHER battery-related trigger (battery_under/
+% equal/over(Threshold)) reactive-classifies, same convention.
+tool_leg_status(install_tool_success(_Tool), _Code, true).
+tool_leg_status(uninstall_tool_success(_Tool), _Code, true).
+tool_leg_status(install_tool_failure(_Tool), _Code, false).
+tool_leg_status(uninstall_tool_failure(_Tool), _Code, false).
+tool_leg_status(battery_depleted, _Code, false).
+tool_leg_status(Reason, Code, reactive(Code)) :-
+    Reason \= install_tool_success(_), Reason \= uninstall_tool_success(_),
+    Reason \= install_tool_failure(_), Reason \= uninstall_tool_failure(_),
+    Reason \= battery_depleted.
+
 % walk_noisy_point(+CP,+T0,+Duration,+Z,+Zt,+T,-X,-Y): position along
 % the spline at time T, given TWO ALREADY-RESOLVED, INDEPENDENT noise
 % draws (rather than looking them up via z/2 or zt/2 itself): Z (lateral
@@ -1080,8 +1310,27 @@ now(0, s0).
 now(T, do(startMoveto(_,_,_,T),_)).
 now(T, do(haltMoveto(T,_,_),_)).
 now(T, do(interrupt(T),_)).
+% start_install_tool/halt_install_tool (and the uninstall pair) ALSO
+% genuinely advance the clock -- start_install_tool(...) takes real
+% time to REACH (T0 is when the install itself begins, exactly
+% mirroring startMoveto's own T0), and halt_install_tool(...) reports
+% the instant it ends, exactly mirroring haltMoveto's own T. UNLIKE
+% at/4/battery/3/moving/1/current_walk/6 (whose own generic pass-
+% through clauses already handle these four new action functors
+% correctly with no changes at all -- see do_node(install_tool_leg
+% (...))'s own note), now/2 would be WRONG without these: its own
+% generic pass-through simply reuses whatever "now" already was,
+% which is only correct for a bookkeeping MARKER with no clock effect
+% of its own (checked/planned/sampled), not for an action that
+% GENUINELY advances time.
+now(T0, do(start_install_tool(_,_,_,T0),_)).
+now(T, do(halt_install_tool(T,_,_),_)).
+now(T0, do(start_uninstall_tool(_,_,_,T0),_)).
+now(T, do(halt_uninstall_tool(T,_,_),_)).
 now(T, do(A,S)) :-
     A \= startMoveto(_,_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
+    A \= start_install_tool(_,_,_,_), A \= halt_install_tool(_,_,_),
+    A \= start_uninstall_tool(_,_,_,_), A \= halt_uninstall_tool(_,_,_),
     now(T, S).
 
 % haltMoveto(T,Reason): the ways a walk stops other than an interrupt.
@@ -1269,6 +1518,100 @@ poss(take_sample(ActionCode,Reason,false), S) :-
     sample_result(S, ActionCode, false),
     tag_reason(sample_failure(X,Y), ActionCode, Reason).
 
+% poss(start_install_tool(Tool,Triggers,ActionCode,T0), S): the two
+% preconditions this action's own design calls for -- \+ moving(S)
+% (can't start installing mid-walk, same reasoning as take_sample's own
+% precondition), and hitch(free,S) (nothing already attached -- see
+% hitch/2's own note, Section 5c). T0 quantization mirrors
+% poss(startMoveto(...)) above exactly (same merge-grid rationale).
+poss(start_install_tool(_Tool,_Triggers,_ActionCode,T0), S) :-
+    \+ moving(S),
+    hitch(free, S),
+    now(T0Exact, S),
+    disc_step_time(Grid),
+    quantize_up(T0Exact, Grid, T0).
+
+% poss(halt_install_tool(T,Reason,Status), S): installing_tool(Tool,S)
+% is checked EXPLICITLY (this action's own request), even though
+% current_install_tool/6 below would already implicitly require it --
+% same redundant-but-explicit style poss(haltMoveto(...)) already uses
+% for moving(S) alongside current_walk/6. TWO clauses, matching
+% tool_earliest_halt/8's own "natural_tool_end is a SENTINEL, not a
+% real Reason" contract: clause 1 is what actually happens when
+% Duration elapses with nothing halting it early -- ONLY THEN does
+% install_tool_result/3 (this problem's own config.yaml, tool.install.
+% success_probability -- see config_generated.pl) get drawn, keyed on
+% (S,ActionCode) exactly like take_sample's own sample_result/3 (same
+% "fresh draw per genuinely new situation, shared only if the exact
+% situation term recurs" semantics -- see that predicate's own note);
+% clause 2 is a genuine battery trigger firing first, used as-is, same
+% shape poss(haltMoveto(...)) itself uses for its own ExtraCandidates.
+poss(halt_install_tool(T,Reason,Status), S) :-
+    installing_tool(Tool, S),
+    current_install_tool(S, Tool, Triggers, ActionCode, T0, SPrev),
+    install_tool_duration(Tool, Duration),
+    zbatt(Zb),
+    leg_start_battery(T0, SPrev, B0),
+    tool_earliest_halt(Triggers,T0,Duration,Zb,B0, natural_tool_end,T,_Code),
+    install_tool_result(S, ActionCode, CoinStatus),
+    tool_install_reason(CoinStatus, Tool, Reason0),
+    tool_leg_status(Reason0, none, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+poss(halt_install_tool(T,Reason,Status), S) :-
+    installing_tool(Tool, S),
+    current_install_tool(S, Tool, Triggers, ActionCode, T0, SPrev),
+    install_tool_duration(Tool, Duration),
+    zbatt(Zb),
+    leg_start_battery(T0, SPrev, B0),
+    tool_earliest_halt(Triggers,T0,Duration,Zb,B0, Reason0,T,Code),
+    Reason0 \= natural_tool_end,
+    tool_leg_status(Reason0, Code, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+
+tool_install_reason(true, Tool, install_tool_success(Tool)).
+tool_install_reason(false, Tool, install_tool_failure(Tool)).
+
+% poss(start_uninstall_tool(Tool,Triggers,ActionCode,T0), S): the
+% mirror image of poss(start_install_tool(...)) above -- \+ moving(S),
+% and hitch(Tool,S) (per this action's own request: uninstalling A
+% SPECIFIC tool requires THAT tool -- not just "something" -- to
+% currently be the one attached).
+poss(start_uninstall_tool(Tool,_Triggers,_ActionCode,T0), S) :-
+    \+ moving(S),
+    hitch(Tool, S),
+    now(T0Exact, S),
+    disc_step_time(Grid),
+    quantize_up(T0Exact, Grid, T0).
+
+% poss(halt_uninstall_tool(T,Reason,Status), S): the mirror image of
+% poss(halt_install_tool(...)) above, uninstall_tool_result/3 (this
+% problem's own config.yaml, tool.uninstall.success_probability) in
+% place of install_tool_result/3.
+poss(halt_uninstall_tool(T,Reason,Status), S) :-
+    uninstalling_tool(Tool, S),
+    current_uninstall_tool(S, Tool, Triggers, ActionCode, T0, SPrev),
+    uninstall_tool_duration(Tool, Duration),
+    zbatt(Zb),
+    leg_start_battery(T0, SPrev, B0),
+    tool_earliest_halt(Triggers,T0,Duration,Zb,B0, natural_tool_end,T,_Code),
+    uninstall_tool_result(S, ActionCode, CoinStatus),
+    tool_uninstall_reason(CoinStatus, Tool, Reason0),
+    tool_leg_status(Reason0, none, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+poss(halt_uninstall_tool(T,Reason,Status), S) :-
+    uninstalling_tool(Tool, S),
+    current_uninstall_tool(S, Tool, Triggers, ActionCode, T0, SPrev),
+    uninstall_tool_duration(Tool, Duration),
+    zbatt(Zb),
+    leg_start_battery(T0, SPrev, B0),
+    tool_earliest_halt(Triggers,T0,Duration,Zb,B0, Reason0,T,Code),
+    Reason0 \= natural_tool_end,
+    tool_leg_status(Reason0, Code, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+
+tool_uninstall_reason(true, Tool, uninstall_tool_success(Tool)).
+tool_uninstall_reason(false, Tool, uninstall_tool_failure(Tool)).
+
 % ---------------------------------------------------------------
 % 6. THE POSITION FLUENT -- pure situation-calculus regression.
 %    at(X,Y,T,S): position of the robot at time T in situation S.
@@ -1407,6 +1750,10 @@ primitive_action(startMoveto(_,_,_,_)).
 primitive_action(haltMoveto(_,_,_)).
 primitive_action(interrupt(_)).
 primitive_action(take_sample(_,_,_)).
+primitive_action(start_install_tool(_,_,_,_)).
+primitive_action(halt_install_tool(_,_,_)).
+primitive_action(start_uninstall_tool(_,_,_,_)).
+primitive_action(halt_uninstall_tool(_,_,_)).
 
 do_action(A, S, do(A,S)) :- primitive_action(A), poss(A, S).
 
@@ -1489,6 +1836,38 @@ do_node(take_sample(ActionCode), S, S1, Status) :-
 do_node(moveto_leg(CP,Triggers,ActionCode), S, S1, Status) :-
     do_action(startMoveto(CP,Triggers,ActionCode,_T0), S, S2),
     do_action(haltMoveto(_T,_Reason,Status), S2, S1).
+
+% -- ACTION leaf: install_tool / uninstall_tool -------------------------
+% install_tool_leg(Tool,Triggers,ActionCode) -- a DURATIVE action, same
+% start/halt shape as moveto_leg above (do_action(start_install_tool
+% (...)),do_action(halt_install_tool(...))), just with a FIXED,
+% config-driven Duration (install_tool_duration(Tool,Duration) -- see
+% config_generated.pl) instead of one derived from spline arc length,
+% and no continuous position/noise of its own at all: the robot never
+% moves, so at/4's/battery/3's/moving/1's/current_walk/6's own EXISTING
+% generic pass-through clauses already handle these two new action
+% functors correctly with NO changes needed to any of them (only
+% now/2 needed new explicit clauses -- see that predicate's own note --
+% since it's the one fluent whose generic pass-through would otherwise
+% silently ignore a genuine clock advance). Triggers is the SAME
+% mechanism as moveto_leg's own, RESTRICTED to battery-related names
+% only (see the TOOL TRIGGERS section, above tool_trigger_crossing_
+% time/8, for why and how motion-based ones gracefully contribute
+% nothing instead of erroring). installing_tool(Tool,S) is TRUE for
+% every situation between start_install_tool and halt_install_tool
+% (Section 5b) -- an explicit precondition of halt_install_tool's own
+% Poss, per this action's own request, even though current_install_
+% tool/6 would already implicitly require it. hitch(free,S) gates
+% starting an install; hitch(Tool,S) (THIS specific tool) gates
+% starting an uninstall -- see hitch/2's own note (Section 5c) for the
+% full state-machine, including why only a SUCCESSFUL halt flips it.
+do_node(install_tool_leg(Tool,Triggers,ActionCode), S, S1, Status) :-
+    do_action(start_install_tool(Tool,Triggers,ActionCode,_T0), S, S2),
+    do_action(halt_install_tool(_T,_Reason,Status), S2, S1).
+
+do_node(uninstall_tool_leg(Tool,Triggers,ActionCode), S, S1, Status) :-
+    do_action(start_uninstall_tool(Tool,Triggers,ActionCode,_T0), S, S2),
+    do_action(halt_uninstall_tool(_T,_Reason,Status), S2, S1).
 
 % -- PLANNING actions: deliberately NOT part of the full action theory
 %    -- no primitive_action/1 entry, no Poss axiom, no do_action call
@@ -2274,6 +2653,14 @@ outcome_entry(take_sample(_ActionCode,Reason,_Status), Code-Pattern) :-
     Reason =.. [Functor|Args],
     append(Args0, [Code], Args),
     Pattern =.. [Functor|Args0].
+outcome_entry(halt_install_tool(_,Reason,_), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
+outcome_entry(halt_uninstall_tool(_,Reason,_), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
 
 % history_outcomes(+S, -Entries): every outcome_entry/2 found ANYWHERE
 % in S's own history, oldest-first -- the one GENERIC pass behind
@@ -2428,6 +2815,8 @@ sample_walk_frac(I, S, WalkFrac) :-
 halted_with(Reason, do(haltMoveto(_,Reason,_), _)).
 halted_with(Reason, do(planned(_Algorithm,Reason), _)).
 halted_with(Reason, do(take_sample(_ActionCode,Reason,_Status), _)).
+halted_with(Reason, do(halt_install_tool(_,Reason,_), _)).
+halted_with(Reason, do(halt_uninstall_tool(_,Reason,_), _)).
 halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 
 % visited(+Loc, +Tol, +S): TRUE iff the robot ACTUALLY ARRIVED at
@@ -2712,8 +3101,15 @@ any_condition_status(Code, Status) :-
 % trivially succeed even though something genuinely just halted. Every
 % new reactive-capable leaf type needs its OWN base clause added here
 % (or all leaves funneled through one shared halt-action functor with a
-% Kind tag, instead of a differently-named action per leaf type).
+% Kind tag, instead of a differently-named action per leaf type) --
+% install_tool/uninstall_tool (below) are the first to actually take
+% this up: two MORE base clauses, same shape as haltMoveto's own,
+% since halt_install_tool(T,Reason,Status)/halt_uninstall_tool(T,
+% Reason,Status) share that EXACT (T,Reason,Status) argument shape by
+% deliberate design (see do_node(install_tool_leg(...))'s own note).
 holds(last_halt(Reason), do(haltMoveto(_T,Reason,_Status),_SPrev)).
+holds(last_halt(Reason), do(halt_install_tool(_T,Reason,_Status),_SPrev)).
+holds(last_halt(Reason), do(halt_uninstall_tool(_T,Reason,_Status),_SPrev)).
 holds(last_halt(Reason), do(checked(_,_,_), S)) :- holds(last_halt(Reason), S).
 holds(last_halt(Reason), do(planned(_,_), S)) :- holds(last_halt(Reason), S).
 holds(last_halt(Reason), do(take_sample(_,_,_), S)) :- holds(last_halt(Reason), S).

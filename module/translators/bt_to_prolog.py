@@ -152,7 +152,38 @@ _ACTION_DISPATCH = {
     # own attributes, so its "kind" branch in _translate_leaf below
     # needs no attrs at all beyond assigning it a fresh ActionCode.
     "TakeSample": {"kind": "take_sample"},
+    # install_tool_leg(Tool,Triggers,ActionCode)/uninstall_tool_leg
+    # (Tool,Triggers,ActionCode) -- DURATIVE, same start/halt shape as
+    # MoveTo, but the robot never moves: see each one's own "kind"
+    # branch in _translate_leaf for the battery-only Triggers
+    # restriction (_TOOL_TRIGGER_FUNCTORS below) and _TOOL_KINDS
+    # validation.
+    "InstallTool": {"kind": "install_tool"},
+    "UninstallTool": {"kind": "uninstall_tool"},
 }
+
+# The only two tool kinds install_tool/uninstall_tool currently accept
+# -- SAME set as module/translators/config_to_prolog.py's own
+# _TOOL_KINDS (that file's copy drives per-tool Duration defaults;
+# this one validates a BT XML's own tool="..." port at translation
+# time -- kept as two independent copies of a two-element tuple,
+# same "small, stable constant, not worth a cross-file import for"
+# reasoning as this project's other tiny shared vocabularies).
+_TOOL_KINDS = {"cart", "plow"}
+
+# Trigger-list functors install_tool/uninstall_tool's own triggers
+# port ACCEPTS -- battery-related ONLY (reusing _is_battery_trigger's
+# own functor check below, unchanged): the robot never moves during
+# either action, so a motion-based trigger name (collision,
+# obstacle_in_bound, obstacle_on_path, line_of_sight_clear,
+# crosses_segment) is REJECTED here at translation time (a clear
+# authoring mistake, same "hard failure for structural mistakes"
+# posture every other validation in this file already takes) --
+# basic_action_theory.pl's own tool_trigger_crossing_time/8 is ALSO
+# independently robust to one anyway (see that predicate's own note),
+# for a hand-written plan_generated.pl that bypasses this translator
+# entirely (same "defense in depth" reasoning problem3's own
+# known-limitation notes document elsewhere).
 
 # The only valid values for PlanWith's own `algorithm` port. astar/
 # straight/voronoi take a `goal` port and become a BARE Prolog atom;
@@ -803,6 +834,99 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             ]
             var_pool.action_labels[action_code] = _with_branch_suffix("TakeSample", branch_name)
             return f"take_sample({action_code})"
+
+        if info["kind"] in ("install_tool", "uninstall_tool"):
+            # Shared shape for both InstallTool and UninstallTool --
+            # they differ ONLY in which functor prefix everything gets
+            # (info["kind"] IS that prefix, e.g. "install_tool"), never
+            # in structure -- see basic_action_theory.pl's own
+            # do_node(install_tool_leg(...))/do_node(uninstall_tool_leg
+            # (...)) for why they're genuine mirror images.
+            functor_prefix = info["kind"]
+
+            tool = attrs["tool"].strip()
+            if tool not in _TOOL_KINDS:
+                raise BTValidationError(
+                    f"<{tag}>'s tool port ('{tool}') is not one of "
+                    f"{sorted(_TOOL_KINDS)}.")
+
+            # triggers is OPTIONAL, same as MoveTo's own port -- but
+            # RESTRICTED to battery-related names only (reusing
+            # _is_battery_trigger's own functor check): {tag} never
+            # moves the robot, so a motion-based trigger name has no
+            # meaningful geometry to check here at all -- see this
+            # file's own _TOOL_KINDS/_ACTION_DISPATCH note above for
+            # the full rationale (and basic_action_theory.pl's own
+            # tool_trigger_crossing_time/8 for the theory-side defense
+            # in depth this validation is backed by, not a substitute
+            # for).
+            manual_tokens = [t.strip() for t in attrs.get("triggers", "").split(";") if t.strip()]
+            non_battery = [t for t in manual_tokens if not _is_battery_trigger(t)]
+            if non_battery:
+                raise BTValidationError(
+                    f"<{tag}>'s triggers port includes {non_battery} -- "
+                    f"{tag} never moves the robot, so only battery-related "
+                    f"triggers (battery, battery_below(...), "
+                    f"battery_equal(...), battery_over(...)) are accepted "
+                    f"here; see schema.yaml's own {tag} entry.")
+            if not battery_enabled:
+                manual_tokens = [t for t in manual_tokens if not _is_battery_trigger(t)]
+
+            # Reactive tagging -- the SAME mechanism/error MoveTo's own
+            # manual-trigger loop above uses, just over a battery-only
+            # token set (so _REACTIVE_TRIGGER_FUNCTORS only ever matches
+            # battery_below/battery_equal/battery_over here -- collision
+            # and every obstacle_*/line_of_sight_clear/crosses_segment
+            # functor in that set can simply never appear, having
+            # already been rejected above).
+            tagged_manual = []
+            for t in manual_tokens:
+                functor = t.split("(", 1)[0].strip()
+                if functor == "battery":
+                    # Backward-compatible with a tree that spells this
+                    # out explicitly -- covered by default_tokens below
+                    # either way, so skip rather than duplicate (same
+                    # convention as MoveTo's own collision/battery skip).
+                    continue
+                if functor in _REACTIVE_TRIGGER_FUNCTORS:
+                    if reactive_code is None:
+                        raise BTValidationError(
+                            f"<{tag}>'s triggers port includes '{t}', a "
+                            f"reactive-classified trigger, but this {tag} "
+                            f"is not enclosed by any <ReactiveSequence>/"
+                            f"<ReactiveFallback> -- there is nowhere for "
+                            f"its reactive(_) halt to ever be caught. Wrap "
+                            f"this {tag} (or an ancestor of it) in a "
+                            f"ReactiveSequence/ReactiveFallback, or drop "
+                            f"'{t}' from triggers.")
+                    tagged_manual.append(_append_reactive_code(t, reactive_code))
+                else:
+                    tagged_manual.append(t)
+
+            # Universal hazard -- ALWAYS battery (the fixed 0%-depletion
+            # one), only when this problem models battery at all -- the
+            # SAME "not something the tree author has to write" default
+            # MoveTo's own collision/battery gets, minus collision
+            # (never meaningful here).
+            default_tokens = ["battery"] if battery_enabled else []
+
+            triggers = "[" + ",".join(default_tokens + tagged_manual) + "]"
+            action_code = var_pool.next_action_code()
+
+            # Tool is LITERAL here (known at translation time, like
+            # PlanWith's own Algorithm/Goal), never 'wild' -- only
+            # success-or-failure is genuinely runtime-random.
+            reason_patterns = [
+                f"{functor_prefix}_success({tool})",
+                f"{functor_prefix}_failure({tool})",
+            ]
+            reason_patterns += [_reason_pattern_for_manual_trigger(t) for t in default_tokens]
+            reason_patterns += [_reason_pattern_for_manual_trigger(t) for t in manual_tokens
+                                 if t.split("(", 1)[0].strip() != "battery"]
+            var_pool.reason_patterns_by_action[action_code] = reason_patterns
+            var_pool.action_labels[action_code] = _with_branch_suffix(f"{tag}({tool})", branch_name)
+
+            return f"{functor_prefix}_leg({tool},{triggers},{action_code})"
 
     if tag in _CONDITION_DISPATCH:
         condition_code = var_pool.next_condition_code()

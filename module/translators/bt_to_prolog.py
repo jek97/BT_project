@@ -171,20 +171,28 @@ _ACTION_DISPATCH = {
     # (Tool,Triggers,ActionCode) -- DURATIVE, same start/halt shape as
     # MoveTo, but the robot never moves: see each one's own "kind"
     # branch in _translate_leaf for the battery-only Triggers
-    # restriction (_TOOL_TRIGGER_FUNCTORS below) and _TOOL_KINDS
-    # validation.
+    # restriction (_TOOL_TRIGGER_FUNCTORS below) and its own tool="..."
+    # port validation.
     "InstallTool": {"kind": "install_tool"},
     "UninstallTool": {"kind": "uninstall_tool"},
 }
 
-# The only two tool kinds install_tool/uninstall_tool currently accept
-# -- SAME set as module/translators/config_to_prolog.py's own
-# _TOOL_KINDS (that file's copy drives per-tool Duration defaults;
-# this one validates a BT XML's own tool="..." port at translation
-# time -- kept as two independent copies of a two-element tuple,
-# same "small, stable constant, not worth a cross-file import for"
-# reasoning as this project's other tiny shared vocabularies).
-_TOOL_KINDS = {"cart", "plow"}
+# InstallTool/UninstallTool's own tool="..." port names a specific
+# tool INSTANCE id (e.g. "cart1"), not a kind -- config.yaml's own
+# tool.instances lists which ids exist and what kind each one is (see
+# config_to_prolog.py's own note, and basic_action_theory.pl's
+# tool_instance/2) -- NOT known to this translator, which never parses
+# config.yaml, so there is no fixed set to validate tool="..." against
+# at translation time the way there used to be back when only one
+# instance per kind existed. An unknown id is instead caught at the
+# Prolog level: tool_instance/2 (and therefore tool_position/4) simply
+# fails for it, making poss(start_install_tool(...)) unsatisfiable --
+# the same "unsatisfied precondition, not a translator error" shape
+# every other config-dependent value in this theory already has. All
+# this translator still checks is that the string is even a SYNTACTICALLY
+# valid Prolog atom (see _VALID_PROLOG_ATOM_RE below) -- catching an
+# obvious typo (capitalized, embedded spaces, ...) before it reaches
+# generated Prolog at all, without pretending to validate its meaning.
 
 # Trigger-list functors install_tool/uninstall_tool's own triggers
 # port ACCEPTS -- battery-related ONLY (reusing _is_battery_trigger's
@@ -315,6 +323,14 @@ _ALWAYS_ALLOWED_ATTRS = {"name"}
 
 _BLACKBOARD_RE = re.compile(r"^\{(\w+)\}$")
 _VALID_PROLOG_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# A valid unquoted Prolog atom (lowercase-start) -- used to sanity-check
+# InstallTool/UninstallTool's own tool="..." port, which names a tool
+# instance id this translator can't otherwise validate (see _ACTION_
+# DISPATCH's own InstallTool/UninstallTool note). Independent copy of
+# config_to_prolog.py's own identically-named regex, same "small,
+# stable check, not worth a cross-file import for" reasoning as this
+# file's other tiny shared vocabularies.
+_VALID_PROLOG_ATOM_RE = re.compile(r"^[a-z][a-zA-Z0-9_]*$")
 
 
 class BTValidationError(Exception):
@@ -911,19 +927,24 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             functor_prefix = info["kind"]
 
             tool = attrs["tool"].strip()
-            if tool not in _TOOL_KINDS:
+            if not _VALID_PROLOG_ATOM_RE.match(tool):
                 raise BTValidationError(
-                    f"<{tag}>'s tool port ('{tool}') is not one of "
-                    f"{sorted(_TOOL_KINDS)}.")
+                    f"<{tag}>'s tool port ('{tool}') is not a valid Prolog "
+                    f"atom -- must start with a lowercase letter, then "
+                    f"letters/digits/underscores only. This names a tool "
+                    f"INSTANCE id from this problem's own config.yaml "
+                    f"tool.instances (e.g. 'cart1'), not a kind -- see "
+                    f"basic_action_theory.pl's own tool_instance/2.")
 
             # triggers is OPTIONAL, same as MoveTo's own port -- but
             # RESTRICTED to battery-related names only (reusing
             # _is_battery_trigger's own functor check): {tag} never
             # moves the robot, so a motion-based trigger name has no
             # meaningful geometry to check here at all -- see this
-            # file's own _TOOL_KINDS/_ACTION_DISPATCH note above for
-            # the full rationale (and basic_action_theory.pl's own
-            # tool_trigger_crossing_time/8 for the theory-side defense
+            # file's own _ACTION_DISPATCH note above (InstallTool/
+            # UninstallTool entries) for the full rationale (and
+            # basic_action_theory.pl's own tool_trigger_crossing_time/8
+            # for the theory-side defense
             # in depth this validation is backed by, not a substitute
             # for).
             manual_tokens = [t.strip() for t in attrs.get("triggers", "").split(";") if t.strip()]

@@ -223,6 +223,23 @@ quantize_up(Value, Grid, Quantized) :-
     Grid > 0,
     Quantized is ceiling(Value / Grid) * Grid.
 
+% cell_index(+Value, +CellSize, -Index): the ploughed/3 fluent's own
+% discretization primitive (see that predicate's own note, further
+% down) -- DELIBERATELY NOT quantize/3 above, even though it looks
+% similar. quantize/3 snaps Value to the NEAREST GRID-ALIGNED VALUE,
+% still a float in the original coordinate units (round(Value/Grid)*
+% Grid) -- fine for merge-grid quantization, where the snapped position
+% is used again as a real coordinate. A cell fluent needs the opposite:
+% a bare INTEGER cell index, with no residual floating-point
+% representation at all, so that two samples landing in the same cell
+% (from the same leg, or from two DIFFERENT worlds/legs whose merge-
+% grid-quantized starting conditions happen to coincide) produce the
+% EXACT SAME Prolog term and merge -- a rounded-but-still-float value
+% risks not doing so (5.0 and 5.000000000000001 don't unify), which
+% would make ploughed(Cx,Cy,S) effectively never share proofs across
+% worlds.
+cell_index(Value, CellSize, Index) :- Index is round(Value / CellSize).
+
 sum_list([], 0.0).
 sum_list([H|T], Sum) :- sum_list(T, SumT), Sum is H + SumT.
 
@@ -495,28 +512,136 @@ current_uninstall_tool(do(A,S), Tool, Triggers, ActionCode, T0, SPrev) :-
     current_uninstall_tool(S, Tool, Triggers, ActionCode, T0, SPrev).
 
 % ---------------------------------------------------------------
-% 5c. THE HITCH FLUENT -- which tool (if any) is currently attached:
-%     free (nothing attached), or the tool's own name (cart/plow).
-%     Starts free in s0. Flips to Tool ONLY on a SUCCESSFUL
-%     halt_install_tool(Tool,...) (a FAILED attempt leaves it
+% 5c. THE HITCH FLUENT -- which tool KIND (if any) is currently
+%     attached: free (nothing attached), or the kind's own name
+%     (cart/plow). Starts free in s0. Flips to Kind ONLY on a
+%     SUCCESSFUL halt_install_tool(Id,...) (a FAILED attempt leaves it
 %     unchanged -- nothing actually got attached), and back to free
 %     ONLY on a SUCCESSFUL halt_uninstall_tool(...) -- per this
 %     action's own request. Monotonic-persistence (frame axiom) is the
 %     generic pass-through clause, same shape as at/4's/battery/3's own
 %     -- everything else in the history leaves hitch/2 unchanged.
-%     Reason (install_tool_success(Tool,ActionCode)/uninstall_tool_
-%     success(Tool,ActionCode)) is matched here in its FULLY TAGGED
-%     shape (see tag_reason/3) -- halt_install_tool/halt_uninstall_tool
+%     Reason (install_tool_success(Id,ActionCode)/uninstall_tool_
+%     success(Id,ActionCode)) is matched here in its FULLY TAGGED shape
+%     (see tag_reason/3) -- halt_install_tool/halt_uninstall_tool
 %     always carry the tagged Reason directly as their own 2nd
 %     argument (see do_node(install_tool_leg(...))'s own note further
 %     down), so there is no separate untagged form to also match here.
+%
+%     KIND vs. INSTANCE: a BT tree's own <InstallTool tool="..."> names
+%     a specific tool INSTANCE id (e.g. "cart1", from this problem's
+%     own config.yaml tool.instances -- see tool_instance/2 below), not
+%     a kind, since multiple instances of the same kind can exist. But
+%     every OTHER predicate that used to read hitch(Tool,S) purely to
+%     look up KIND-level physics (walk_duration/2 via tool_speed/2,
+%     tool_moving_drain_rate/2, install_tool_duration/2, ...) still
+%     wants the KIND, not which specific instance -- so hitch/2 itself
+%     stays kind-valued (join through tool_instance/2 to recover Kind
+%     from the event's own Id), leaving every one of those existing
+%     callers UNTOUCHED. hitch_id/2 immediately below is the sibling
+%     fluent for the few places that genuinely need to know WHICH
+%     instance (tool_position/4's own hitched-exclusion, and
+%     poss(start_uninstall_tool(...))'s own precondition -- uninstalling
+%     Id requires THAT SPECIFIC instance, not just "some instance of
+%     its kind", to be the one attached).
 hitch(free, s0).
-hitch(Tool, do(halt_install_tool(_T,install_tool_success(Tool,_ActionCode),true), _)).
-hitch(free, do(halt_uninstall_tool(_T,uninstall_tool_success(_Tool,_ActionCode),true), _)).
+hitch(Kind, do(halt_install_tool(_T,install_tool_success(Id,_ActionCode),true), _)) :-
+    tool_instance(Id, Kind).
+hitch(free, do(halt_uninstall_tool(_T,uninstall_tool_success(_Id,_ActionCode),true), _)).
 hitch(State, do(A,S)) :-
     A \= halt_install_tool(_,install_tool_success(_,_),true),
     A \= halt_uninstall_tool(_,uninstall_tool_success(_,_),true),
     hitch(State, S).
+
+% hitch_id/2: the INSTANCE-level sibling of hitch/2 above -- IDENTICAL
+% successor-state shape, just reporting the tool instance Id directly
+% (no tool_instance/2 join), so it can distinguish "cart1 is attached"
+% from "cart2 is attached" where hitch/2 would only ever say "cart" for
+% either.
+hitch_id(free, s0).
+hitch_id(Id, do(halt_install_tool(_T,install_tool_success(Id,_ActionCode),true), _)).
+hitch_id(free, do(halt_uninstall_tool(_T,uninstall_tool_success(_Id,_ActionCode),true), _)).
+hitch_id(State, do(A,S)) :-
+    A \= halt_install_tool(_,install_tool_success(_,_),true),
+    A \= halt_uninstall_tool(_,uninstall_tool_success(_,_),true),
+    hitch_id(State, S).
+
+% tool_position(+Id, -GX, -GY, +S): relational fluent -- WHERE tool
+% instance Id currently sits, or fails outright if Id is currently
+% attached (its "position" is trivially wherever the robot is, i.e.
+% at/4, not a separate thing to track -- and if a caller only means
+% "some instance of this kind, wherever it is", tools_of_kind/5 below
+% already excludes hitched instances for exactly this reason, so no
+% consumer should ever need a stale value here). Base case seeds from
+% this problem's own config.yaml (tool.instances[].x/y -- see
+% tool_start_position/3, config_to_prolog.py's own note). Updates ONLY
+% on a SUCCESSFUL uninstall of THIS Id, to wherever the robot actually
+% was (at/4) at that exact moment -- i.e. the tool is physically
+% dropped there. Persistence clause additionally requires \+ hitch_id
+% (Id, do(A,S)) -- NOT just "nothing changed since the last update",
+% same as at/4's/hitch/2's own frame clauses, but ALSO gated on "not
+% currently equipped" so the fluent goes silent (fails) for exactly as
+% long as Id stays attached, per this feature's own request, rather
+% than continuing to report a now-meaningless frozen value.
+tool_position(Id, GX, GY, s0) :-
+    tool_start_position(Id, GX, GY).
+tool_position(Id, GX, GY, do(halt_uninstall_tool(T,uninstall_tool_success(Id,_ActionCode),true), S)) :-
+    at(GX, GY, T, S).
+tool_position(Id, GX, GY, do(A,S)) :-
+    A \= halt_uninstall_tool(_,uninstall_tool_success(Id,_),true),
+    tool_position(Id, GX, GY, S),
+    \+ hitch_id(Id, do(A,S)).
+
+% tools_of_kind(+Kind, +S, -Id, -GX, -GY): nondeterministically
+% enumerates every tool instance of Kind that currently HAS a position
+% -- i.e. every instance tool_position/4 above will actually report for
+% right now, so a currently-hitched instance of this Kind is silently
+% skipped (the exclusion already lives in tool_position/4 itself, not
+% duplicated here). Backtracks over every tool_instance(Id,Kind) fact;
+% a Kind with no free instance simply fails outright, the same
+% "unsatisfied precondition, not a special error case" shape every
+% other fluent in this file already uses for "nothing to report".
+tools_of_kind(Kind, S, Id, GX, GY) :-
+    tool_instance(Id, Kind),
+    tool_position(Id, GX, GY, S).
+
+% nearest_tool_of_kind(+Kind, +S, -Id, -GX, -GY, -Dist): composes
+% tools_of_kind/5 (which itself composes tool_instance/2 with
+% tool_position/4) with the robot's own CURRENT position (now/2+at/4,
+% same "read S at exactly this point" pattern do_node(planWith(...))
+% already uses) to pick whichever free instance of Kind is closest
+% right now. The argmin fold is ordinary Prolog -- findall/3 to collect
+% every candidate's own distance, then min_candidate/2 below to fold
+% down to the smallest -- not a new KIND of computation this file
+% hasn't already needed (the same "closest of several candidates" shape
+% an obstacle-argmin Reason already resolves elsewhere, just over tool
+% instances instead). Fails outright if Kind has no free instance at
+% all (Candidates=[]), same "nothing to report" shape as tools_of_kind/5
+% itself.
+nearest_tool_of_kind(Kind, S, Id, GX, GY, Dist) :-
+    now(T, S), at(RX,RY,T,S),
+    findall(D-CandId-CX-CY,
+            (tools_of_kind(Kind,S,CandId,CX,CY), dist(RX,RY,CX,CY,D)),
+            Candidates),
+    Candidates \= [],
+    min_candidate(Candidates, Dist-Id-GX-GY).
+
+% min_candidate(+[D-Id-X-Y|...], -Best): folds a non-empty list of
+% Dist-Id-X-Y candidates down to the single smallest-Dist one. TWO
+% mutually exclusive clauses on D1=<D2 vs. D1>D2, rather than an if-
+% then-else -- ProbLog's own Prolog dialect doesn't support '->'/2,
+% same reason every other multi-case predicate in this file (e.g.
+% guard_bracket_scan) is written this way instead. A tie (D1=:=D2)
+% deterministically keeps the FIRST-encountered candidate (only the
+% D1=<D2 clause matches), never both -- so this always yields exactly
+% one Best, never two competing derivations for the same Dist.
+min_candidate([D-Id-X-Y], D-Id-X-Y).
+min_candidate([D1-Id1-X1-Y1,D2-Id2-X2-Y2|Rest], Best) :-
+    D1 =< D2,
+    min_candidate([D1-Id1-X1-Y1|Rest], Best).
+min_candidate([D1-Id1-X1-Y1,D2-Id2-X2-Y2|Rest], Best) :-
+    D1 > D2,
+    min_candidate([D2-Id2-X2-Y2|Rest], Best).
 
 % ---------------------------------------------------------------
 % 4b. THE BATTERY FLUENT -- a second clock fluent, on the exact same
@@ -722,9 +847,10 @@ battery(Level, T, do(interrupt(T1), S)) :-
 % different from after a walk halts, exactly this feature's own "if
 % the robot doesn't move [and isn't mid-install/uninstall] we use the
 % same idle drain rate, no change on that" note.
-battery(Level, T, do(start_install_tool(Tool,_Triggers,_ActionCode,T0), S)) :-
+battery(Level, T, do(start_install_tool(Id,_Triggers,_ActionCode,T0), S)) :-
     leg_start_battery(T0, S, B0),
-    install_tool_duration(Tool, Duration),
+    tool_instance(Id, Kind),
+    install_tool_duration(Kind, Duration),
     install_tool_drain_rate(Rate),
     Elapsed0 is T - T0,
     Elapsed is max(0.0, min(Elapsed0, Duration)),
@@ -750,9 +876,10 @@ battery(Level, T, do(halt_install_tool(T1,Reason,Status), S)) :-
     noisy_drain(NominalDrain, Deviation, TotalDrain),
     Level is max(0, min(100, B1 - TotalDrain)).
 
-battery(Level, T, do(start_uninstall_tool(Tool,_Triggers,_ActionCode,T0), S)) :-
+battery(Level, T, do(start_uninstall_tool(Id,_Triggers,_ActionCode,T0), S)) :-
     leg_start_battery(T0, S, B0),
-    uninstall_tool_duration(Tool, Duration),
+    tool_instance(Id, Kind),
+    uninstall_tool_duration(Kind, Duration),
     uninstall_tool_drain_rate(Rate),
     Elapsed0 is T - T0,
     Elapsed is max(0.0, min(Elapsed0, Duration)),
@@ -1659,72 +1786,79 @@ poss(take_sample(ActionCode,Reason,false), S) :-
     sample_result(S, ActionCode, false),
     tag_reason(sample_failure(X,Y), ActionCode, Reason).
 
-% poss(start_install_tool(Tool,Triggers,ActionCode,T0), S): the three
+% poss(start_install_tool(Id,Triggers,ActionCode,T0), S): the three
 % preconditions this action's own design calls for -- \+ moving(S)
 % (can't start installing mid-walk, same reasoning as take_sample's own
 % precondition); hitch(free,S) (nothing already attached -- see
 % hitch/2's own note, Section 5c); and PROXIMITY -- the robot's current
-% position must be close to Tool's own FIXED location before it can be
+% position must be close to Id's own CURRENT location before it can be
 % installed. Reuses holds(distance_below(...)) DIRECTLY (the exact same
 % predicate a BT tree's own cond(distance_below(...)) leaf or a
 % holds_leg/9 reactive guard would use) rather than re-deriving the
 % dist/5 call by hand -- "close to the tool" IS "distance_below the
 % tool's own point, at Range", no different in kind from "close to the
-% goal". tool_position(Tool,GX,GY) is this problem's own config.yaml
-% (tool.position.<cart|plow>.x/.y -- see config_to_prolog.py's own
-% note) -- OPTIONAL per tool kind, so a tool the tree never installs
-% never needs a position; install_tool_range/1 (tool.install.range,
+% goal". tool_position(Id,GX,GY,S) is the relational fluent above --
+% wherever Id started (config.yaml tool.instances) or was last dropped,
+% and it simply fails (making install impossible) for an Id that is
+% unknown OR already attached; install_tool_range/1 (tool.install.range,
 % defaulting to safety_margin) is the ONE proximity threshold, shared
 % across every tool kind (matching install_tool_drain_rate/1's own
 % "specific to the ACTION, not the tool" shape). T0 quantization
 % mirrors poss(startMoveto(...)) above exactly (same merge-grid
 % rationale).
-poss(start_install_tool(Tool,_Triggers,_ActionCode,T0), S) :-
+poss(start_install_tool(Id,_Triggers,_ActionCode,T0), S) :-
     \+ moving(S),
     hitch(free, S),
-    tool_position(Tool, GX, GY),
+    tool_position(Id, GX, GY, S),
     install_tool_range(Range),
     holds(distance_below(GX,GY,Range), S),
     now(T0Exact, S),
     disc_step_time(Grid),
     quantize_up(T0Exact, Grid, T0).
 
-% poss(halt_install_tool(T,Reason,Status), S): installing_tool(Tool,S)
+% poss(halt_install_tool(T,Reason,Status), S): installing_tool(Id,S)
 % is checked EXPLICITLY (this action's own request), even though
 % current_install_tool/6 below would already implicitly require it --
 % same redundant-but-explicit style poss(haltMoveto(...)) already uses
-% for moving(S) alongside current_walk/6. TWO clauses, matching tool_
-% earliest_halt/9's own "completed is a SENTINEL here, not a real
-% Reason -- see its own WARNING" contract: clause 1 is what actually
-% happens when Duration elapses with nothing halting it early -- ONLY
-% THEN does install_tool_result/3 (this problem's own config.yaml,
-% tool.install.success_probability -- see config_generated.pl) get
-% drawn, keyed on (S,ActionCode) exactly like take_sample's own
-% sample_result/3 (same "fresh draw per genuinely new situation, shared
-% only if the exact situation term recurs" semantics -- see that
-% predicate's own note); clause 2 is a genuine battery trigger firing
-% first, used as-is, same shape poss(haltMoveto(...)) itself uses for
-% its own ExtraCandidates. Matching Reason0 against the bare atom
-% `completed` in clause 1 (and excluding it in clause 2) is exactly why
-% that atom can never leak out as this action's own recorded Reason --
-% it's consumed and replaced by Reason0 (install_tool_success(Tool)/
-% install_tool_failure(Tool)) before Status is even decided.
+% for moving(S) alongside current_walk/6. tool_instance(Id,Kind) is the
+% ONE new step versus before Id/Kind were split apart -- install_tool_
+% duration/2 is still keyed by KIND (config.yaml tool.install.
+% duration_seconds is per-kind, not per-instance: every cart takes the
+% same time to install), so this joins through tool_instance/2 to
+% recover it. TWO clauses, matching tool_earliest_halt/9's own
+% "completed is a SENTINEL here, not a real Reason -- see its own
+% WARNING" contract: clause 1 is what actually happens when Duration
+% elapses with nothing halting it early -- ONLY THEN does install_tool_
+% result/3 (this problem's own config.yaml, tool.install.
+% success_probability -- see config_generated.pl) get drawn, keyed on
+% (S,ActionCode) exactly like take_sample's own sample_result/3 (same
+% "fresh draw per genuinely new situation, shared only if the exact
+% situation term recurs" semantics -- see that predicate's own note);
+% clause 2 is a genuine battery trigger firing first, used as-is, same
+% shape poss(haltMoveto(...)) itself uses for its own ExtraCandidates.
+% Matching Reason0 against the bare atom `completed` in clause 1 (and
+% excluding it in clause 2) is exactly why that atom can never leak out
+% as this action's own recorded Reason -- it's consumed and replaced by
+% Reason0 (install_tool_success(Id)/install_tool_failure(Id)) before
+% Status is even decided.
 poss(halt_install_tool(T,Reason,Status), S) :-
-    installing_tool(Tool, S),
-    current_install_tool(S, Tool, Triggers, ActionCode, T0, SPrev),
-    install_tool_duration(Tool, Duration),
+    installing_tool(Id, S),
+    current_install_tool(S, Id, Triggers, ActionCode, T0, SPrev),
+    tool_instance(Id, Kind),
+    install_tool_duration(Kind, Duration),
     install_tool_drain_rate(Rate),
     zbatt(Zb),
     leg_start_battery(T0, SPrev, B0),
     earliest_halt(_CP,Triggers,T0,Duration,_Z,_Zt,Zb,B0,Rate,1, completed,T,_Code),
     install_tool_result(S, ActionCode, CoinStatus),
-    tool_install_reason(CoinStatus, Tool, Reason0),
+    tool_install_reason(CoinStatus, Id, Reason0),
     tool_leg_status(Reason0, none, Status),
     tag_reason(Reason0, ActionCode, Reason).
 poss(halt_install_tool(T,Reason,Status), S) :-
-    installing_tool(Tool, S),
-    current_install_tool(S, Tool, Triggers, ActionCode, T0, SPrev),
-    install_tool_duration(Tool, Duration),
+    installing_tool(Id, S),
+    current_install_tool(S, Id, Triggers, ActionCode, T0, SPrev),
+    tool_instance(Id, Kind),
+    install_tool_duration(Kind, Duration),
     install_tool_drain_rate(Rate),
     zbatt(Zb),
     leg_start_battery(T0, SPrev, B0),
@@ -1733,17 +1867,18 @@ poss(halt_install_tool(T,Reason,Status), S) :-
     tool_leg_status(Reason0, Code, Status),
     tag_reason(Reason0, ActionCode, Reason).
 
-tool_install_reason(true, Tool, install_tool_success(Tool)).
-tool_install_reason(false, Tool, install_tool_failure(Tool)).
+tool_install_reason(true, Id, install_tool_success(Id)).
+tool_install_reason(false, Id, install_tool_failure(Id)).
 
-% poss(start_uninstall_tool(Tool,Triggers,ActionCode,T0), S): the
+% poss(start_uninstall_tool(Id,Triggers,ActionCode,T0), S): the
 % mirror image of poss(start_install_tool(...)) above -- \+ moving(S),
-% and hitch(Tool,S) (per this action's own request: uninstalling A
-% SPECIFIC tool requires THAT tool -- not just "something" -- to
-% currently be the one attached).
-poss(start_uninstall_tool(Tool,_Triggers,_ActionCode,T0), S) :-
+% and hitch_id(Id,S) (per this action's own request: uninstalling A
+% SPECIFIC tool INSTANCE requires THAT instance -- not just "something
+% of its kind" -- to currently be the one attached; hitch_id/2, not
+% hitch/2, is the fluent that can tell cart1 apart from cart2).
+poss(start_uninstall_tool(Id,_Triggers,_ActionCode,T0), S) :-
     \+ moving(S),
-    hitch(Tool, S),
+    hitch_id(Id, S),
     now(T0Exact, S),
     disc_step_time(Grid),
     quantize_up(T0Exact, Grid, T0).
@@ -1751,23 +1886,27 @@ poss(start_uninstall_tool(Tool,_Triggers,_ActionCode,T0), S) :-
 % poss(halt_uninstall_tool(T,Reason,Status), S): the mirror image of
 % poss(halt_install_tool(...)) above, uninstall_tool_result/3 (this
 % problem's own config.yaml, tool.uninstall.success_probability) in
-% place of install_tool_result/3.
+% place of install_tool_result/3, and uninstall_tool_duration/2 (also
+% KIND-keyed, same tool_instance/2 join as install's own) in place of
+% install_tool_duration/2.
 poss(halt_uninstall_tool(T,Reason,Status), S) :-
-    uninstalling_tool(Tool, S),
-    current_uninstall_tool(S, Tool, Triggers, ActionCode, T0, SPrev),
-    uninstall_tool_duration(Tool, Duration),
+    uninstalling_tool(Id, S),
+    current_uninstall_tool(S, Id, Triggers, ActionCode, T0, SPrev),
+    tool_instance(Id, Kind),
+    uninstall_tool_duration(Kind, Duration),
     uninstall_tool_drain_rate(Rate),
     zbatt(Zb),
     leg_start_battery(T0, SPrev, B0),
     earliest_halt(_CP,Triggers,T0,Duration,_Z,_Zt,Zb,B0,Rate,1, completed,T,_Code),
     uninstall_tool_result(S, ActionCode, CoinStatus),
-    tool_uninstall_reason(CoinStatus, Tool, Reason0),
+    tool_uninstall_reason(CoinStatus, Id, Reason0),
     tool_leg_status(Reason0, none, Status),
     tag_reason(Reason0, ActionCode, Reason).
 poss(halt_uninstall_tool(T,Reason,Status), S) :-
-    uninstalling_tool(Tool, S),
-    current_uninstall_tool(S, Tool, Triggers, ActionCode, T0, SPrev),
-    uninstall_tool_duration(Tool, Duration),
+    uninstalling_tool(Id, S),
+    current_uninstall_tool(S, Id, Triggers, ActionCode, T0, SPrev),
+    tool_instance(Id, Kind),
+    uninstall_tool_duration(Kind, Duration),
     uninstall_tool_drain_rate(Rate),
     zbatt(Zb),
     leg_start_battery(T0, SPrev, B0),
@@ -1776,8 +1915,8 @@ poss(halt_uninstall_tool(T,Reason,Status), S) :-
     tool_leg_status(Reason0, Code, Status),
     tag_reason(Reason0, ActionCode, Reason).
 
-tool_uninstall_reason(true, Tool, uninstall_tool_success(Tool)).
-tool_uninstall_reason(false, Tool, uninstall_tool_failure(Tool)).
+tool_uninstall_reason(true, Id, uninstall_tool_success(Id)).
+tool_uninstall_reason(false, Id, uninstall_tool_failure(Id)).
 
 % ---------------------------------------------------------------
 % 6. THE POSITION FLUENT -- pure situation-calculus regression.
@@ -2029,14 +2168,19 @@ do_node(moveto_leg(CP,Triggers,ActionCode), S, S1, Status) :-
 % moveto_leg's own, RESTRICTED to battery-related names only (see the
 % TOOL TRIGGERS section, above tool_cond_supported/1, for why and how
 % motion-based ones gracefully contribute nothing instead of erroring).
-% installing_tool(Tool,S) is TRUE for
+% installing_tool(Id,S) is TRUE for
 % every situation between start_install_tool and halt_install_tool
 % (Section 5b) -- an explicit precondition of halt_install_tool's own
 % Poss, per this action's own request, even though current_install_
 % tool/6 would already implicitly require it. hitch(free,S) gates
-% starting an install; hitch(Tool,S) (THIS specific tool) gates
-% starting an uninstall -- see hitch/2's own note (Section 5c) for the
-% full state-machine, including why only a SUCCESSFUL halt flips it.
+% starting an install; hitch_id(Id,S) (THIS specific tool INSTANCE, not
+% just "something of its kind") gates starting an uninstall -- see
+% hitch/2's/hitch_id/2's own notes (Section 5c) for the full state
+% machine, including why only a SUCCESSFUL halt flips either one. Tool
+% here (and throughout install_tool_leg/uninstall_tool_leg's own
+% do_action calls below) is always an Id, e.g. "cart1" from this
+% problem's own config.yaml tool.instances -- never a bare kind name --
+% see tool_instance/2's own note.
 do_node(install_tool_leg(Tool,Triggers,ActionCode), S, S1, Status) :-
     do_action(start_install_tool(Tool,Triggers,ActionCode,_T0), S, S2),
     do_action(halt_install_tool(_T,_Reason,Status), S2, S1).
@@ -3070,6 +3214,93 @@ visited(point(GX,GY), Tol, do(haltMoveto(T,completed(_ActionCode),true), S)) :-
     dist(X,Y,GX,GY,D),
     D =< Tol.
 visited(Loc, Tol, do(_A, S)) :- visited(Loc, Tol, S).
+
+% ploughed(-Cx, -Cy, +S): relational fluent -- TRUE iff macro-cell
+% (Cx,Cy) (see cell_index/3, above quantize_up/3; cell size is
+% plough_cell_size/1, this problem's own config.yaml ploughing.
+% cell_size, deliberately coarser than disc_step_position -- see
+% config_to_prolog.py's own note) was swept by the robot's ACTUAL path
+% during some MoveTo leg while the plow was equipped, anywhere in S's
+% history. Same monotonic "search the whole history, no frame axiom
+% needed beyond a plain pass-through" shape as visited/3 above and
+% halted_with/2 -- once true for a situation, stays true for every
+% situation built on top of it.
+%
+% Deliberately NOT gated on Reason=completed(_)/Status=true the way
+% visited/3 is: a leg cut short by a collision, a trigger, or an
+% interrupt still physically ploughed whatever ground it actually
+% covered before halting, so BOTH do(haltMoveto(...),S) (any Reason/
+% Status) and do(interrupt(...),S) contribute -- Elapsed is T1-T0 (the
+% leg's own ACTUAL duration, however far it got), never the full
+% nominal Duration walk_duration/3 would report.
+%
+% Sampling, not a closed-form crossing search: unlike holds_leg/first_
+% becomes_false_time (which need the EXACT time a condition flips),
+% "which cells did the path pass through" has no useful closed form --
+% ploughed_cell_sample/11 below just walks the SAME noisy path
+% collision detection already samples (walk_noisy_point/8, at
+% bracket_samples/1 resolution) and buckets each sampled point into a
+% cell via cell_index/3. No left/right offset sampling either (an
+% earlier design considered marking a whole cross-strip either side of
+% the centerline) -- once the cell size itself approximates the plow's
+% own physical width, a centerline sample landing in a cell already
+% implies the plow's edges are within that cell or its immediate
+% neighbor, so nothing is gained by sampling the edges separately.
+%
+% THE ONE THING THIS APPROXIMATION HONESTLY TRADES AWAY: a pass exactly
+% along a cell boundary could miss marking the adjacent cell the plow's
+% edge technically grazed. That's a boundary rounding effect, not a
+% systematic bias, and it's the same kind of approximation error
+% already accepted by choosing a coarse cell size in the first place --
+% not a new source of imprecision on top of it.
+ploughed(Cx, Cy, do(haltMoveto(T1,_Reason,_Status), S)) :-
+    current_walk(S, CP, Triggers, ActionCode, T0, SPrev),
+    hitch(plow, SPrev),
+    walk_duration(CP, plow, Duration),
+    z(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Z),
+    zt(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Zt),
+    Elapsed is T1 - T0,
+    plough_cell_size(CellSize),
+    bracket_samples(N),
+    ploughed_cell_sample(CP,T0,Duration,Elapsed,Z,Zt,CellSize,N,0,Cx,Cy).
+ploughed(Cx, Cy, do(interrupt(T1), S)) :-
+    current_walk(S, CP, Triggers, ActionCode, T0, SPrev),
+    hitch(plow, SPrev),
+    walk_duration(CP, plow, Duration),
+    z(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Z),
+    zt(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Zt),
+    Elapsed is T1 - T0,
+    plough_cell_size(CellSize),
+    bracket_samples(N),
+    ploughed_cell_sample(CP,T0,Duration,Elapsed,Z,Zt,CellSize,N,0,Cx,Cy).
+ploughed(Cx, Cy, do(A,S)) :-
+    A \= haltMoveto(_,_,_), A \= interrupt(_),
+    ploughed(Cx, Cy, S).
+
+% ploughed_cell_sample(+CP,+T0,+Duration,+Elapsed,+Z,+Zt,+CellSize,+N,
+% +I,-Cx,-Cy): nondeterministically enumerates the macro-cell for each
+% of I=0..N evenly-spaced samples across [T0,T0+Elapsed] (Elapsed, NOT
+% the full nominal Duration -- see ploughed/3's own note on why a leg
+% cut short still ploughs whatever it actually covered). Duration
+% itself is still passed to walk_noisy_point/8 (the SAME noisy-path
+% primitive at/4 and collision detection already use) since that's
+% what the spline's own parameterization needs, independent of how far
+% the leg actually got. Backtracks over every I -- ploughed/3's own
+% caller just needs ANY one sample to match a queried Cx,Cy, so plain
+% backtracking (no findall/list needed) is the simpler fit here, unlike
+% nearest_tool_of_kind/6's own use of findall/3+min_candidate/2, which
+% genuinely needs every candidate collected at once to fold down to a
+% minimum.
+ploughed_cell_sample(CP,T0,Duration,Elapsed,Z,Zt,CellSize,N,I,Cx,Cy) :-
+    I =< N,
+    T is T0 + Elapsed * I / N,
+    walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
+    cell_index(X,CellSize,Cx),
+    cell_index(Y,CellSize,Cy).
+ploughed_cell_sample(CP,T0,Duration,Elapsed,Z,Zt,CellSize,N,I,Cx,Cy) :-
+    I < N,
+    I1 is I + 1,
+    ploughed_cell_sample(CP,T0,Duration,Elapsed,Z,Zt,CellSize,N,I1,Cx,Cy).
 
 % sample_success_at(+Loc,+Tol,+S): the take_sample analogue of
 % visited/3 above -- TRUE iff SOME take_sample action SUCCEEDED

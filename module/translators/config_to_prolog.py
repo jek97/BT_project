@@ -56,9 +56,17 @@ config_generated.pl can be regenerated/inspected on its own, and so the
 generation logic has exactly one implementation.
 """
 import os
+import re
 import sys
 
 import yaml
+
+# A valid unquoted Prolog atom -- same shape bt_to_prolog.py's own
+# _VALID_PROLOG_ATOM_RE independently checks a BT tree's own tool="..."
+# port against (these two files never share imports for tiny, stable
+# checks like this -- same reasoning _TOOL_KINDS below is its own copy
+# rather than a cross-file import).
+_VALID_PROLOG_ATOM_RE = re.compile(r"^[a-z][a-zA-Z0-9_]*$")
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
@@ -292,24 +300,71 @@ def render_prolog(config):
         "tool_moving_drain_rate", "moving_drain_rate", equipped_cfg,
         battery_cfg["moving_drain_rate"])
 
-    # tool.position.<cart|plow>.x/.y -- the FIXED point install_tool's
-    # own precondition (basic_action_theory.pl's poss(start_install_tool
-    # (...))) requires the robot be close to before it can install that
-    # SPECIFIC tool. OPTIONAL per tool kind, same as tool.equipped.
-    # <kind> above -- a tool_position(Tool,GX,GY) fact is emitted ONLY
-    # for a kind whose position config.yaml actually gives; a problem
-    # whose tree never installs that kind never needs to state one.
-    # Unlike every other tool.* numeric knob above, there is NO sensible
-    # default for a fixed physical location -- omitting one for a kind
-    # the tree DOES install simply makes tool_position(Tool,_,_) fail
-    # for it, which makes poss(start_install_tool(Tool,...)) fail too
-    # (the SAME "an unsatisfied precondition, not a generation-time
-    # error" shape hitch(free,S) already has).
-    position_by_tool = config.get("tool", {}).get("position", {})
-    tool_position_facts = "\n".join(
-        f"tool_position({tool}, {_format_number(float(position_by_tool[tool]['x']))}, "
-        f"{_format_number(float(position_by_tool[tool]['y']))})."
-        for tool in _TOOL_KINDS if tool in position_by_tool)
+    # tool.instances -- the tool INSTANCES this problem actually has, as
+    # a list of {id, kind, x, y} entries, e.g.:
+    #   tool:
+    #     instances:
+    #       - {id: cart1, kind: cart, x: 3.0, y: 2.075}
+    #       - {id: cart2, kind: cart, x: 8.0, y: 4.0}
+    #       - {id: plow1, kind: plow, x: 5.0, y: 2.075}
+    # Multiple instances of the SAME kind are exactly the point (see
+    # basic_action_theory.pl's own tool_instance/2, tool_position/4,
+    # tools_of_kind/5, nearest_tool_of_kind/6) -- a BT tree's own
+    # <InstallTool tool="..."> names ONE SPECIFIC instance id, not a
+    # kind, so id must be unique per problem (kind need not be -- many
+    # instances legitimately share one). OPTIONAL: a problem whose tree
+    # never installs anything needs no tool.instances at all, same
+    # "optional feature" treatment as tool.equipped/tool.install above.
+    # Unlike every other tool.* numeric knob, there is NO sensible
+    # default for a fixed physical location or a made-up id -- an
+    # instance simply isn't emitted unless config.yaml states it in
+    # full; a tree that references an unknown id just makes
+    # tool_position/tool_instance fail for it, which makes
+    # poss(start_install_tool(...)) fail too (the SAME "an unsatisfied
+    # precondition, not a generation-time error" shape hitch(free,S)
+    # already has).
+    instances_cfg = config.get("tool", {}).get("instances", [])
+    tool_instance_lines = []
+    seen_ids = set()
+    for entry in instances_cfg:
+        tool_id = str(entry["id"]).strip()
+        kind = str(entry["kind"]).strip()
+        if not _VALID_PROLOG_ATOM_RE.match(tool_id):
+            raise ValueError(
+                f"tool.instances entry id {tool_id!r} is not a valid Prolog "
+                f"atom -- must start with a lowercase letter, then letters/"
+                f"digits/underscores only.")
+        if tool_id in seen_ids:
+            raise ValueError(f"tool.instances has more than one entry with id {tool_id!r}.")
+        seen_ids.add(tool_id)
+        if kind not in _TOOL_KINDS:
+            raise ValueError(
+                f"tool.instances entry {tool_id!r} has kind {kind!r}, not "
+                f"one of {sorted(_TOOL_KINDS)}.")
+        gx = _format_number(float(entry["x"]))
+        gy = _format_number(float(entry["y"]))
+        tool_instance_lines.append(f"tool_instance({tool_id}, {kind}).")
+        tool_instance_lines.append(f"tool_start_position({tool_id}, {gx}, {gy}).")
+    tool_position_facts = "\n".join(tool_instance_lines)
+
+    # ploughing.cell_size -- the ONE knob basic_action_theory.pl's own
+    # ploughed/3 fluent needs (cell_index/3's own CellSize argument),
+    # deliberately its OWN independent grid, decoupled from disc_step_
+    # position -- coarser on purpose (an approximation of the plow's
+    # own physical width), which also means better cross-world proof
+    # sharing, not worse, than disc_step_position's own finer grid would
+    # give (more distinct noisy positions round to the SAME cell index).
+    # OPTIONAL: a problem whose tree never installs a plow needs no
+    # ploughing: section at all, same "optional feature" treatment as
+    # tool.equipped/tool.install above -- NO sensible numeric default
+    # though (there's nothing universal to default a physical width to,
+    # same reasoning tool.instances above has for position), so a
+    # ploughing: section with no cell_size key is a hard error rather
+    # than silently picking a number.
+    ploughing_cfg = config.get("ploughing", {})
+    plough_cell_size_fact = (
+        f"plough_cell_size({_format_number(float(ploughing_cfg['cell_size']))})."
+        if "cell_size" in ploughing_cfg else "")
 
     # tool.install.range -- how close (metres) the robot's CURRENT
     # position must be to a tool's own tool_position(...) before
@@ -382,6 +437,12 @@ def render_prolog(config):
     # emitting a stray double-blank when no tool position is configured.
     if tool_position_facts:
         lines += [tool_position_facts, ""]
+    # plough_cell_size_fact is the OTHER block that can genuinely be
+    # empty (no ploughing: section, or no cell_size key in it) --
+    # same "append only when non-empty" treatment as tool_position_facts
+    # just above, for the same spacing reason.
+    if plough_cell_size_fact:
+        lines += [plough_cell_size_fact, ""]
 
     # any_battery_depletion is basic_action_theory.pl's own ONLY query
     # about "finishing the battery" (see main.py's SUMMARY_QUERIES) --

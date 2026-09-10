@@ -14,10 +14,15 @@ their own; ReactiveSequence/ReactiveFallback, which map to
 reactivesequence(Code)/reactivefallback(Code) and DO catch/locally
 redescend one whose own code matches -- see _REACTIVE_CONTROL_FLOW's own
 note and basic_action_theory.pl's own CONTROL-FLOW REDESCEND TARGETS
-note for the full mechanism; and Inverter, BT.cpp's single-child
-negation decorator, which maps to inverter(Child) -- flips true/false,
-passes a reactive(_) status straight through unchanged, never itself
-reactive), and translates it into the nested do_node/4 term text
+note for the full mechanism; Inverter, BT.cpp's single-child negation decorator, which maps to
+inverter(Child) -- flips true/false, passes a reactive(_) status
+straight through unchanged, never itself reactive; and
+RetryUntilSuccessful(num_attempts="n")/Repeat(num_cycles="n"), BT.cpp's
+bounded-retry decorators, which are unrolled at translation time into a
+plain fallback_node/seq_node of n literal copies of their one child --
+see _RETRY_DECORATORS's own note for why that's a sound semantic match,
+not an approximation, and why n must be a literal integer, never a
+blackboard reference), and translates it into the nested do_node/4 term text
 basic_action_theory.pl's plan/1 expects, plus one reactive_children/2
 fact per ReactiveSequence/ReactiveFallback (see generate_plan_pl's own
 note on why those live separately).
@@ -241,6 +246,36 @@ _CONTROL_FLOW = {"Sequence": "seq_node", "Fallback": "fallback_node"}
 # reasoning plan(Node) itself already relies on). Handled as its own
 # branch in _translate_node, not via _CONTROL_FLOW's simple lookup.
 _REACTIVE_CONTROL_FLOW = {"ReactiveSequence": "reactivesequence", "ReactiveFallback": "reactivefallback"}
+
+# RetryUntilSuccessful(num_attempts="n") / Repeat(num_cycles="n") --
+# BT.cpp's built-in bounded-retry decorators. Both are translated by
+# literal XML unrolling: duplicate the ONE child subtree n times under
+# a plain Fallback (Retry) or Sequence (Repeat) -- NOT a new reactive
+# scope, exactly like Sequence/Fallback themselves (reactive_code and
+# guard_stack pass through unchanged). This is a sound 1:1 semantic
+# match, not an approximation: RetryUntilSuccessful's own "first
+# SUCCESS stops, n FAILUREs give up" IS Fallback's semantics over n
+# identical children, and Repeat's own "keep going while SUCCEEDING,
+# bail on the first FAILURE" IS Sequence's -- both hold here because
+# nothing about this project's own do_node/poss encoding attaches
+# state to a node's IDENTITY: every occurrence already gets its own
+# fresh action_code/condition_code from _VarPool regardless of whether
+# it came from "the same node ticked again" or "a separate unrolled
+# copy", and all REAL state (position, battery, time) is threaded
+# through the situation term, not the node -- so n copies and "the
+# same node retried n times" produce IDENTICAL Prolog terms.
+#
+# num_attempts/num_cycles MUST be a literal, non-negative integer known
+# at translation time -- unrolling happens ONCE, statically, before any
+# Prolog term (let alone a situation) exists, so unlike every other
+# port in this file it can NEVER be a "{blackboard_key}" reference (see
+# _RETRY_DECORATORS's own use in _translate_node, which rejects one
+# with a hard BTValidationError rather than silently misreading the
+# literal string "{...}" as a malformed integer).
+_RETRY_DECORATORS = {
+    "RetryUntilSuccessful": {"functor": "fallback_node", "count_attr": "num_attempts"},
+    "Repeat": {"functor": "seq_node", "count_attr": "num_cycles"},
+}
 
 # Condition ids that are HISTORY-based rather than a live, continuous
 # fluent -- they cannot change WHILE a leg is running (nothing appends
@@ -1051,6 +1086,56 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
                                       reactive_code, guard_stack, branch_name)
         return f"inverter({child_term})"
 
+    if tag in _RETRY_DECORATORS:
+        info = _RETRY_DECORATORS[tag]
+        count_attr = info["count_attr"]
+        allowed_attrs = _ALWAYS_ALLOWED_ATTRS | {count_attr}
+        if elem.attrib.keys() - allowed_attrs:
+            raise BTValidationError(
+                f"<{tag}> only takes a '{count_attr}' port (plus BT.cpp's "
+                f"own `name`) -- unexpected attribute(s) "
+                f"{sorted(elem.attrib.keys() - allowed_attrs)}.")
+        if count_attr not in elem.attrib:
+            raise BTValidationError(f"<{tag}> requires a '{count_attr}' attribute.")
+        raw_count = elem.attrib[count_attr]
+        # POINT 1's verification: num_attempts/num_cycles is unrolled
+        # ONCE, statically, at translation time -- there is no situation
+        # yet for a blackboard variable to be bound in, so (unlike every
+        # other port in this file) it can never be wired from another
+        # node's output port. Checked BEFORE the int() parse below so
+        # the error names the real problem instead of just "not an
+        # integer".
+        if _is_blackboard_ref(raw_count):
+            raise BTValidationError(
+                f"<{tag}>'s '{count_attr}' is a blackboard reference "
+                f"('{raw_count}') -- this translator unrolls <{tag}> into "
+                f"{count_attr} literal copies of its child ONCE, at "
+                f"translation time, so '{count_attr}' must be a literal "
+                f"integer written directly in the XML, not wired from "
+                f"another node's output port.")
+        try:
+            count = int(raw_count)
+        except ValueError:
+            raise BTValidationError(
+                f"<{tag}>'s '{count_attr}' must be a literal (base-10) "
+                f"integer -- got '{raw_count}'.")
+        if count < 1:
+            raise BTValidationError(
+                f"<{tag}>'s '{count_attr}' must be >= 1 -- got {count}.")
+        children = list(elem)
+        if len(children) != 1:
+            raise BTValidationError(
+                f"<{tag}> must have exactly one child (found {len(children)}).")
+        # Same treatment as plain Sequence/Fallback: NOT a new reactive
+        # scope, reactive_code/guard_stack pass through unchanged (see
+        # _RETRY_DECORATORS's own note above for why n unrolled copies
+        # are a sound match for real retry/repeat semantics here).
+        own_branch_name = elem.attrib.get("name", branch_name)
+        child_terms = [_translate_node(children[0], schema_ports, var_pool, battery_enabled,
+                                        reactive_code, guard_stack, own_branch_name)
+                       for _ in range(count)]
+        return f"{info['functor']}([{','.join(child_terms)}])"
+
     if tag in _CONTROL_FLOW:
         if elem.attrib.keys() - _ALWAYS_ALLOWED_ATTRS:
             raise BTValidationError(
@@ -1134,8 +1219,9 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
     if tag not in schema_ports:
         raise BTValidationError(
             f"<{tag}> is not a recognized node -- not Sequence/Fallback/"
-            f"ReactiveSequence/ReactiveFallback/Inverter and not an "
-            f"action/condition 'id' in module/contracts/schema.yaml.")
+            f"ReactiveSequence/ReactiveFallback/Inverter/"
+            f"RetryUntilSuccessful/Repeat and not an action/condition "
+            f"'id' in module/contracts/schema.yaml.")
 
     return _translate_leaf(tag, elem, None, schema_ports[tag], var_pool, battery_enabled, reactive_code, guard_stack, branch_name)
 

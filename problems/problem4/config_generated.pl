@@ -43,6 +43,7 @@ uninstall_tool_duration(cart, 10.0).
 uninstall_tool_duration(plow, 10.0).
 install_tool_drain_rate(0.05).
 uninstall_tool_drain_rate(0.05).
+install_tool_range(0.3).
 
 0.9::install_tool_result(S,ActionCode,true) ;
 0.09999999999999998::install_tool_result(S,ActionCode,false).

@@ -1659,15 +1659,32 @@ poss(take_sample(ActionCode,Reason,false), S) :-
     sample_result(S, ActionCode, false),
     tag_reason(sample_failure(X,Y), ActionCode, Reason).
 
-% poss(start_install_tool(Tool,Triggers,ActionCode,T0), S): the two
+% poss(start_install_tool(Tool,Triggers,ActionCode,T0), S): the three
 % preconditions this action's own design calls for -- \+ moving(S)
 % (can't start installing mid-walk, same reasoning as take_sample's own
-% precondition), and hitch(free,S) (nothing already attached -- see
-% hitch/2's own note, Section 5c). T0 quantization mirrors
-% poss(startMoveto(...)) above exactly (same merge-grid rationale).
-poss(start_install_tool(_Tool,_Triggers,_ActionCode,T0), S) :-
+% precondition); hitch(free,S) (nothing already attached -- see
+% hitch/2's own note, Section 5c); and PROXIMITY -- the robot's current
+% position must be close to Tool's own FIXED location before it can be
+% installed. Reuses holds(distance_below(...)) DIRECTLY (the exact same
+% predicate a BT tree's own cond(distance_below(...)) leaf or a
+% holds_leg/9 reactive guard would use) rather than re-deriving the
+% dist/5 call by hand -- "close to the tool" IS "distance_below the
+% tool's own point, at Range", no different in kind from "close to the
+% goal". tool_position(Tool,GX,GY) is this problem's own config.yaml
+% (tool.position.<cart|plow>.x/.y -- see config_to_prolog.py's own
+% note) -- OPTIONAL per tool kind, so a tool the tree never installs
+% never needs a position; install_tool_range/1 (tool.install.range,
+% defaulting to safety_margin) is the ONE proximity threshold, shared
+% across every tool kind (matching install_tool_drain_rate/1's own
+% "specific to the ACTION, not the tool" shape). T0 quantization
+% mirrors poss(startMoveto(...)) above exactly (same merge-grid
+% rationale).
+poss(start_install_tool(Tool,_Triggers,_ActionCode,T0), S) :-
     \+ moving(S),
     hitch(free, S),
+    tool_position(Tool, GX, GY),
+    install_tool_range(Range),
+    holds(distance_below(GX,GY,Range), S),
     now(T0Exact, S),
     disc_step_time(Grid),
     quantize_up(T0Exact, Grid, T0).

@@ -1446,24 +1446,40 @@ tool_guard_bisect(Cond,T0,Duration,Zb,B0,Rate,Eps,Tlo,Thi,Tcross) :-
 % tool_earliest_halt(+Triggers,+T0,+Duration,+Zb,+B0,+Rate, -Reason,-T,
 % -Code): the install_tool/uninstall_tool analogue of earliest_halt/12
 % above -- SAME "natural completion vs. earliest trigger" combinator,
-% just over the smaller battery-only candidate set. Reason=natural_
-% tool_end (a SENTINEL, not a genuine Reason atom any other part of
-% this theory ever sees) marks "reached the full Duration with nothing
-% halting it early" -- poss(halt_install_tool(...))/poss(halt_
-% uninstall_tool(...)) below are what turn THAT specific outcome into
-% the actual install/uninstall success-or-failure coin flip (install_
-% tool_result/3 -- see that predicate's own note); a genuine trigger
-% firing first is used AS-IS, exactly like earliest_halt/12's own
-% ExtraCandidates. Rate is install_tool_drain_rate/1 or uninstall_
-% tool_drain_rate/1, resolved by THIS predicate's own two callers
-% (poss(halt_install_tool(...))/poss(halt_uninstall_tool(...)), which
-% already know which action is in progress) -- see the note above
-% first_tool_battery_depletion_time/6 for why it's one rate per ACTION
-% TYPE, not per tool.
+% just over the smaller battery-only candidate set, and now the SAME
+% sentinel atom, `completed`, as earliest_halt/12's own natural-
+% completion candidate (on request -- this used to be the distinct
+% atom natural_tool_end, kept apart specifically so it couldn't be
+% mistaken for MoveTo's own `completed`; see the WARNING below for why
+% that original concern still matters even though the spelling is now
+% shared). A genuine trigger firing first is used AS-IS, exactly like
+% earliest_halt/12's own ExtraCandidates. Rate is install_tool_drain_
+% rate/1 or uninstall_tool_drain_rate/1, resolved by THIS predicate's
+% own two callers (poss(halt_install_tool(...))/poss(halt_uninstall_
+% tool(...)), which already know which action is in progress) -- see
+% the note above first_tool_battery_depletion_time/6 for why it's one
+% rate per ACTION TYPE, not per tool.
+%
+% WARNING -- SAME SPELLING, NOT THE SAME MEANING: for MoveTo, Reason=
+% completed IS the final answer (leg_status/9 maps it straight to
+% Status=true -- reaching a walk's own natural end already means
+% success, nothing else to decide). For install_tool/uninstall_tool,
+% Reason=completed here is NOT a final answer at all -- it is a pure
+% SENTINEL meaning "reached the full Duration with nothing halting it
+% early", consumed immediately by poss(halt_install_tool(...))/poss
+% (halt_uninstall_tool(...)) below, which turn THAT specific outcome
+% into a SEPARATE success-or-failure coin flip (install_tool_result/3/
+% uninstall_tool_result/3 -- see that predicate's own note) BEFORE
+% Status is ever decided. This atom's own value NEVER reaches tool_leg_
+% status/3 or gets recorded as a real Reason for install_tool/
+% uninstall_tool -- poss/2's own first clause below matches on it
+% exactly, then immediately discards it in favor of whatever Reason0
+% the coin flip produces. Do not assume "Reason=completed" means
+% "succeeded" here the way it does for MoveTo.
 tool_earliest_halt(Triggers,T0,Duration,Zb,B0,Rate, Reason,T,Code) :-
     all_tool_trigger_candidates(Triggers, T0,Duration,Zb,B0,Rate, ExtraCandidates),
     NaturalEnd is T0 + Duration,
-    earliest_of([natural_tool_end-NaturalEnd-none], ExtraCandidates, Reason-T-Code).
+    earliest_of([completed-NaturalEnd-none], ExtraCandidates, Reason-T-Code).
 
 % tool_leg_status(+Reason,+Code,-Status): the install_tool/
 % uninstall_tool analogue of leg_status/9 above -- but NOTE the
@@ -1472,8 +1488,10 @@ tool_earliest_halt(Triggers,T0,Duration,Zb,B0,Rate, Reason,T,Code) :-
 % *_tool_success(Tool,_)/*_tool_failure(Tool,_) are BOTH possible
 % outcomes of natural completion (the coin flip already resolved which
 % one -- see poss(halt_install_tool(...)) below), so THIS predicate
-% only ever sees the ALREADY-DECIDED Reason, never the natural_tool_end
-% sentinel itself. battery_depleted is the one hard, non-reactive
+% only ever sees the ALREADY-DECIDED Reason, never the completed
+% sentinel itself (see tool_earliest_halt/9's own WARNING on why that
+% shared spelling with MoveTo's own completed does NOT share its
+% meaning). battery_depleted is the one hard, non-reactive
 % failure (mirroring battery_depleted's own classification in
 % leg_status/9); every OTHER battery-related trigger (battery_under/
 % equal/over(Threshold)) reactive-classifies, same convention.
@@ -1839,17 +1857,22 @@ poss(start_install_tool(_Tool,_Triggers,_ActionCode,T0), S) :-
 % is checked EXPLICITLY (this action's own request), even though
 % current_install_tool/6 below would already implicitly require it --
 % same redundant-but-explicit style poss(haltMoveto(...)) already uses
-% for moving(S) alongside current_walk/6. TWO clauses, matching
-% tool_earliest_halt/8's own "natural_tool_end is a SENTINEL, not a
-% real Reason" contract: clause 1 is what actually happens when
-% Duration elapses with nothing halting it early -- ONLY THEN does
-% install_tool_result/3 (this problem's own config.yaml, tool.install.
-% success_probability -- see config_generated.pl) get drawn, keyed on
-% (S,ActionCode) exactly like take_sample's own sample_result/3 (same
-% "fresh draw per genuinely new situation, shared only if the exact
-% situation term recurs" semantics -- see that predicate's own note);
-% clause 2 is a genuine battery trigger firing first, used as-is, same
-% shape poss(haltMoveto(...)) itself uses for its own ExtraCandidates.
+% for moving(S) alongside current_walk/6. TWO clauses, matching tool_
+% earliest_halt/9's own "completed is a SENTINEL here, not a real
+% Reason -- see its own WARNING" contract: clause 1 is what actually
+% happens when Duration elapses with nothing halting it early -- ONLY
+% THEN does install_tool_result/3 (this problem's own config.yaml,
+% tool.install.success_probability -- see config_generated.pl) get
+% drawn, keyed on (S,ActionCode) exactly like take_sample's own
+% sample_result/3 (same "fresh draw per genuinely new situation, shared
+% only if the exact situation term recurs" semantics -- see that
+% predicate's own note); clause 2 is a genuine battery trigger firing
+% first, used as-is, same shape poss(haltMoveto(...)) itself uses for
+% its own ExtraCandidates. Matching Reason0 against the bare atom
+% `completed` in clause 1 (and excluding it in clause 2) is exactly why
+% that atom can never leak out as this action's own recorded Reason --
+% it's consumed and replaced by Reason0 (install_tool_success(Tool)/
+% install_tool_failure(Tool)) before Status is even decided.
 poss(halt_install_tool(T,Reason,Status), S) :-
     installing_tool(Tool, S),
     current_install_tool(S, Tool, Triggers, ActionCode, T0, SPrev),
@@ -1857,7 +1880,7 @@ poss(halt_install_tool(T,Reason,Status), S) :-
     install_tool_drain_rate(Rate),
     zbatt(Zb),
     leg_start_battery(T0, SPrev, B0),
-    tool_earliest_halt(Triggers,T0,Duration,Zb,B0,Rate, natural_tool_end,T,_Code),
+    tool_earliest_halt(Triggers,T0,Duration,Zb,B0,Rate, completed,T,_Code),
     install_tool_result(S, ActionCode, CoinStatus),
     tool_install_reason(CoinStatus, Tool, Reason0),
     tool_leg_status(Reason0, none, Status),
@@ -1870,7 +1893,7 @@ poss(halt_install_tool(T,Reason,Status), S) :-
     zbatt(Zb),
     leg_start_battery(T0, SPrev, B0),
     tool_earliest_halt(Triggers,T0,Duration,Zb,B0,Rate, Reason0,T,Code),
-    Reason0 \= natural_tool_end,
+    Reason0 \= completed,
     tool_leg_status(Reason0, Code, Status),
     tag_reason(Reason0, ActionCode, Reason).
 
@@ -1900,7 +1923,7 @@ poss(halt_uninstall_tool(T,Reason,Status), S) :-
     uninstall_tool_drain_rate(Rate),
     zbatt(Zb),
     leg_start_battery(T0, SPrev, B0),
-    tool_earliest_halt(Triggers,T0,Duration,Zb,B0,Rate, natural_tool_end,T,_Code),
+    tool_earliest_halt(Triggers,T0,Duration,Zb,B0,Rate, completed,T,_Code),
     uninstall_tool_result(S, ActionCode, CoinStatus),
     tool_uninstall_reason(CoinStatus, Tool, Reason0),
     tool_leg_status(Reason0, none, Status),
@@ -1913,7 +1936,7 @@ poss(halt_uninstall_tool(T,Reason,Status), S) :-
     zbatt(Zb),
     leg_start_battery(T0, SPrev, B0),
     tool_earliest_halt(Triggers,T0,Duration,Zb,B0,Rate, Reason0,T,Code),
-    Reason0 \= natural_tool_end,
+    Reason0 \= completed,
     tool_leg_status(Reason0, Code, Status),
     tag_reason(Reason0, ActionCode, Reason).
 

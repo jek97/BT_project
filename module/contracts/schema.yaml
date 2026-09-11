@@ -1052,11 +1052,11 @@ conditions:
   # holds(ploughed_at(GX,GY),S)/holds(ploughed_between(X1,Y1,X2,Y2),S)
   # in basic_action_theory.pl -- thin BT-tree-facing wrappers around
   # ploughed/3 (the cell-indexed ploughing fluent the plow-deploy leg
-  # already marks), discretizing a continuous point/box through the
-  # SAME plough_cell_size grid ploughed/3 itself uses. NON-CONTINUOUS
-  # (see bt_to_prolog.py's own _NON_CONTINUOUS_CONDITIONS note) --
-  # ploughed/3 only ever becomes newly true at a MoveTo leg's own halt/
-  # interrupt, never incrementally mid-leg.
+  # already marks), discretizing a continuous point/pair-of-points
+  # through the SAME plough_cell_size grid ploughed/3 itself uses.
+  # NON-CONTINUOUS (see bt_to_prolog.py's own _NON_CONTINUOUS_
+  # CONDITIONS note) -- ploughed/3 only ever becomes newly true at a
+  # MoveTo leg's own halt/interrupt, never incrementally mid-leg.
   # ----------------------------------------------------------------
   - id: PloughedAt
     prolog_condition: ploughed_at
@@ -1071,9 +1071,11 @@ conditions:
   - id: PloughedBetween
     prolog_condition: ploughed_between
     description: >
-      True iff EVERY cell overlapping the axis-aligned box spanned by
-      p1 and p2 (corners in either order) is already ploughed -- "has
-      this whole area already been ploughed".
+      True iff EVERY cell the straight line connecting p1's own cell
+      center to p2's touches is already ploughed (standard integer
+      Bresenham line algorithm over the discretized grid -- NOT the
+      full axis-aligned box spanned by p1/p2) -- "has this whole
+      SWATH already been ploughed".
     ports:
       - name: p1
         direction: input

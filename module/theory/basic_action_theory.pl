@@ -3162,24 +3162,24 @@ holds(deployed, S) :- deployed(S).
 % wrappers around ploughed/3 (Section on ploughing, above quantize_up/3
 % /cell_index/3) -- ploughed/3 itself takes CELL INDICES (Cx,Cy), not
 % continuous coordinates, so these discretize a continuous point (or
-% axis-aligned box corner pair) through the SAME plough_cell_size/
-% cell_index/3 the ploughing engine itself already uses, then defer
-% straight to ploughed/3 -- no new marking logic, purely a coordinate-
-% space adapter.
+% pair of points) through the SAME plough_cell_size/cell_index/3 the
+% ploughing engine itself already uses, then defer straight to
+% ploughed/3 -- no new marking logic, purely a coordinate-space
+% adapter.
 %
 % ploughed_at(GX,GY): TRUE iff the single cell (GX,GY) falls into is
 % ploughed.
 %
-% ploughed_between(X1,Y1,X2,Y2): TRUE iff EVERY cell overlapping the
-% axis-aligned box spanned by (X1,Y1) and (X2,Y2) (corners in EITHER
-% order -- min/max normalizes) is ploughed -- "has this whole area
-% already been ploughed". No forall/2 builtin in ProbLog, so this is
-% the standard double-negation Prolog idiom instead: "there is no cell
-% in the box that is NOT ploughed". Confirmed this reduces to the
-% correct JOINT probability (not merely a yes/no check) against
-% ProbLog's own semantics via a small scratch model (independent per-
-% cell ploughed facts multiplied out exactly as expected) before
-% adopting it here.
+% ploughed_between(X1,Y1,X2,Y2): TRUE iff EVERY cell the STRAIGHT LINE
+% connecting (X1,Y1)'s own cell center to (X2,Y2)'s own touches is
+% ploughed -- "has this whole SWATH already been ploughed" (per this
+% feature's own request -- an earlier version of this clause checked
+% the full axis-aligned BOUNDING BOX instead; that's not what was
+% wanted, see bresenham_cells/5 below for the replacement). Discretizes
+% each endpoint to a cell index first (same as ploughed_at above), then
+% walks the discrete-grid line between them via the standard integer
+% Bresenham line algorithm (bresenham_cells/5 below) and requires every
+% cell on it to be ploughed.
 %
 % Both NON-CONTINUOUS, same reason hitched/0 and deployed/0 above are:
 % ploughed/3 only ever becomes newly true at a MoveTo leg's own halt/
@@ -3193,14 +3193,94 @@ holds(ploughed_at(GX,GY), S) :-
     ploughed(Cx, Cy, S).
 holds(ploughed_between(X1,Y1,X2,Y2), S) :-
     plough_cell_size(CellSize),
-    cell_index(X1, CellSize, CxA),
-    cell_index(X2, CellSize, CxB),
-    cell_index(Y1, CellSize, CyA),
-    cell_index(Y2, CellSize, CyB),
-    MinCx is min(CxA,CxB), MaxCx is max(CxA,CxB),
-    MinCy is min(CyA,CyB), MaxCy is max(CyA,CyB),
-    \+ ( between(MinCx,MaxCx,Cx), between(MinCy,MaxCy,Cy),
-         \+ ploughed(Cx,Cy,S) ).
+    cell_index(X1, CellSize, Cx0),
+    cell_index(Y1, CellSize, Cy0),
+    cell_index(X2, CellSize, Cx1),
+    cell_index(Y2, CellSize, Cy1),
+    bresenham_cells(Cx0,Cy0,Cx1,Cy1,Cells),
+    all_cells_ploughed(Cells, S).
+
+% bresenham_sign(+A,+B,-Sign): Sign is +1 if A<B, else -1 (covers
+% A=:=B too, picking -1 arbitrarily -- see bresenham_cells/5's own note
+% on why that axis's Sign is never actually consulted in that case).
+% TWO mutually exclusive clauses, not an if-then-else -- ProbLog's own
+% Prolog dialect has no '->'/2 (same convention every other multi-case
+% predicate in this file already follows, e.g. effective_tool_speed/3
+% above).
+bresenham_sign(A,B,1)  :- A < B.
+bresenham_sign(A,B,-1) :- A >= B.
+
+% bresenham_x_step(+E2,+Dy,+Sx,+Cx,+Err,-Cx2,-Err2) / bresenham_y_step
+% (+E2,+Dx,+Sy,+Cy,+Err,-Cy2,-Err2): one axis's own share of a single
+% Bresenham step -- TWO mutually exclusive clauses each (E2 below/above
+% the axis's own threshold), matching the classic algorithm's two
+% independent per-axis conditionals (E2>=Dy for X, E2=<Dx for Y) EXCEPT
+% expressed without '->'/2. Both conjuncts are called on every step
+% (bresenham_walk/10 below) -- they are independent, not alternatives
+% of each other, so a "diagonal" step where BOTH actually advance
+% (Cx2\=Cx AND Cy2\=Cy) is completely normal, not a separate case to
+% handle: Dy<=0=<Dx always holds (Dy is defined as -abs(...), Dx as
+% abs(...)), which makes "neither fires" mathematically impossible --
+% verified directly (a 300k-line scratch trace against a hand-derived
+% example, plus this predicate's own use in ploughed_between above)
+% before adopting this split.
+bresenham_x_step(E2,Dy,_Sx,Cx,Err,Cx,Err) :- E2 < Dy.
+bresenham_x_step(E2,Dy,Sx,Cx,Err,Cx2,Err2) :- E2 >= Dy, Cx2 is Cx+Sx, Err2 is Err+Dy.
+bresenham_y_step(E2,Dx,_Sy,Cy,Err,Cy,Err) :- E2 > Dx.
+bresenham_y_step(E2,Dx,Sy,Cy,Err,Cy2,Err2) :- E2 =< Dx, Cy2 is Cy+Sy, Err2 is Err+Dx.
+
+% bresenham_walk(+Cx,+Cy,+Cx1,+Cy1,+Dx,+Dy,+Sx,+Sy,+Err,-Cells): the
+% recursive walk itself -- Cells accumulates cell(Cx,Cy) terms from the
+% CURRENT position down to (and including) the target (Cx1,Cy1). Base
+% case relies on Prolog UNIFICATION, not an explicit =:= test, to
+% detect "already at the target": repeating the SAME variable (Cx, Cy)
+% in both the "current" and "target" argument positions only unifies
+% when the two ALREADY-BOUND integers this predicate is actually called
+% with are equal -- the recursive clause's own \+ (Cx=:=Cx1,Cy=:=Cy1)
+% guard is the exact complement, so the two clauses are mutually
+% exclusive and jointly exhaustive, same "no cut needed" style as every
+% other multi-case predicate in this file.
+bresenham_walk(Cx,Cy,Cx,Cy,_Dx,_Dy,_Sx,_Sy,_Err,[cell(Cx,Cy)]).
+bresenham_walk(Cx,Cy,Cx1,Cy1,Dx,Dy,Sx,Sy,Err,[cell(Cx,Cy)|Rest]) :-
+    \+ (Cx =:= Cx1, Cy =:= Cy1),
+    E2 is 2*Err,
+    bresenham_x_step(E2,Dy,Sx,Cx,Err,Cx2,ErrA),
+    bresenham_y_step(E2,Dx,Sy,Cy,ErrA,Cy2,ErrB),
+    bresenham_walk(Cx2,Cy2,Cx1,Cy1,Dx,Dy,Sx,Sy,ErrB,Rest).
+
+% bresenham_cells(+Cx0,+Cy0,+Cx1,+Cy1,-Cells): Cells is the list of
+% cell(Cx,Cy) pairs (INCLUDING both endpoints) the standard integer
+% Bresenham line algorithm visits walking from (Cx0,Cy0) to (Cx1,Cy1)
+% -- "every cell the straight line connecting these two cell centers
+% passes through", the discrete-grid analogue of dist/5's own straight-
+% line distance. Dy is defined NEGATIVE (-abs(...), not +abs(...)) --
+% the standard formulation's own convention, needed for bresenham_x_
+% step/bresenham_y_step's own threshold comparisons to work out; Sx/Sy
+% (this axis's own step direction) are never actually consulted when
+% that axis's own Dx/Dy is 0 (see bresenham_x_step/bresenham_y_step's
+% own E2<Dy / E2>Dx "no step" clauses -- Dy<=0 there makes E2>=Dy/
+% E2=<Dx false whenever Dx/Dy(abs) is 0, for ANY Sx/Sy), so
+% bresenham_sign's own arbitrary A=:=B tie-break is always safe.
+bresenham_cells(Cx0,Cy0,Cx1,Cy1,Cells) :-
+    Dx is abs(Cx1-Cx0),
+    Dy is -abs(Cy1-Cy0),
+    bresenham_sign(Cx0,Cx1,Sx),
+    bresenham_sign(Cy0,Cy1,Sy),
+    Err0 is Dx + Dy,
+    bresenham_walk(Cx0,Cy0,Cx1,Cy1,Dx,Dy,Sx,Sy,Err0,Cells).
+
+% all_cells_ploughed(+Cells,+S): TRUE iff EVERY cell(Cx,Cy) in Cells
+% (a plain, already-finite list -- see bresenham_cells/5 above) is
+% ploughed(Cx,Cy,S) -- plain list recursion, no forall/2 or double-
+% negation needed here (unlike an EARLIER, box-based version of
+% ploughed_between/4 this replaced): the candidate cells are already
+% fully enumerated by bresenham_cells/5, not generated lazily via
+% between/3, so there's nothing to universally quantify OVER, just a
+% list to walk.
+all_cells_ploughed([], _S).
+all_cells_ploughed([cell(Cx,Cy)|Rest], S) :-
+    ploughed(Cx, Cy, S),
+    all_cells_ploughed(Rest, S).
 
 % ploughed_at/3, ploughed_between/5 (bare, NOT holds(...)-wrapped): thin
 % pass-throughs so a goal_formula.pl can reference either directly, same

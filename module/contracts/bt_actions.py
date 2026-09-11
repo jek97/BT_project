@@ -587,9 +587,11 @@ def ploughed_at_cond_term(goal):
 def ploughed_between_cond_term(p1, p2):
     """cond(ploughed_between(X1,Y1,X2,Y2)) term text -- matches
     PloughedBetween's p1/p2 ports in schema.yaml. TRUE iff every cell
-    overlapping the axis-aligned box spanned by p1 and p2 is ploughed.
+    the straight line connecting p1's own cell center to p2's touches
+    (standard integer Bresenham line algorithm over the discretized
+    grid -- NOT the full box spanned by p1/p2) is ploughed.
 
-    p1, p2: (x,y) pairs, the box's corners (either order).
+    p1, p2: (x,y) pairs, the line's two endpoints (either order).
     """
     x1, y1 = p1
     x2, y2 = p2

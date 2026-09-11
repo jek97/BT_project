@@ -240,16 +240,19 @@ predicates:
     arity: 5
     situation_arg: 5
     args:
-      - {position: 1, name: X1, type: float, description: "X of one box corner, metres."}
-      - {position: 2, name: Y1, type: float, description: "Y of one box corner, metres."}
-      - {position: 3, name: X2, type: float, description: "X of the opposite box corner, metres."}
-      - {position: 4, name: Y2, type: float, description: "Y of the opposite box corner, metres."}
+      - {position: 1, name: X1, type: float, description: "X of one line endpoint, metres."}
+      - {position: 2, name: Y1, type: float, description: "Y of one line endpoint, metres."}
+      - {position: 3, name: X2, type: float, description: "X of the other line endpoint, metres."}
+      - {position: 4, name: Y2, type: float, description: "Y of the other line endpoint, metres."}
       - {position: 5, name: S, type: situation, description: "The situation to check at."}
     description: >
-      TRUE iff EVERY cell overlapping the axis-aligned box spanned by
-      (X1,Y1) and (X2,Y2) (corners in either order) is currently
-      ploughed. See schema.yaml's own PloughedBetween condition for the
-      BT-tree-facing version of the same check.
+      TRUE iff EVERY cell the straight line connecting (X1,Y1)'s own
+      cell center to (X2,Y2)'s own touches (standard integer Bresenham
+      line algorithm over the discretized grid, see basic_action_
+      theory.pl's own bresenham_cells/5 -- NOT the full axis-aligned
+      box spanned by the two points) is currently ploughed. See
+      schema.yaml's own PloughedBetween condition for the BT-tree-
+      facing version of the same check.
 
   - name: halted_with
     arity: 2

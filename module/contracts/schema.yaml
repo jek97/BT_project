@@ -42,6 +42,26 @@
 # ports that are wired to another node rather than given a literal
 # value -- this schema only describes port TYPES/directions, not a
 # serialization, so it stays agnostic of that choice).
+#
+# TWO ports -- triggers (input, on MoveTo/InstallTool/UninstallTool/
+# DeployTool/RetractTool) and reason (output, on nearly every action)
+# -- stay declared here because module/translators/bt_to_prolog.py
+# genuinely needs them: triggers is a real XML attribute it parses
+# (extra halting conditions, reactive-guard derivation -- see that
+# file's own module docstring); reason is where the auto-generated
+# Prolog Reason term (tag_reason/3) conceptually lives, even though no
+# tree ever binds it to a literal attribute. NEITHER belongs in an
+# ACTUAL BT.cpp-facing <TreeNodesModel> a real C++ program would read,
+# though (a Groot-facing declaration, as opposed to this schema's own
+# translator-validation use) -- reason is a Prolog-Reason-atom
+# artifact status/control_points/value already make redundant for a
+# real node, and triggers is how THIS project's own reactive-interrupt
+# derivation gets threaded into a Prolog term, not a concept a real
+# C++ node needs (BT.cpp's own ReactiveSequence/ReactiveFallback/
+# Decorator nodes already cover that at the TREE-STRUCTURE level).
+# Every problem's own hand-written <TreeNodesModel> (in its own
+# behavior_tree.xml) already omits both for exactly this reason -- a
+# mechanical generator built from this file later should too.
 # ============================================================
 
 schema_version: 1

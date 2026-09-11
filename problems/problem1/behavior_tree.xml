@@ -41,8 +41,6 @@
   <TreeNodesModel>
     <Action ID="MoveTo">
       <input_port name="control_points" type="std::vector&lt;Point&gt;"/>
-      <input_port name="triggers" type="std::vector&lt;std::string&gt;"/>
-      <output_port name="reason" type="std::string"/>
       <output_port name="status" type="bool"/>
     </Action>
     <Action ID="PlanWith">
@@ -51,7 +49,6 @@
       <input_port name="obstacle_id" type="std::string"/>
       <input_port name="offset" type="double"/>
       <output_port name="control_points" type="std::vector&lt;Point&gt;"/>
-      <output_port name="reason" type="std::string"/>
       <output_port name="status" type="bool"/>
     </Action>
     <Condition ID="DistanceBelow">

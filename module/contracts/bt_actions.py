@@ -22,14 +22,21 @@ written to be usable from TWO different callers:
      ROS2 behaviortree_ros2) bridge could register the bt_-prefixed
      functions below directly as C++ node tick() callbacks: their
      signatures and return shapes match schema.yaml's port
-     declarations exactly, using PLAIN Python types throughout
-     (float / list of (x,y) tuples / str / bool / dict) -- never a
-     ProbLog Term object. This file (and the plain-Python half of
-     planners.py it calls into) has NO ProbLog import anywhere, so a
-     BT.cpp bridge that never installs ProbLog can still import and
-     call bt_plan_astar/bt_plan_straight -- see planners.py's own
-     header for why its ProbLog-specific half is wrapped in a
-     try/except instead of a hard import.
+     declarations, using PLAIN Python types throughout (float / list
+     of (x,y) tuples / str / bool / dict) -- never a ProbLog Term
+     object, and NEVER a "reason"/"triggers" key/parameter either
+     (schema.yaml still declares both -- the ProbLog translation side
+     genuinely needs them, see that file's own note -- but neither
+     means anything to a real BT.cpp node: "reason" is a Prolog-
+     Reason-atom artifact status/control_points/value already make
+     redundant, and "triggers" is how THIS project's own reactive-
+     interrupt derivation is threaded into a Prolog term, not a
+     concept a real C++ node/tree structure needs at all). This file
+     (and the plain-Python half of planners.py it calls into) has NO
+     ProbLog import anywhere, so a BT.cpp bridge that never installs
+     ProbLog can still import and call bt_plan_astar/bt_plan_straight
+     -- see planners.py's own header for why its ProbLog-specific half
+     is wrapped in a try/except instead of a hard import.
 
 MoveTo (and both conditions) are DELIBERATELY NOT given a directly
 -executable Python implementation here. MoveTo's real behaviour is
@@ -106,50 +113,53 @@ from planners import (
 def bt_plan_astar(sx, sy, gx, gy):
     """
     BT.cpp-compatible wrapper around planners.py's
-    plan_astar_points -- matches PlanWith's three output ports in
-    schema.yaml exactly (algorithm="astar" case), returned together as
-    one dict:
-        {control_points, reason, status}
-    control_points is [] and reason is "no_path" if A* found no path
-    (unreachable goal, or the map failed to load) -- see
-    planners.py's own _astar_control_points for exactly which
+    plan_astar_points -- matches PlanWith's own control_points/status
+    output ports in schema.yaml exactly (algorithm="astar" case),
+    returned together as one dict:
+        {control_points, status}
+    No "reason" key: that's a Prolog-Reason-atom artifact needed by
+    the ProbLog translation side (see basic_action_theory.pl's own
+    do_node(planWith(...)) and tag_reason/3), not something a real
+    BT.cpp caller needs -- status (True/False) IS the NodeStatus
+    SUCCESS/FAILURE signal, and control_points being [] already says
+    "no path" on its own. control_points is [] and status is False if
+    A* found no path (unreachable goal, or the map failed to load) --
+    see planners.py's own _astar_control_points for exactly which
     cases that covers.
     """
     control_points = plan_astar_points(sx, sy, gx, gy)
     if control_points is None:
-        return {"control_points": [], "reason": "no_path", "status": False}
+        return {"control_points": [], "status": False}
     return {
         "control_points": [(float(x), float(y)) for x, y in control_points],
-        "reason": "completed",
         "status": True,
     }
 
 
 def bt_plan_straight(sx, sy, gx, gy):
     """BT.cpp-compatible wrapper around plan_straight_points -- same
-    shape and rationale as bt_plan_astar above; a straight line between
-    two finite points essentially always succeeds."""
+    shape and rationale as bt_plan_astar above (no "reason" key, see
+    its own note); a straight line between two finite points
+    essentially always succeeds."""
     control_points = plan_straight_points(sx, sy, gx, gy)
     return {
         "control_points": [(float(x), float(y)) for x, y in control_points],
-        "reason": "completed",
         "status": True,
     }
 
 
 def bt_plan_voronoi(sx, sy, gx, gy):
     """BT.cpp-compatible wrapper around planners.py's
-    plan_voronoi_points -- same shape/rationale as bt_plan_astar above.
-    control_points is [] and reason is "no_path" only if a roadmap
-    exists but start/goal are genuinely disconnected within it;
-    degrades to a straight line (never fails) when there are no
-    obstacles to route around."""
+    plan_voronoi_points -- same shape/rationale as bt_plan_astar above
+    (no "reason" key, see its own note). control_points is [] and
+    status is False only if a roadmap exists but start/goal are
+    genuinely disconnected within it; degrades to a straight line
+    (never fails) when there are no obstacles to route around."""
     control_points = plan_voronoi_points(sx, sy, gx, gy)
     if control_points is None:
-        return {"control_points": [], "reason": "no_path", "status": False}
+        return {"control_points": [], "status": False}
     return {
         "control_points": [(float(x), float(y)) for x, y in control_points],
-        "reason": "completed",
         "status": True,
     }
 
@@ -159,15 +169,14 @@ def bt_follow_boarder(sx, sy, obstacle_id, offset):
     follow_boarder_points -- matches PlanWith's obstacle_id/offset
     input ports (algorithm="follow_boarder" case) exactly (no goal
     port -- this planner doesn't decide when to leave the boundary,
-    see follow_boarder_points's own docstring). control_points is []
-    and reason is "no_path" only if obstacle_id names no known
-    obstacle."""
+    see follow_boarder_points's own docstring). No "reason" key, see
+    bt_plan_astar's own note. control_points is [] and status is False
+    only if obstacle_id names no known obstacle."""
     control_points = follow_boarder_points(sx, sy, obstacle_id, offset)
     if control_points is None:
-        return {"control_points": [], "reason": "no_path", "status": False}
+        return {"control_points": [], "status": False}
     return {
         "control_points": [(float(x), float(y)) for x, y in control_points],
-        "reason": "completed",
         "status": True,
     }
 
@@ -200,27 +209,28 @@ def bt_take_sample(success_probability=0.5, value_mean=5.0, value_sigma=2.0):
     problem's own config.yaml sample.success_probability/sample.value.
     mean/sample.value.sigma itself and pass them through).
 
-    Returns {reason, status, value} matching TakeSample's own reason/
-    status ports in schema.yaml plus the drawn value -- reason is the
-    BARE outcome ("sample_success"/"sample_failure"), the same "no
-    ActionCode/SampleId, no extra info" shape bt_plan_astar's own
-    reason ("completed"/"no_path") already uses: ActionCode/SampleId-
-    tagging and recording the robot's own position (X,Y) happen ONLY on
-    the ProbLog/translation side (see basic_action_theory.pl's own
-    do_node(take_sample(...)) and tag_reason/3), not something this
-    plain-Python callable needs to reproduce -- a real BT.cpp caller
-    already knows its own current position and its own configured id
-    without this function echoing either back. value is the one genuine
-    new piece of information only this function's own random draw can
-    supply -- None on failure (no value is ever drawn then, see poss
-    (take_sample(...))'s own note: a failed reading is exactly that, no
-    number to report).
+    Returns {status, value} matching TakeSample's own status port in
+    schema.yaml plus the drawn value -- NO "reason" key: that's a
+    Prolog-Reason-atom artifact needed only by the ProbLog translation
+    side (see basic_action_theory.pl's own do_node(take_sample(...))
+    and tag_reason/3, which build sample_success(X,Y,V,SampleId,
+    ActionCode)/sample_failure(X,Y,SampleId,ActionCode) -- ActionCode/
+    SampleId-tagging and recording the robot's own position (X,Y)
+    happen ONLY there), not something this plain-Python callable needs
+    to reproduce -- a real BT.cpp caller already knows its own current
+    position and its own configured id without this function echoing
+    either back, and status (True/False) alone IS the NodeStatus
+    SUCCESS/FAILURE signal. value is the one genuine new piece of
+    information only this function's own random draw can supply --
+    None on failure (no value is ever drawn then, see poss(take_sample
+    (...))'s own note: a failed reading is exactly that, no number to
+    report).
     """
     success = random.random() < success_probability
     if not success:
-        return {"reason": "sample_failure", "status": False, "value": None}
+        return {"status": False, "value": None}
     value = min(10, max(0, round(random.gauss(value_mean, value_sigma))))
-    return {"reason": "sample_success", "status": True, "value": value}
+    return {"status": True, "value": value}
 
 
 def bt_plan_with(algorithm, sx, sy, gx=None, gy=None, obstacle_id=None, offset=None):
@@ -231,8 +241,9 @@ def bt_plan_with(algorithm, sx, sy, gx=None, gy=None, obstacle_id=None, offset=N
     one BT.cpp action). Routes to bt_plan_astar/bt_plan_straight/
     bt_plan_voronoi (gx,gy required) for those three algorithm values,
     or bt_follow_boarder (obstacle_id,offset required) for
-    "follow_boarder" -- same {control_points, reason, status} return
-    shape either way."""
+    "follow_boarder" -- same {control_points, status} return shape
+    either way (see bt_plan_astar's own note on why there's no
+    "reason" key)."""
     if algorithm == "follow_boarder":
         return bt_follow_boarder(sx, sy, obstacle_id, offset)
     if algorithm in _PLAN_ALGORITHM_FUNCS:

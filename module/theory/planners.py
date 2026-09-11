@@ -468,8 +468,10 @@ def _strip_prolog_comments(text):
 
 
 def _parse_obstacle_polygons(text):
-    """Returns [(id, [(x,y),...]), ...] -- see collision_geometry.py's
-    own identical function for the full rationale."""
+    """Returns [(id, [(x,y),...]), ...] (each obstacle's own OUTER
+    boundary only) -- see collision_geometry.py's own identical
+    function for the full rationale, and _parse_obstacle_holes below
+    for how a hole (if any) gets folded back in."""
     polys = []
     for m in re.finditer(r"obstacle_polygon\(([^,]+),\s*\[(.*?)\]\s*\)\s*\.", text, re.S):
         obstacle_id = m.group(1).strip()
@@ -479,9 +481,28 @@ def _parse_obstacle_polygons(text):
     return polys
 
 
+def _parse_obstacle_holes(text):
+    """Returns {id: [hole_points, ...]} -- see collision_geometry.py's
+    own identical function for the full rationale."""
+    holes = {}
+    for m in re.finditer(r"obstacle_hole\(([^,]+),\s*\[(.*?)\]\s*\)\s*\.", text, re.S):
+        obstacle_id = m.group(1).strip()
+        pts = [(float(x), float(y)) for x, y in _POINT_RE.findall(m.group(2))]
+        if len(pts) >= 3:
+            holes.setdefault(obstacle_id, []).append(pts)
+    return holes
+
+
 try:
     with open(_OBSTACLES_PATH) as f:
-        _OBSTACLE_POLYGONS = _parse_obstacle_polygons(_strip_prolog_comments(f.read()))
+        _obstacles_text = _strip_prolog_comments(f.read())
+    # _OBSTACLE_POLYGONS is [(id, rings), ...], rings = [outer_points,
+    # hole1_points, ...] -- rings[0] is ALWAYS the outer boundary, see
+    # collision_geometry.py's own OBSTACLE_POLYGONS note for the full
+    # rationale (identical representation, independent copy).
+    _holes_by_id = _parse_obstacle_holes(_obstacles_text)
+    _OBSTACLE_POLYGONS = [(obstacle_id, [outer_points] + _holes_by_id.get(obstacle_id, []))
+                           for obstacle_id, outer_points in _parse_obstacle_polygons(_obstacles_text)]
 except FileNotFoundError:
     _OBSTACLE_POLYGONS = []
 
@@ -566,8 +587,18 @@ def _astar_control_points(sx, sy, gx, gy):
 # no special-casing needed downstream.
 # =====================================================================
 def _polygon_edges(points):
+    """ONE ring's own closed edge list -- see collision_geometry.py's
+    own identical function; _all_edges below is the multi-ring
+    combinator built on top of it."""
     closed = list(points) + [points[0]]
     return list(zip(closed[:-1], closed[1:]))
+
+
+def _all_edges(rings):
+    """rings: [outer_points, hole1_points, ...] -- see
+    collision_geometry.py's own identical function for the full
+    rationale (independent copy)."""
+    return [edge for ring in rings for edge in _polygon_edges(ring)]
 
 
 def _edge_crosses(px, py, ax, ay, bx, by):
@@ -577,13 +608,27 @@ def _edge_crosses(px, py, ax, ay, bx, by):
     return False
 
 
-def _inside_polygon(px, py, points):
-    count = sum(1 for (ax, ay), (bx, by) in _polygon_edges(points)
+def _inside_polygon(px, py, rings):
+    """TRUE iff (px,py) is inside the obstacle's own solid material --
+    see collision_geometry.py's own identical function for the full
+    even-odd-over-combined-rings argument (independent copy, same
+    math). rings is normally an obstacle's own FULL [outer, hole1,
+    ...] list (from _OBSTACLE_POLYGONS) -- but _offset_boundary_
+    clockwise below also calls this with a SINGLE ring wrapped in its
+    own one-element list ([vertices]), to test containment against
+    just the ONE boundary currently being offset, deliberately
+    ignoring any sibling holes/outer boundary that ring's own obstacle
+    might additionally have."""
+    count = sum(1 for (ax, ay), (bx, by) in _all_edges(rings)
                 if _edge_crosses(px, py, ax, ay, bx, by))
     return count % 2 == 1
 
 
 def _signed_polygon_area(points):
+    """ONE ring's own signed area (winding-direction test) -- takes a
+    single flat point list, same as _polygon_edges above, never a
+    multi-ring list (an obstacle's own winding direction is a
+    per-ring property, not something to combine across rings)."""
     return sum(ax*by - bx*ay for (ax, ay), (bx, by) in _polygon_edges(points)) / 2.0
 
 
@@ -629,7 +674,7 @@ def _offset_boundary_clockwise(polygon, offset):
         n2 = (edy, -edx)
         mx, my = (ax+bx)/2.0, (ay+by)/2.0
         probe_x, probe_y = mx + n1[0]*_NORMAL_PROBE_EPS, my + n1[1]*_NORMAL_PROBE_EPS
-        outward = n1 if not _inside_polygon(probe_x, probe_y, vertices) else n2
+        outward = n1 if not _inside_polygon(probe_x, probe_y, [vertices]) else n2
         for k in range(_BOUNDARY_SAMPLES_PER_EDGE):
             frac = k / _BOUNDARY_SAMPLES_PER_EDGE
             px, py = ax + edx*elen*frac, ay + edy*elen*frac
@@ -637,10 +682,22 @@ def _offset_boundary_clockwise(polygon, offset):
     return samples
 
 
+def _nearest_ring_distance(px, py, ring):
+    """Nearest-edge distance from (px,py) to ONE boundary ring -- used
+    by _follow_boarder_control_points below to pick WHICH of an
+    obstacle's own rings (its outer boundary, or a specific hole) to
+    trace, when it has more than one."""
+    return min(math.hypot(px-cx, py-cy)
+               for (ax, ay), (bx, by) in _polygon_edges(ring)
+               for cx, cy in [_closest_point_on_segment(px, py, ax, ay, bx, by)])
+
+
 def _follow_boarder_control_points(sx, sy, obstacle_id, offset):
     """Core computation -- see follow_boarder_points below for the
-    full contract. Looks up obstacle_id's own polygon, builds its
-    offset boundary, and starts from whichever sample is closest to
+    full contract. Looks up obstacle_id's own ring(s), builds an
+    offset boundary around WHICHEVER ring the robot's own current
+    position (sx,sy) is actually closest to right now (see below), and
+    starts from whichever sample on THAT offset curve is closest to
     the robot's ACTUAL current position -- NOT assumed to already sit
     exactly on the offset curve (it generally won't, by a small
     bisection-tolerance residual -- see this project's own discussion
@@ -650,12 +707,24 @@ def _follow_boarder_control_points(sx, sy, obstacle_id, offset):
     FULL clockwise loop back to that same starting sample -- no
     stopping condition of its own; see this section's own header for
     why. Returns [(x,y), ...] control points, or None if obstacle_id
-    names no known obstacle or its polygon is degenerate.
+    names no known obstacle or its own chosen ring is degenerate.
 
     obstacle_id is looked up in _OBSTACLE_POLYGONS -- it always came
     FROM collision detection (recover_obstacle/1, built on
     last_halt/1 -- see basic_action_theory.pl's own note there), so it
     can only ever be a valid Id there.
+
+    WHICH RING: an ordinary, hole-less obstacle has exactly one
+    (rings[0], its outer boundary) -- nothing to choose. An obstacle
+    WITH a hole (e.g. a perimeter fence's own inner face) has no
+    single "the" boundary to trace: approaching it from OUTSIDE the
+    property means the outer boundary is the one actually blocking the
+    robot, so that's the one to loop around; approaching from INSIDE
+    the fenced yard means the HOLE's own inner face is the one
+    actually blocking it instead. Picking whichever ring (px,py) is
+    currently nearest (_nearest_ring_distance) gets this right in
+    both directions without needing to separately track which side an
+    approach came from.
 
     offset ITSELF gets corrected before use: _OBSTACLE_POLYGONS is
     already inflated by SAFETY_MARGIN_M (see this file's own module
@@ -675,12 +744,15 @@ def _follow_boarder_control_points(sx, sy, obstacle_id, offset):
     safety_margin" caveat basic_action_theory.pl's own
     clearance_adjusted_threshold/2 already documents for
     obstacle_in_bound/obstacle_on_path."""
-    polygon = None
-    for oid, pts in _OBSTACLE_POLYGONS:
+    rings = None
+    for oid, r in _OBSTACLE_POLYGONS:
         if oid == obstacle_id:
-            polygon = pts
+            rings = r
             break
-    if polygon is None or len(polygon) < 3:
+    if not rings:
+        return None
+    polygon = min(rings, key=lambda ring: _nearest_ring_distance(sx, sy, ring))
+    if len(polygon) < 3:
         return None
 
     adjusted_offset = offset - SAFETY_MARGIN_M
@@ -750,8 +822,8 @@ def _voronoi_sites():
     _offset_boundary_clockwise above, just without any further outward
     offset."""
     sites = []
-    for _oid, poly in _OBSTACLE_POLYGONS:
-        for (ax, ay), (bx, by) in _polygon_edges(poly):
+    for _oid, rings in _OBSTACLE_POLYGONS:
+        for (ax, ay), (bx, by) in _all_edges(rings):
             for k in range(_VORONOI_SAMPLES_PER_EDGE):
                 frac = k / _VORONOI_SAMPLES_PER_EDGE
                 sites.append((ax + (bx-ax)*frac, ay + (by-ay)*frac))
@@ -761,14 +833,14 @@ def _voronoi_sites():
 def _segment_crosses_any_obstacle(ax, ay, bx, by):
     """True iff the segment (ax,ay)-(bx,by), sampled at
     _VORONOI_EDGE_CHECK_SAMPLES points, passes through ANY (already
-    safety_margin-inflated) obstacle's interior -- the filter that
-    turns a plain Voronoi tessellation into a roadmap using only
-    free-space edges."""
+    safety_margin-inflated) obstacle's own solid material -- the
+    filter that turns a plain Voronoi tessellation into a roadmap
+    using only free-space edges."""
     for k in range(_VORONOI_EDGE_CHECK_SAMPLES + 1):
         frac = k / _VORONOI_EDGE_CHECK_SAMPLES
         x, y = ax + (bx-ax)*frac, ay + (by-ay)*frac
-        for _oid, poly in _OBSTACLE_POLYGONS:
-            if _inside_polygon(x, y, poly):
+        for _oid, rings in _OBSTACLE_POLYGONS:
+            if _inside_polygon(x, y, rings):
                 return True
     return False
 

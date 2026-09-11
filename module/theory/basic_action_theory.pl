@@ -103,6 +103,25 @@
 % an actual obstacle).
 obstacle_polygon(no_obstacles_placeholder, []) :- fail.
 
+% obstacle_hole/2: the ADDITIVE counterpart to obstacle_polygon/2 --
+% zero or more per obstacle Id, each one a HOLLOW interior boundary
+% WITHIN that same obstacle (e.g. a perimeter fence's own inner face,
+% surrounding the walkable ground inside it) -- see occgrid_to_
+% problog.py's own module docstring for how these get extracted
+% (cv2.RETR_CCOMP, a two-level contour hierarchy) and module/theory/
+% collision_geometry.py's own OBSTACLE_POLYGONS/_inside_polygon note
+% for how every consumer (collision_geometry.py AND planners.py)
+% combines an obstacle's own outer+hole rings back into ONE
+% containment/clearance test, so a hole's own free interior correctly
+% reads as free space rather than "inside the obstacle". An ordinary,
+% hole-less obstacle (a tree, a building) has ZERO obstacle_hole facts
+% and behaves exactly as it always has. Same "always a KNOWN predicate"
+% placeholder-clause fix as obstacle_polygon/2 above, for the SAME
+% reason (a problem whose own map has no holes at all -- the common
+% case -- would otherwise have ZERO obstacle_hole facts anywhere in
+% the loaded program).
+obstacle_hole(no_obstacle_holes_placeholder, []) :- fail.
+
 :- consult('./problem_data.pl').
 % Must exist relative to wherever this file itself lives (module/theory/),
 % not CWD -- same resolution rule every consult/use_module directive in

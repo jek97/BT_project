@@ -2,6 +2,11 @@
 % Source map: /home/user/BT_project/problems/problem2/map.yaml
 % obstacle_polygon(Id, [point(X,Y), ...]) -- vertices in metres,
 % map frame, consistent with the source OccupancyGrid's origin.
+% obstacle_hole(Id, [point(X,Y), ...]) -- zero or more per Id, a
+% HOLLOW interior boundary within that SAME obstacle (e.g. a
+% perimeter fence's own inner face) -- see basic_action_theory.pl's
+% own obstacle_hole/2 note for how consumers combine an obstacle's
+% outer+hole rings back into one containment/clearance test.
 % Pre-inflated by 0.3000m (robot_radius+safety_buffer,
 % this problem's own config.yaml -- see basic_action_theory.pl's
 % own safety_margin/1 note): every polygon below is the ROBOT'S

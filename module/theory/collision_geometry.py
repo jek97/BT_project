@@ -193,7 +193,10 @@ def _strip_prolog_comments(text):
 def _parse_obstacle_polygons(text):
     """Returns [(id, [(x,y),...]), ...] -- id is kept (not just the
     point list) so a crossing can be reported AGAINST a specific
-    obstacle, not just "some obstacle" -- see _min_clearance_all."""
+    obstacle, not just "some obstacle" -- see _min_clearance_all. Each
+    point list here is the obstacle's own OUTER boundary only -- see
+    _parse_obstacle_holes below and OBSTACLE_POLYGONS' own note for
+    how a hole (if any) gets folded back in."""
     polys = []
     for m in re.finditer(r"obstacle_polygon\(([^,]+),\s*\[(.*?)\]\s*\)\s*\.", text, re.S):
         obstacle_id = m.group(1).strip()
@@ -201,6 +204,24 @@ def _parse_obstacle_polygons(text):
         if len(pts) >= 3:
             polys.append((obstacle_id, pts))
     return polys
+
+
+def _parse_obstacle_holes(text):
+    """Returns {id: [hole_points, ...]} -- SAME regex shape as
+    _parse_obstacle_polygons above, just matching obstacle_hole/2
+    instead of obstacle_polygon/2 (see occgrid_to_problog.py's own
+    note on why this is a SEPARATE, additive fact rather than folded
+    into obstacle_polygon/2's own point list). Grouped by Id since one
+    obstacle could in principle have more than one hole, even though
+    every map this project has seen so far has at most one (a single
+    perimeter fence ring)."""
+    holes = {}
+    for m in re.finditer(r"obstacle_hole\(([^,]+),\s*\[(.*?)\]\s*\)\s*\.", text, re.S):
+        obstacle_id = m.group(1).strip()
+        pts = [(float(x), float(y)) for x, y in POINT_RE.findall(m.group(2))]
+        if len(pts) >= 3:
+            holes.setdefault(obstacle_id, []).append(pts)
+    return holes
 
 
 _config = load_config(config_path=os.path.join(_PROBLEM_DIR, "config.yaml"))
@@ -211,7 +232,19 @@ SIGMA_TANGENTIAL = float(_config["position"]["tangential"]["sigma"])
 
 try:
     with open(_OBSTACLES_PATH) as f:
-        OBSTACLE_POLYGONS = _parse_obstacle_polygons(_strip_prolog_comments(f.read()))
+        _obstacles_text = _strip_prolog_comments(f.read())
+    # OBSTACLE_POLYGONS is now [(id, rings), ...], rings = [outer_points,
+    # hole1_points, ...] -- rings[0] is ALWAYS the outer boundary (the
+    # ORDER every consumer below, and follow_boarder in planners.py,
+    # relies on), rings[1:] are that same obstacle's own holes (empty
+    # for the common, hole-less case). See _inside_polygon/_dist_to_
+    # polygon below for why combining an obstacle's own rings into ONE
+    # containment/clearance test (rather than testing each ring on its
+    # own) is what makes a hole's own free interior read as free space
+    # instead of "inside the obstacle".
+    _holes_by_id = _parse_obstacle_holes(_obstacles_text)
+    OBSTACLE_POLYGONS = [(obstacle_id, [outer_points] + _holes_by_id.get(obstacle_id, []))
+                          for obstacle_id, outer_points in _parse_obstacle_polygons(_obstacles_text)]
 except FileNotFoundError:
     # Only reachable if this module is imported standalone (e.g. for
     # testing) before any map has been generated -- basic_action_theory.pl
@@ -324,13 +357,34 @@ def _point_segment_dist(px, py, ax, ay, bx, by):
 
 
 def _polygon_edges(points):
+    """ONE ring's own closed edge list -- the PRIMITIVE every function
+    below builds on. Still takes a single flat point list, unchanged;
+    see _all_edges below for how an obstacle's own MULTIPLE rings
+    (outer + holes) combine."""
     closed = list(points) + [points[0]]
     return list(zip(closed[:-1], closed[1:]))
 
 
-def _dist_to_polygon(px, py, points):
+def _all_edges(rings):
+    """rings: [outer_points, hole1_points, ...] -- ONE obstacle's own
+    full set of boundaries (see OBSTACLE_POLYGONS' own note above).
+    Returns every ring's own edges, concatenated -- each ring is
+    closed INDEPENDENTLY (via _polygon_edges), never bridged into the
+    next one, so a combined edge-crossing count over this list is
+    exactly the standard even-odd rule for "inside the outer boundary
+    AND outside every hole" (see _inside_polygon's own note for the
+    full argument) -- NOT "inside the outer polygon" (which would
+    wrongly treat a hole's own free interior as solid)."""
+    return [edge for ring in rings for edge in _polygon_edges(ring)]
+
+
+def _dist_to_polygon(px, py, rings):
+    """Nearest-edge distance to an obstacle's own FULL boundary --
+    outer ring AND every hole ring, since the obstacle's actual solid
+    material is bounded by BOTH (a hole's own inner face is just as
+    real a boundary to be close to as the outer face)."""
     return min(_point_segment_dist(px, py, ax, ay, bx, by)
-               for (ax, ay), (bx, by) in _polygon_edges(points))
+               for (ax, ay), (bx, by) in _all_edges(rings))
 
 
 def _edge_crosses(px, py, ax, ay, bx, by):
@@ -340,29 +394,47 @@ def _edge_crosses(px, py, ax, ay, bx, by):
     return False
 
 
-def _inside_polygon(px, py, points):
-    count = sum(1 for (ax, ay), (bx, by) in _polygon_edges(points)
+def _inside_polygon(px, py, rings):
+    """TRUE iff (px,py) is inside the obstacle's own SOLID material --
+    inside the outer ring AND outside every hole ring. Implemented as
+    ONE combined even-odd parity count across ALL of the obstacle's
+    own rings' edges (_all_edges), rather than testing each ring's own
+    containment separately and combining with a boolean formula --
+    the two are mathematically equivalent (a standard result for
+    non-overlapping, properly-nested holes: a ray crossing both the
+    outer boundary and a hole boundary once each nets an EVEN total,
+    correctly reporting "not inside the solid material" for a point in
+    the hole's own free interior; crossing only the outer boundary
+    nets ODD, correctly "inside"; crossing neither nets EVEN,
+    correctly "outside" the whole obstacle) -- verified directly
+    before adopting this (a 3-point scratch case: outside the ring,
+    inside its solid material, inside its hollow interior) against a
+    real ring+hole obstacle. For an ordinary, hole-less obstacle
+    (rings has length 1), this is EXACTLY the original single-ring
+    even-odd test -- no behaviour change there at all."""
+    count = sum(1 for (ax, ay), (bx, by) in _all_edges(rings)
                 if _edge_crosses(px, py, ax, ay, bx, by))
     return count % 2 == 1
 
 
-def _signed_clearance(px, py, points):
-    d_edge = _dist_to_polygon(px, py, points)
-    return -d_edge if _inside_polygon(px, py, points) else d_edge
+def _signed_clearance(px, py, rings):
+    d_edge = _dist_to_polygon(px, py, rings)
+    return -d_edge if _inside_polygon(px, py, rings) else d_edge
 
 
 def _min_clearance_all(px, py, obstacle_polygons):
-    """obstacle_polygons: [(id, points), ...]. Returns (min_distance,
-    nearest_obstacle_id) -- an ARGMIN over obstacles, not just the min
-    distance, so callers can report WHICH obstacle a crossing is
-    against, not just that one exists. nearest_obstacle_id is None only
-    when there are no obstacles at all (min_distance is then the
-    original "so far away it never matters" sentinel, unreachable by
-    any real threshold)."""
+    """obstacle_polygons: [(id, rings), ...] (rings = [outer_points,
+    hole1_points, ...], see OBSTACLE_POLYGONS' own note). Returns
+    (min_distance, nearest_obstacle_id) -- an ARGMIN over obstacles,
+    not just the min distance, so callers can report WHICH obstacle a
+    crossing is against, not just that one exists. nearest_obstacle_id
+    is None only when there are no obstacles at all (min_distance is
+    then the original "so far away it never matters" sentinel,
+    unreachable by any real threshold)."""
     if not obstacle_polygons:
         return 1000000.0, None
-    return min((_signed_clearance(px, py, poly), obstacle_id)
-               for obstacle_id, poly in obstacle_polygons)
+    return min((_signed_clearance(px, py, rings), obstacle_id)
+               for obstacle_id, rings in obstacle_polygons)
 
 
 def _within_obstacle_threshold(px, py, threshold, obstacle_polygons):
@@ -443,8 +515,8 @@ def _trajectory_obstacle_ids(control_points, t0, duration, z, zt, obstacle_polyg
         frac = i / n
         t = t0 + duration*frac
         x, y = _walk_noisy_point(control_points, t0, duration, z, zt, t)
-        for obstacle_id, poly in obstacle_polygons:
-            if _inside_polygon(x, y, poly):
+        for obstacle_id, rings in obstacle_polygons:
+            if _inside_polygon(x, y, rings):
                 hit_ids.add(obstacle_id)
     return hit_ids
 
@@ -455,7 +527,7 @@ def _path_obstacle_polygons(control_points, t0, duration, z, zt, obstacle_polygo
     crossing_time/_within_obstacle_threshold are then called with,
     unchanged, everywhere below."""
     path_ids = _trajectory_obstacle_ids(control_points, t0, duration, z, zt, obstacle_polygons)
-    return [(oid, poly) for oid, poly in obstacle_polygons if oid in path_ids]
+    return [(oid, rings) for oid, rings in obstacle_polygons if oid in path_ids]
 
 
 def _first_on_path_crossing_time(control_points, t0, duration, z, zt, threshold, obstacle_polygons):
@@ -538,18 +610,25 @@ def _segments_intersect(p1, p2, p3, p4):
 
 
 def _find_polygon(obstacle_id, obstacle_polygons):
-    for oid, poly in obstacle_polygons:
+    """Returns that obstacle's own rings ([outer_points, hole1_points,
+    ...], see OBSTACLE_POLYGONS' own note), or None if obstacle_id
+    names no known obstacle."""
+    for oid, rings in obstacle_polygons:
         if oid == obstacle_id:
-            return poly
+            return rings
     return None
 
 
-def _segment_crosses_polygon(px, py, gx, gy, polygon):
+def _segment_crosses_polygon(px, py, gx, gy, rings):
     """True iff the straight segment from (px,py) to (gx,gy) crosses
-    `polygon`'s own boundary -- i.e. the obstacle still occludes a
-    direct line of sight to (gx,gy) from here."""
+    ANY of the obstacle's own boundaries (outer OR a hole) -- i.e. the
+    obstacle's own solid material still occludes a direct line of
+    sight to (gx,gy) from here. Uses _all_edges rather than a single
+    ring's own _polygon_edges so a ring-shaped obstacle's own hole
+    boundary occludes line of sight exactly as its outer boundary
+    already did -- both are real material edges to be blocked by."""
     return any(_segments_intersect((px, py), (gx, gy), a, b)
-               for a, b in _polygon_edges(polygon))
+               for a, b in _all_edges(rings))
 
 
 def _first_clear_sample(control_points, t0, duration, z, zt, polygon, gx, gy, n):

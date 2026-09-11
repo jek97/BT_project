@@ -17,11 +17,16 @@ Pipeline:
      to use for its own, now-removed, SEPARATE A*-planning inflation)
      -- see inflate_mask below.
   4. find each connected occupied region (of the INFLATED mask) and
-     extract its boundary as a polygon (cv2.findContours +
-     cv2.approxPolyDP for simplification)
+     extract its own OUTER boundary as a polygon, PLUS the boundary of
+     any HOLE within it -- a hollow, walkable interior, e.g. a
+     perimeter fence's own inner face (cv2.findContours(RETR_CCOMP,...)
+     + cv2.approxPolyDP for simplification -- see extract_polygons's
+     own note for why RETR_CCOMP specifically)
   5. convert every vertex from pixel coordinates to metric map-frame
      coordinates using the resolution/origin from the yaml
-  6. write ONE obstacle_polygon(Id, [point(X,Y),...]) fact per region
+  6. write ONE obstacle_polygon(Id, [point(X,Y),...]) fact per region,
+     PLUS one obstacle_hole(Id, [point(X,Y),...]) fact per hole within
+     it (zero for an ordinary, hole-less obstacle -- the common case)
 
 This is a deterministic, OFFLINE preprocessing step -- it has nothing to
 do with ProbLog's probabilistic machinery and does not affect
@@ -52,6 +57,20 @@ inflation policy:
     argument before applying it as an additional per-edge push -- see
     planners.py's own _follow_boarder_control_points note for the
     "already-inflated boundary + (Offset-safety_margin)" arithmetic.
+    Currently only ever traces an obstacle's own OUTER boundary, never
+    a hole's own inner face -- see planners.py's own follow_boarder
+    note for why, and how it picks which ring (outer, or a specific
+    hole) to trace when an obstacle has more than one.
+
+obstacle_hole(Id, Points) is the ADDITIVE counterpart to obstacle_
+polygon(Id, Points) -- zero or more per Id, each one a hollow interior
+boundary WITHIN that same obstacle. Every consumer above combines an
+obstacle's own outer+hole rings into ONE containment/clearance test
+(see collision_geometry.py's own note near _inside_polygon for the
+exact mechanism) rather than testing each ring independently, which
+would incorrectly treat a hole's own free interior as solid. An
+ordinary, hole-less obstacle (a tree, a building) emits ZERO obstacle_
+hole facts and behaves exactly as before this existed.
 
 generate(yaml_path, output_path, epsilon_m, min_area_m2, clearance_m)
 is the importable core (steps 1-6 above); main.py calls it directly,
@@ -175,26 +194,66 @@ def pixel_to_map(row, col, height, resolution, origin):
 
 
 def extract_polygons(mask, resolution, origin, epsilon_m, min_area_m2):
+    """Returns [(outer_points, [hole_points, ...]), ...] -- one entry
+    per TOP-LEVEL connected obstacle region, each carrying its own
+    zero-or-more HOLE boundaries (a hollow, walkable interior -- e.g.
+    a perimeter fence's own inner face) as SEPARATE rings, rather than
+    folding them into the outer boundary's own point list (which would
+    make a naive point-in-polygon test treat the hollow interior as
+    solid). See basic_action_theory.pl's own obstacle_hole/2 note for
+    the full rationale and how consumers (collision_geometry.py,
+    planners.py) combine outer+hole rings back into one containment
+    test.
+
+    cv2.RETR_CCOMP retrieves contours in exactly a TWO-level hierarchy
+    -- top level: external boundaries of each connected component;
+    second level: boundaries of HOLES within them -- which matches
+    this geometry precisely: a hole's own interior can itself contain
+    a genuinely separate object (e.g. a tree standing inside a fenced
+    yard), but that object's own boundary is STILL reported at the TOP
+    level (its own, unrelated connected component), never nested a
+    third level deep, so an ordinary hole-less obstacle is completely
+    unaffected by any of this -- RETR_EXTERNAL (the previous choice)
+    only ever saw the top level, silently discarding hole information
+    entirely.
+    """
     height = mask.shape[0]
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    if hierarchy is None:
+        return []
+    hierarchy = hierarchy[0]  # cv2 wraps the (N,4) array in an extra outer axis
+
+    epsilon_px = max(epsilon_m / resolution, 0.5)
+
+    def to_map_points(cnt):
+        approx = cv2.approxPolyDP(cnt, epsilon_px, closed=True)
+        return [pixel_to_map(int(p[1]), int(p[0]), height, resolution, origin)
+                for p in approx.reshape(-1, 2)]
 
     polygons = []
-    for cnt in contours:
+    for i, cnt in enumerate(contours):
+        _next, _prev, first_child, parent = hierarchy[i]
+        if parent != -1:
+            continue  # a hole -- collected below, under its own parent's entry
+
         area_m2 = cv2.contourArea(cnt) * (resolution ** 2)
         if area_m2 < min_area_m2:
             continue  # discard single-pixel / sensor-noise specks
+        outer_pts = to_map_points(cnt)
+        if len(outer_pts) < 3:
+            continue
 
-        epsilon_px = max(epsilon_m / resolution, 0.5)
-        approx = cv2.approxPolyDP(cnt, epsilon_px, closed=True)
+        holes = []
+        child = first_child
+        while child != -1:
+            hole_area_m2 = cv2.contourArea(contours[child]) * (resolution ** 2)
+            if hole_area_m2 >= min_area_m2:
+                hole_pts = to_map_points(contours[child])
+                if len(hole_pts) >= 3:
+                    holes.append(hole_pts)
+            child = hierarchy[child][0]  # next sibling hole, same level
 
-        pts = []
-        for p in approx.reshape(-1, 2):
-            col, row = int(p[0]), int(p[1])
-            x, y = pixel_to_map(row, col, height, resolution, origin)
-            pts.append((x, y))
-
-        if len(pts) >= 3:
-            polygons.append(pts)
+        polygons.append((outer_pts, holes))
 
     return polygons
 
@@ -231,12 +290,20 @@ def generate(yaml_path, output_path, epsilon_m=0.05, min_area_m2=0.02, clearance
 
 
 def write_problog_facts(polygons, out_path, source_yaml, clearance_m=0.0):
+    """polygons: [(outer_points, [hole_points, ...]), ...] -- see
+    extract_polygons's own note."""
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    num_holes = sum(len(holes) for _outer, holes in polygons)
     with open(out_path, "w") as f:
         f.write("% AUTO-GENERATED by occgrid_to_problog.py -- do not hand-edit.\n")
         f.write(f"% Source map: {source_yaml}\n")
         f.write("% obstacle_polygon(Id, [point(X,Y), ...]) -- vertices in metres,\n")
         f.write("% map frame, consistent with the source OccupancyGrid's origin.\n")
+        f.write("% obstacle_hole(Id, [point(X,Y), ...]) -- zero or more per Id, a\n")
+        f.write("% HOLLOW interior boundary within that SAME obstacle (e.g. a\n")
+        f.write("% perimeter fence's own inner face) -- see basic_action_theory.pl's\n")
+        f.write("% own obstacle_hole/2 note for how consumers combine an obstacle's\n")
+        f.write("% outer+hole rings back into one containment/clearance test.\n")
         if clearance_m > 0:
             f.write(f"% Pre-inflated by {clearance_m:.4f}m (robot_radius+safety_buffer,\n")
             f.write("% this problem's own config.yaml -- see basic_action_theory.pl's\n")
@@ -252,11 +319,16 @@ def write_problog_facts(polygons, out_path, source_yaml, clearance_m=0.0):
         else:
             f.write("% NOT inflated (clearance_m=0) -- these are the map's raw occupied\n")
             f.write("% cells, with no robot safety clearance baked in.\n")
-        f.write(f"% {len(polygons)} obstacle region(s) extracted.\n\n")
-        for i, poly in enumerate(polygons, start=1):
-            pts_str = ", ".join(f"point({x:.4f},{y:.4f})" for x, y in poly)
-            f.write(f"obstacle_polygon(obs{i}, [{pts_str}]).\n")
-    print(f"Wrote {len(polygons)} obstacle polygon(s) to {out_path}")
+        hole_suffix = f", {num_holes} with a hollow interior" if num_holes else ""
+        f.write(f"% {len(polygons)} obstacle region(s) extracted{hole_suffix}.\n\n")
+        for i, (outer_pts, holes) in enumerate(polygons, start=1):
+            obs_id = f"obs{i}"
+            pts_str = ", ".join(f"point({x:.4f},{y:.4f})" for x, y in outer_pts)
+            f.write(f"obstacle_polygon({obs_id}, [{pts_str}]).\n")
+            for hole_pts in holes:
+                hole_str = ", ".join(f"point({x:.4f},{y:.4f})" for x, y in hole_pts)
+                f.write(f"obstacle_hole({obs_id}, [{hole_str}]).\n")
+    print(f"Wrote {len(polygons)} obstacle polygon(s){hole_suffix} to {out_path}")
 
 
 def main():

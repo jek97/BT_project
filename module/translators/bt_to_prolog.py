@@ -22,10 +22,31 @@ bounded-retry decorators, which are unrolled at translation time into a
 plain fallback_node/seq_node of n literal copies of their one child --
 see _RETRY_DECORATORS's own note for why that's a sound semantic match,
 not an approximation, and why n must be a literal integer, never a
-blackboard reference), and translates it into the nested do_node/4 term text
-basic_action_theory.pl's plan/1 expects, plus one reactive_children/2
-fact per ReactiveSequence/ReactiveFallback (see generate_plan_pl's own
-note on why those live separately).
+blackboard reference; and SubTree(ID="...", port1="...", ...), real
+BT.cpp v4 tree composition WITH full port remapping -- see
+_translate_node's own "SubTree" branch and _apply_subtree_remap's own
+note for the full mechanism. A tree file's own <root> may also contain
+<include path="other_file.xml"/> elements (siblings of its
+<BehaviorTree> definitions, exactly like real BT.cpp) naming any OTHER
+tree file in the SAME DIRECTORY whose own <BehaviorTree ID="..."> then
+become instantiable via <SubTree> too -- see _collect_tree_registry's
+own note for why "same directory, bare filename only" rather than
+BT.cpp's fuller relative-path/ros_pkg resolution. Every <SubTree> is
+expanded STATICALLY, at translation time (a deep-copied, port-
+substituted clone of the referenced tree's body is spliced in exactly
+where the <SubTree> sits, then translated normally) -- there is no
+runtime notion of a subtree instance in the generated Prolog at all,
+same "unroll away, no new do_node wrapper" treatment RetryUntilSuccessful/
+Repeat already get, and for the identical reason (see that decorator's
+own note): nothing about this project's do_node/poss encoding attaches
+state to a node's IDENTITY, so a statically-expanded copy and a
+hand-pasted one are indistinguishable Prolog terms. Direct or indirect
+self-inclusion (a SubTree that would need to expand itself, forever) is
+a hard translation error, not a runtime concern, since expansion
+happens once, up front, not lazily per tick, and translates it into the
+nested do_node/4 term text basic_action_theory.pl's plan/1 expects,
+plus one reactive_children/2 fact per ReactiveSequence/ReactiveFallback
+(see generate_plan_pl's own note on why those live separately).
 
 WHERE THE RESULT GOES: generate_plan_pl() writes the problem's own
 plan_generated.pl, a single plan/1 FACT (not a clause with a body --
@@ -135,6 +156,7 @@ tunable value, so there is nothing sensible to warn-and-continue with
 (same reasoning as module/translators/config_to_prolog.py's own hard
 requirements, as opposed to its two non-fatal numeric warnings).
 """
+import copy
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -426,6 +448,45 @@ def _blackboard_key(value):
     return _BLACKBOARD_RE.match(value).group(1)
 
 
+def _apply_subtree_remap(root_elem, remap, suffix):
+    """Rewrites every "{key}" attribute value throughout root_elem's own
+    subtree (root_elem itself plus every descendant) IN PLACE, giving one
+    <SubTree ID="..." port1="..." port2="..."/> call site full BT.cpp-
+    style port remapping -- see _translate_node's own "SubTree" branch,
+    the only caller.
+
+    remap is {internal_port_name: raw_caller_text}, built straight from
+    that ONE <SubTree> element's own attributes (minus ID/name) -- for
+    an element inside the cloned body whose attribute value is exactly
+    "{key}" and key IS in remap, the value becomes remap[key] VERBATIM
+    (itself either another "{parent_key}" blackboard reference or a
+    literal) -- exactly BT.cpp's own "the subtree's internal blackboard
+    key IS the parent's key, right here" semantics, composing correctly
+    through nested SubTrees for free (this substitution happens, then
+    normal recursive translation continues into the result, so a
+    doubly-nested SubTree's own remap sees whatever text THIS
+    substitution already wrote).
+
+    A "{key}" NOT in remap is instead PRIVATE/LOCAL to this one subtree
+    INSTANCE (BT.cpp's own default for an un-remapped port) -- renamed
+    to a fresh, call-site-unique "{key__sub7}" (suffix from var_pool's
+    own next_subtree_suffix()) so two instantiations of the SAME
+    subtree (or an unrelated tree that happens to reuse a common local
+    key name, e.g. "cp") never collide into ONE shared Prolog variable
+    -- see the module docstring's own warning against reusing one CP
+    across two independent PlanWith calls; identical reasoning, just
+    across subtree instances rather than fallback_node branches."""
+    for elem in root_elem.iter():
+        for attr_name, value in list(elem.attrib.items()):
+            if not _is_blackboard_ref(value):
+                continue
+            key = _blackboard_key(value)
+            if key in remap:
+                elem.attrib[attr_name] = remap[key]
+            else:
+                elem.attrib[attr_name] = f"{{{key}__{suffix}}}"
+
+
 class _VarPool:
     """Maps each distinct blackboard key to ONE Prolog variable name,
     reused every time that key is seen again -- see the module
@@ -462,6 +523,26 @@ class _VarPool:
         self.condition_labels = {}   # condition_code -> human-readable "what/where" label,
                                       # e.g. "DistanceBelow(2.275,2.075,0.3) [GoHome]" --
                                       # see next_condition_code()'s own note.
+        self.tree_defs = {}    # <SubTree ID="..."> lookup: id -> <BehaviorTree> element,
+                                # populated ONCE by translate_tree (via _collect_tree_
+                                # registry) before the root node is ever translated --
+                                # see that function's own note.
+        self.expanding = []    # stack of <BehaviorTree> IDs currently being expanded,
+                                # innermost last -- SubTree's own cycle-detection guard
+                                # (a SubTree including itself, directly or through a
+                                # chain of others, would otherwise unroll forever, since
+                                # expansion happens statically at translation time, not
+                                # lazily at runtime the way real BT.cpp's own SubTree does).
+        self._subtree_counter = 0
+
+    def next_subtree_suffix(self):
+        """A fresh, unique suffix for renaming one <SubTree> call site's
+        own UNREMAPPED (private/local) blackboard keys -- see
+        _apply_subtree_remap's own note for why this is needed at all.
+        Same per-occurrence-counter idiom as next_reactive_code()/
+        next_action_code() above, just for SubTree instantiations."""
+        self._subtree_counter += 1
+        return f"sub{self._subtree_counter}"
 
     def var_for(self, key):
         if key not in self._map:
@@ -1346,6 +1427,70 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
                                       reactive_code, guard_stack, branch_name)
         return f"inverter({child_term})"
 
+    if tag == "SubTree":
+        # Real BT.cpp v4 tree composition -- <SubTree ID="Foo" port1=
+        # "..." port2="..."/> instantiates the <BehaviorTree ID="Foo">
+        # registered by _collect_tree_registry (this file or its own,
+        # or any <include>d file's own) and splices its body in HERE,
+        # with FULL port remapping (see _apply_subtree_remap's own
+        # note): every attribute on THIS element (other than ID/name)
+        # is a remap "internal_port_name=caller_value" pair. Expanded
+        # INLINE, exactly where this <SubTree> sits -- like
+        # RetryUntilSuccessful/Repeat's own unrolling (_RETRY_DECORATORS'
+        # own note), this is a sound 1:1 semantic match, not an
+        # approximation: nothing about this project's own do_node/poss
+        # encoding attaches state to a node's IDENTITY, every leaf still
+        # gets its own fresh action_code/condition_code regardless of
+        # whether it was written inline or pulled in via a SubTree, and
+        # port remapping already gives this instance its own
+        # independent blackboard keys -- so the resulting Prolog term
+        # is IDENTICAL to hand-pasting the subtree's own body here with
+        # the substitutions already applied. reactive_code/guard_stack
+        # pass through UNCHANGED -- a SubTree call is not itself a new
+        # reactive scope (same as plain Sequence/Fallback); anything
+        # reactive INSIDE its own body is handled normally, the instant
+        # _translate_node redescends into the substituted clone.
+        subtree_id = elem.attrib.get("ID")
+        if not subtree_id:
+            raise BTValidationError(
+                "<SubTree> requires an 'ID' attribute naming which "
+                "<BehaviorTree ID=\"...\"> to instantiate.")
+        if "_autoremap" in elem.attrib:
+            raise BTValidationError(
+                "<SubTree>'s BT.cpp '_autoremap' attribute is not "
+                "supported by this translator -- every port this "
+                "instance needs must be remapped EXPLICITLY, as its "
+                "own attribute=\"...\" on this <SubTree> element (same "
+                "'explicit port, never implicit' convention this "
+                "project already uses elsewhere, e.g. DeployTool/"
+                "RetractTool's own tool= port).")
+        if subtree_id not in var_pool.tree_defs:
+            raise BTValidationError(
+                f"<SubTree ID=\"{subtree_id}\"> references an unknown "
+                f"tree -- no <BehaviorTree ID=\"{subtree_id}\"> found "
+                f"in this file or any <include>d file.")
+        if subtree_id in var_pool.expanding:
+            raise BTValidationError(
+                f"<SubTree ID=\"{subtree_id}\"> recursion detected "
+                f"({' -> '.join(var_pool.expanding + [subtree_id])}) "
+                f"-- a SubTree can never (directly or indirectly) "
+                f"include itself; every SubTree is expanded "
+                f"STATICALLY, at translation time (see this branch's "
+                f"own note), so a cycle here would unroll forever.")
+        remap = {k: v for k, v in elem.attrib.items() if k not in ("ID", "name")}
+        body = _single_child(
+            var_pool.tree_defs[subtree_id],
+            f"<BehaviorTree ID=\"{subtree_id}\"> (referenced by this <SubTree>)")
+        clone = copy.deepcopy(body)
+        _apply_subtree_remap(clone, remap, var_pool.next_subtree_suffix())
+        own_branch_name = elem.attrib.get("name", branch_name)
+        var_pool.expanding.append(subtree_id)
+        try:
+            return _translate_node(clone, schema_ports, var_pool, battery_enabled,
+                                    reactive_code, guard_stack, own_branch_name)
+        finally:
+            var_pool.expanding.pop()
+
     if tag in _RETRY_DECORATORS:
         info = _RETRY_DECORATORS[tag]
         count_attr = info["count_attr"]
@@ -1486,6 +1631,20 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
     return _translate_leaf(tag, elem, None, schema_ports[tag], var_pool, battery_enabled, reactive_code, guard_stack, branch_name)
 
 
+def _single_child(bt_elem, label):
+    """A <BehaviorTree>'s own single root child node -- shared by
+    _find_tree_root (the MAIN tree's own entry point) and the SubTree
+    branch of _translate_node (a called tree's own body); both need the
+    exact same "exactly one child" validation. label is the already-
+    formatted "<BehaviorTree ID=...>" text to name in the error."""
+    children = list(bt_elem)
+    if len(children) != 1:
+        raise BTValidationError(
+            f"{label} must have EXACTLY ONE root child node (found "
+            f"{len(children)}).")
+    return children[0]
+
+
 def _find_tree_root(xml_root):
     bt_elems = xml_root.findall("BehaviorTree")
     if not bt_elems:
@@ -1507,12 +1666,77 @@ def _find_tree_root(xml_root):
                 "Multiple <BehaviorTree> elements but no "
                 "main_tree_to_execute attribute on <root> to disambiguate.")
         chosen = bt_elems[0]
-    children = list(chosen)
-    if len(children) != 1:
-        raise BTValidationError(
-            f"<BehaviorTree ID=\"{chosen.attrib.get('ID')}\"> must have "
-            f"EXACTLY ONE root child node (found {len(children)}).")
-    return children[0]
+    return _single_child(chosen, f"<BehaviorTree ID=\"{chosen.attrib.get('ID')}\">")
+
+
+def _collect_tree_registry(xml_root, file_dir, visited_files, registry, source_label):
+    """Populates registry ({tree_id: <BehaviorTree> element}) with
+    every ID'd <BehaviorTree> found in xml_root PLUS every <include
+    path="..."/> it references (real BT.cpp v4 tree-composition syntax
+    -- <include> elements sit alongside <BehaviorTree> ones, direct
+    children of <root>), recursing into each included file the SAME
+    way, so a chain of includes (A includes B, B includes C) all merge
+    into ONE flat registry <SubTree ID="..."> can look up regardless of
+    which file actually defines it.
+
+    path must be a BARE FILENAME -- no '/', no '..' -- resolved in the
+    SAME DIRECTORY as the file it appears in (file_dir): this project
+    keeps every subtree file alongside its own problem's main behavior_
+    tree.xml, per this feature's own request, rather than supporting
+    BT.cpp's fuller (relative-path/ros_pkg-based) include resolution.
+
+    visited_files (a set of os.path.realpath'd absolute paths, seeded
+    by translate_tree with the MAIN file's own path before the first
+    call) makes re-<include>ing an already-processed file a silent
+    no-op (a legitimate diamond -- A includes B and C, both include D)
+    rather than infinite recursion or a duplicate-ID error; a genuine
+    duplicate <BehaviorTree ID="..."> across two DIFFERENT files is
+    still a hard error, same as within one file.
+
+    A <BehaviorTree> with NO ID at all is simply not added to the
+    registry (not an error here) -- <SubTree> can only ever reference
+    an ID'd tree, and _find_tree_root already separately allows a
+    single ID-less <BehaviorTree> as an unambiguous entry point when
+    main_tree_to_execute is omitted."""
+    for bt in xml_root.findall("BehaviorTree"):
+        tree_id = bt.attrib.get("ID")
+        if not tree_id:
+            continue
+        if tree_id in registry:
+            raise BTValidationError(
+                f"Duplicate <BehaviorTree ID=\"{tree_id}\"> -- already "
+                f"defined elsewhere (this file or an earlier <include>); "
+                f"every tree ID must be unique across the main file and "
+                f"all <include>d files.")
+        registry[tree_id] = bt
+    for inc in xml_root.findall("include"):
+        rel_path = inc.attrib.get("path")
+        if not rel_path:
+            raise BTValidationError(
+                f"<include> in {source_label} requires a 'path' attribute.")
+        if ("/" in rel_path or "\\" in rel_path or os.path.isabs(rel_path)
+                or ".." in rel_path.replace("\\", "/").split("/")):
+            raise BTValidationError(
+                f"<include path=\"{rel_path}\"> in {source_label} must be "
+                f"a bare filename in the SAME directory as {source_label} "
+                f"-- no path separators or '..' segments (this project "
+                f"keeps every subtree file alongside its own problem's "
+                f"main behavior_tree.xml).")
+        inc_path = os.path.join(file_dir, rel_path)
+        inc_path_real = os.path.realpath(inc_path)
+        if inc_path_real in visited_files:
+            continue
+        if not os.path.isfile(inc_path):
+            raise BTValidationError(
+                f"<include path=\"{rel_path}\"> in {source_label} -- no "
+                f"such file '{inc_path}'.")
+        visited_files.add(inc_path_real)
+        try:
+            inc_root = ET.parse(inc_path).getroot()
+        except ET.ParseError as e:
+            raise BTValidationError(f"Malformed XML in {inc_path}: {e}")
+        _collect_tree_registry(inc_root, os.path.dirname(inc_path), visited_files,
+                                registry, inc_path)
 
 
 def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
@@ -1553,6 +1777,20 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
 
     tree_root_elem = _find_tree_root(xml_root)
     var_pool = _VarPool()
+    # <SubTree ID="..."> lookup registry -- every ID'd <BehaviorTree> in
+    # THIS file plus every one reachable through an <include path="..."/>
+    # (recursively) -- see _collect_tree_registry's own note. Built
+    # ONCE, before translation starts, since a <SubTree> can reference a
+    # tree defined ANYWHERE in this set, not just ones already seen by
+    # the time _translate_node reaches it (real BT.cpp resolves every
+    # <SubTree> against the whole registered set, not just earlier
+    # siblings). visited_files is seeded with xml_path's own realpath so
+    # a (pathological) self-<include> is a silent no-op, not infinite
+    # recursion, the same "diamond include" tolerance applied to every
+    # other repeated <include> below.
+    visited_files = {os.path.realpath(xml_path)}
+    _collect_tree_registry(xml_root, os.path.dirname(os.path.abspath(xml_path)),
+                            visited_files, var_pool.tree_defs, xml_path)
     node_text = _translate_node(tree_root_elem, schema_ports, var_pool, battery_enabled, None, [])
 
     # A MoveTo whose control_points key has no PlanWith

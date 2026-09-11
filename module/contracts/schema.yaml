@@ -43,25 +43,45 @@
 # value -- this schema only describes port TYPES/directions, not a
 # serialization, so it stays agnostic of that choice).
 #
-# TWO ports -- triggers (input, on MoveTo/InstallTool/UninstallTool/
-# DeployTool/RetractTool) and reason (output, on nearly every action)
-# -- stay declared here because module/translators/bt_to_prolog.py
-# genuinely needs them: triggers is a real XML attribute it parses
-# (extra halting conditions, reactive-guard derivation -- see that
-# file's own module docstring); reason is where the auto-generated
-# Prolog Reason term (tag_reason/3) conceptually lives, even though no
-# tree ever binds it to a literal attribute. NEITHER belongs in an
-# ACTUAL BT.cpp-facing <TreeNodesModel> a real C++ program would read,
-# though (a Groot-facing declaration, as opposed to this schema's own
-# translator-validation use) -- reason is a Prolog-Reason-atom
-# artifact status/control_points/value already make redundant for a
-# real node, and triggers is how THIS project's own reactive-interrupt
-# derivation gets threaded into a Prolog term, not a concept a real
-# C++ node needs (BT.cpp's own ReactiveSequence/ReactiveFallback/
-# Decorator nodes already cover that at the TREE-STRUCTURE level).
+# TWO things this schema deliberately treats differently, because they
+# matter to THIS project's own ProbLog translator but not to a real
+# BT.cpp program:
+#
+#   - triggers (input, on MoveTo/InstallTool/UninstallTool/DeployTool/
+#     RetractTool) IS still a real, declared port here, because
+#     module/translators/bt_to_prolog.py genuinely parses it as an XML
+#     attribute -- MOST triggers are auto-derived (collision/battery
+#     always added; a STRUCTURAL guard auto-derived from every
+#     ReactiveSequence/ReactiveFallback left-sibling Condition -- see
+#     "CONTROL-FLOW GUARD DERIVATION" in that file's own module
+#     docstring), but not ALL of them: a leg-INTRINSIC termination
+#     condition that isn't derivable from tree structure at all (e.g.
+#     a Bug-algorithm leg's own line_of_sight_clear/crosses_segment
+#     stopping rule -- see problem3's own behavior_tree.xml for a real,
+#     currently-shipping example: triggers="obstacle_on_path(0.6)")
+#     still has to be written by the tree author, with nowhere else to
+#     write it. Removing triggers from a schema entry's own ports:
+#     list would make bt_to_prolog.py's own _validate_ports reject
+#     that attribute outright, breaking every tree that needs one.
+#
+#   - reason (output, on nearly every action) is NOT a real declared
+#     port anywhere below -- confirmed nothing in bt_to_prolog.py ever
+#     reads attrs["reason"]/attrs.get("reason") for an ACTION (only
+#     HaltedWith's own, unrelated, INPUT "reason" port -- see its own
+#     entry further down -- is actually read), and no problem's own
+#     behavior_tree.xml has ever written reason="..." on one. It is
+#     PURELY where the auto-generated Prolog Reason term (tag_reason/3)
+#     conceptually lives, documented as a comment right where the port
+#     used to be (search for "NOT a real BT.cpp port" below) so the
+#     Reason vocabulary each action can produce stays discoverable --
+#     but genuinely removable with zero functional impact, which is
+#     exactly why it's a comment and not a ports: entry.
+#
 # Every problem's own hand-written <TreeNodesModel> (in its own
-# behavior_tree.xml) already omits both for exactly this reason -- a
-# mechanical generator built from this file later should too.
+# behavior_tree.xml) already omits reason entirely and never declared
+# triggers as anything other than a real input port either -- a
+# mechanical TreeNodesModel generator built from this file later
+# should do the same (skip every "reason" comment, keep triggers).
 # ============================================================
 
 schema_version: 1
@@ -162,26 +182,28 @@ actions:
           triggers="obstacle_in_bound(0.6);battery_below(20)", or the
           attribute omitted entirely if this leg needs nothing beyond
           the automatic collision/battery/structural-guard triggers.
-      - name: reason
-        direction: output
-        type: std::string
-        description: >
-          One of: completed, battery_depleted, crashed(ObstacleId),
-          obstacle_in_bound(Threshold,ObstacleId),
-          obstacle_on_path(Threshold,ObstacleId), battery_under(Threshold),
-          battery_equal(Threshold), battery_over(Threshold), or any
-          other entry from triggers that actually fired.
-          crashed/obstacle_in_bound/obstacle_on_path carry WHICH
-          obstacle_polygon/2 Id they fired against (an argmin over
-          obstacles at the exact crossing point, computed by
-          collision_geometry.py), not just that one fired. Every
-          battery_* Reason above also carries the Threshold that was
-          crossed (echoing the trigger's own argument). Reason functors
-          deliberately differ from their trigger names ONLY where a
-          distinct word was actually requested -- battery_below's
-          Reason is battery_under (mirroring collision/crashed's own
-          asymmetry), while battery_equal/battery_over keep the SAME
-          functor as their trigger name.
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: >
+      #     One of: completed, battery_depleted, crashed(ObstacleId),
+      #     obstacle_in_bound(Threshold,ObstacleId),
+      #     obstacle_on_path(Threshold,ObstacleId), battery_under(Threshold),
+      #     battery_equal(Threshold), battery_over(Threshold), or any
+      #     other entry from triggers that actually fired.
+      #     crashed/obstacle_in_bound/obstacle_on_path carry WHICH
+      #     obstacle_polygon/2 Id they fired against (an argmin over
+      #     obstacles at the exact crossing point, computed by
+      #     collision_geometry.py), not just that one fired. Every
+      #     battery_* Reason above also carries the Threshold that was
+      #     crossed (echoing the trigger's own argument). Reason functors
+      #     deliberately differ from their trigger names ONLY where a
+      #     distinct word was actually requested -- battery_below's
+      #     Reason is battery_under (mirroring collision/crashed's own
+      #     asymmetry), while battery_equal/battery_over keep the SAME
+      #     functor as their trigger name.
       - name: status
         direction: output
         type: bool
@@ -225,9 +247,10 @@ actions:
       Reason/Status simply report whether a path was found. Reason
       itself carries not just completed/no_path but ALSO which
       ActionCode this specific PlanWith occurrence is (mirroring
-      MoveTo's own ActionCode -- see MoveTo's own reason port above),
-      which algorithm ran, and which point it was working toward (see
-      the reason port below) -- so two PlanWith calls in the same tree
+      MoveTo's own ActionCode -- see MoveTo's own "reason" comment above
+      its own ports: list), which algorithm ran, and which point it was
+      working toward (see this entry's own "reason" comment below) --
+      so two PlanWith calls in the same tree
       failing with no_path are always distinguishable, the same way
       two MoveTo legs crashing are.
 
@@ -275,8 +298,8 @@ actions:
           absorbed into the planner's own first path segment. Since
           this algorithm has no real goal point, its own Reason
           reports `none` where astar/straight/voronoi would report
-          the point they were working toward (see the reason port
-          below).
+          the point they were working toward (see this entry's own
+          "reason" comment below its ports: list).
     ports:
       - name: algorithm
         direction: input
@@ -319,7 +342,7 @@ actions:
           algorithm is follow_boarder, and must be OMITTED otherwise.
           Written VERBATIM as Prolog text (a bare atom, e.g.
           obstacle_id="obs5"), same convention as HaltedWith's own
-          reason port below -- NOT quoted. Typically the SAME
+          reason INPUT port below -- NOT quoted. Typically the SAME
           ObstacleId a preceding trigger/condition reported (e.g.
           obstacle_on_path(Threshold,ObstacleId)'s second argument).
       - name: offset
@@ -344,20 +367,22 @@ actions:
           straight; a roadmap-routed or clockwise-loop path for
           voronoi/follow_boarder; etc., see each algorithm's own note
           above). Empty if reason=no_path(...).
-      - name: reason
-        direction: output
-        type: std::string
-        description: >
-          completed(Algorithm,Goal,ActionCode) or
-          no_path(Algorithm,Goal,ActionCode) -- Algorithm is this
-          node's own `algorithm` value (follow_boarder(ObstacleId,
-          Offset) as a compound term when algorithm=follow_boarder,
-          matching plan_call/8's own dispatch shape; a bare atom
-          otherwise), Goal is the point(GX,GY) this call was working
-          toward (the atom `none` for follow_boarder, which has none),
-          and ActionCode identifies WHICH PlanWith occurrence in the
-          tree this is (same per-occurrence code MoveTo's own reason
-          port already uses).
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: >
+      #     completed(Algorithm,Goal,ActionCode) or
+      #     no_path(Algorithm,Goal,ActionCode) -- Algorithm is this
+      #     node's own `algorithm` value (follow_boarder(ObstacleId,
+      #     Offset) as a compound term when algorithm=follow_boarder,
+      #     matching plan_call/8's own dispatch shape; a bare atom
+      #     otherwise), Goal is the point(GX,GY) this call was working
+      #     toward (the atom `none` for follow_boarder, which has none),
+      #     and ActionCode identifies WHICH PlanWith occurrence in the
+      #     tree this is (same per-occurrence code MoveTo's own reason
+      #     port already uses).
       - name: status
         direction: output
         type: bool
@@ -390,7 +415,8 @@ actions:
       and on success draws a further VALUE (0..10, sample.value.mean/
       sigma) recorded under this node's own id. Records the robot's
       own current position (at/4) at the instant of sampling as part
-      of its own Reason -- see the reason port below, and
+      of its own Reason -- see this entry's own "reason" comment below
+      its ports: list, and
       basic_action_theory.pl's own sample_success_at/3 for querying
       WHERE a successful sample landed.
     ports:
@@ -401,23 +427,26 @@ actions:
         description: >
           This occurrence's own name (e.g. "soil1"), chosen by the
           tree author -- NOT the auto-generated ActionCode every
-          action's own reason port already carries. A later
+          action's own Reason already carries (see each entry's own
+          "reason" comment). A later
           SampleValueBelow/SampleValueEqual/SampleValueOver condition
           node references this SAME id to check what value THIS
           specific sample came back with. Must be a valid Prolog atom
           (lowercase-start, letters/digits/underscores).
-      - name: reason
-        direction: output
-        type: std::string
-        description: >
-          sample_success(X,Y,V,SampleId,ActionCode) or sample_failure
-          (X,Y,SampleId,ActionCode) -- X,Y is the robot's own position
-          (metres, map frame) at the instant this action ran; V (only
-          present on success) is the drawn value, 0..10; SampleId is
-          this node's own id port, above; ActionCode identifies WHICH
-          TakeSample occurrence in the tree this is (same per-
-          occurrence code every other action's own reason port
-          already uses).
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: >
+      #     sample_success(X,Y,V,SampleId,ActionCode) or sample_failure
+      #     (X,Y,SampleId,ActionCode) -- X,Y is the robot's own position
+      #     (metres, map frame) at the instant this action ran; V (only
+      #     present on success) is the drawn value, 0..10; SampleId is
+      #     this node's own id port, above; ActionCode identifies WHICH
+      #     TakeSample occurrence in the tree this is (same per-
+      #     occurrence code every other action's own Reason already
+      #     uses).
       - name: status
         direction: output
         type: bool
@@ -495,16 +524,18 @@ actions:
           obstacle_on_path(...), line_of_sight_clear(...),
           crosses_segment(...)) is a HARD translation-time error here
           -- there is no path/geometry for it to check.
-      - name: reason
-        direction: output
-        type: std::string
-        description: >
-          install_tool_success(Tool,ActionCode)/install_tool_failure
-          (Tool,ActionCode) if the full Duration elapsed, or
-          battery_depleted/battery_under(Threshold)/battery_equal
-          (Threshold)/battery_over(Threshold) if a battery trigger
-          fired first (same Reason vocabulary MoveTo's own battery
-          triggers use).
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: >
+      #     install_tool_success(Tool,ActionCode)/install_tool_failure
+      #     (Tool,ActionCode) if the full Duration elapsed, or
+      #     battery_depleted/battery_under(Threshold)/battery_equal
+      #     (Threshold)/battery_over(Threshold) if a battery trigger
+      #     fired first (same Reason vocabulary MoveTo's own battery
+      #     triggers use).
       - name: status
         direction: output
         type: bool
@@ -537,13 +568,15 @@ actions:
         type: std::vector<std::string>
         required: false
         description: "Same battery-only restriction as InstallTool's own triggers port."
-      - name: reason
-        direction: output
-        type: std::string
-        description: >
-          uninstall_tool_success(Tool,ActionCode)/uninstall_tool_failure
-          (Tool,ActionCode), or a battery Reason -- same shape as
-          InstallTool's own reason port.
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: >
+      #     uninstall_tool_success(Tool,ActionCode)/uninstall_tool_failure
+      #     (Tool,ActionCode), or a battery Reason -- same shape as
+      #     InstallTool's own "reason" comment.
       - name: status
         direction: output
         type: bool
@@ -608,13 +641,15 @@ actions:
         type: std::vector<std::string>
         required: false
         description: "Same battery-only restriction as InstallTool's own triggers port."
-      - name: reason
-        direction: output
-        type: std::string
-        description: >
-          deploy_tool_success(Tool,ActionCode)/deploy_tool_failure
-          (Tool,ActionCode), or a battery Reason -- same shape as
-          InstallTool's own reason port.
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: >
+      #     deploy_tool_success(Tool,ActionCode)/deploy_tool_failure
+      #     (Tool,ActionCode), or a battery Reason -- same shape as
+      #     InstallTool's own "reason" comment.
       - name: status
         direction: output
         type: bool
@@ -643,13 +678,15 @@ actions:
         type: std::vector<std::string>
         required: false
         description: "Same battery-only restriction as InstallTool's own triggers port."
-      - name: reason
-        direction: output
-        type: std::string
-        description: >
-          retract_tool_success(Tool,ActionCode)/retract_tool_failure
-          (Tool,ActionCode), or a battery Reason -- same shape as
-          InstallTool's own reason port.
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: >
+      #     retract_tool_success(Tool,ActionCode)/retract_tool_failure
+      #     (Tool,ActionCode), or a battery Reason -- same shape as
+      #     InstallTool's own "reason" comment.
       - name: status
         direction: output
         type: bool
@@ -697,10 +734,12 @@ actions:
         direction: output
         type: Point
         description: "Bound to the tool's own current (X,Y) if found."
-      - name: reason
-        direction: output
-        type: std::string
-        description: "tool_position_found(Id) or tool_position_unavailable(Id)."
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: "tool_position_found(Id) or tool_position_unavailable(Id)."
       - name: status
         direction: output
         type: bool
@@ -722,10 +761,12 @@ actions:
         direction: output
         type: std::string
         description: "Bound to a Prolog list of tool(Id,point(X,Y)) terms, one per matching free instance."
-      - name: reason
-        direction: output
-        type: std::string
-        description: "tools_of_kind_found(Kind) or tools_of_kind_empty(Kind)."
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: "tools_of_kind_found(Kind) or tools_of_kind_empty(Kind)."
       - name: status
         direction: output
         type: bool
@@ -751,10 +792,12 @@ actions:
         direction: output
         type: Point
         description: "Bound to that instance's own current (X,Y)."
-      - name: reason
-        direction: output
-        type: std::string
-        description: "nearest_tool_found(Kind,Id) or no_tool_of_kind(Kind)."
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: "nearest_tool_found(Kind,Id) or no_tool_of_kind(Kind)."
       - name: status
         direction: output
         type: bool
@@ -779,10 +822,12 @@ actions:
         direction: output
         type: std::string
         description: "Bound to the currently-hitched instance's own id, if any."
-      - name: reason
-        direction: output
-        type: std::string
-        description: "hitched_id_found(Id) or hitched_id_unavailable."
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: "hitched_id_found(Id) or hitched_id_unavailable."
       - name: status
         direction: output
         type: bool
@@ -901,12 +946,14 @@ conditions:
           battery_depleted(ActionCode), crashed(ObstacleId,ActionCode),
           obstacle_in_bound(Threshold,ObstacleId,ActionCode),
           battery_under(Threshold,ActionCode), or any other Reason
-          from MoveTo's own reason port above (same notes on crashed/
-          obstacle_in_bound carrying WHICH obstacle, and obstacle_in_
-          bound/battery_under also carrying WHICH threshold, apply
-          here). From PlanWith: completed(Algorithm,Goal,ActionCode)
-          or no_path(Algorithm,Goal,ActionCode) -- see PlanWith's own
-          reason port above. Written exactly as valid Prolog text,
+          MoveTo's own do_node clause can produce (see MoveTo's own
+          "reason" comment above its ports: list -- same notes on
+          crashed/obstacle_in_bound carrying WHICH obstacle, and
+          obstacle_in_bound/battery_under also carrying WHICH
+          threshold, apply here). From PlanWith: completed(Algorithm,
+          Goal,ActionCode) or no_path(Algorithm,Goal,ActionCode) --
+          see PlanWith's own equivalent "reason" comment above its own
+          ports: list. Written exactly as valid Prolog text,
           e.g. reason="crashed(_,_)" to match ANY crash regardless of
           obstacle/ActionCode (a bare reason="crashed" no longer
           matches anything -- a bare atom never unifies with a

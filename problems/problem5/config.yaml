@@ -32,9 +32,19 @@
 #     wanted.
 
 initial_situation:
-  # (11.3,-7.71): inside the orchard, between tree rows -- verified
-  # against the raw occupancy grid (orchard_map_a.pgm) to be clear of
-  # every one of the map's 144 tree obstacles.
+  # (11.3,-7.71): inside the house fence, between the house and the
+  # fence's own boundary -- confirmed against the raw occupancy grid
+  # (orchard_map_a.pgm) to be free (not itself on an occupied pixel).
+  # KNOWN ISSUE, reported but not fixed (per this problem's own
+  # request to keep the positions as given for now): the nearest
+  # occupied pixel is only ~0.1m away (the fence's own wall/gap edge),
+  # well inside the robot's own 0.3m safety margin (robot.radius+
+  # safety_buffer below) -- once obstacles are inflated by that margin
+  # (as they always are, for every consumer -- see occgrid_to_problog
+  # .py's own module docstring), this start cell itself falls inside
+  # the inflated fence boundary, so EVERY planner call in this
+  # problem's own plan currently reports no_path, starting with the
+  # very first one.
   start_x: 11.3   # metres
   start_y: -7.71  # metres
 

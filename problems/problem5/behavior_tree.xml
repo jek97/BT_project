@@ -6,10 +6,13 @@
   (5,27) to (41,27), uninstall the plow (walking to (0,0) first), then
   plan+walk back to the start position (11.3,-7.71).
 
-  Note: (5,27) and (41,27) fall outside orchard_map_a's own rendered
-  extent (its own Y range only goes up to about 5.5). astar reports
-  no_path for a start/goal outside the map, so those two PlanWith calls
-  are expected to fail until the map/coordinates are revisited.
+  Note: with the real orchard_map_a (new_maps/), every point this tree
+  targets is within the map's own extent. See config.yaml's own
+  initial_situation note for a KNOWN, still-open issue with the start
+  position itself (too close to the fence once the robot's own safety
+  margin is applied), which currently makes the whole plan report
+  no_path starting from the very first leg. Kept as-is on request,
+  pending a closer look at the map.
 -->
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
   <include path="install_closest_plow.xml"/>

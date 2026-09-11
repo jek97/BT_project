@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<!--
+  behavior_tree.xml (problem5)
+
+  install_closest_plow, then plan+walk to (5,27), plough the swath from
+  (5,27) to (41,27), uninstall the plow (walking to (0,0) first), then
+  plan+walk back to the start position (11.3,-7.71).
+
+  Note: (5,27) and (41,27) fall outside orchard_map_a's own rendered
+  extent (its own Y range only goes up to about 5.5). astar reports
+  no_path for a start/goal outside the map, so those two PlanWith calls
+  are expected to fail until the map/coordinates are revisited.
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <include path="install_closest_plow.xml"/>
+  <include path="plowing.xml"/>
+  <include path="uninstall_plow.xml"/>
+  <BehaviorTree ID="MainTree">
+    <Sequence name="MainTree">
+      <SubTree ID="install_closest_plow"/>
+      <PlanWith algorithm="astar" goal="5;27" control_points="{cp1}"/>
+      <MoveTo control_points="{cp1}"/>
+      <SubTree ID="plowing" p1="5;27" p2="41;27"/>
+      <SubTree ID="uninstall_plow" p1="0;0"/>
+      <PlanWith algorithm="astar" goal="11.3;-7.71" control_points="{cp2}"/>
+      <MoveTo control_points="{cp2}"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

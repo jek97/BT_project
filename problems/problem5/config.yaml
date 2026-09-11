@@ -1,0 +1,104 @@
+# config.yaml -- problem5
+#
+# See problem4/config.yaml for the full field-by-field documentation;
+# this file follows the exact same layout, with these changes:
+#   - initial_situation: repositioned onto orchard_map_a.pgm (map.yaml),
+#     (11.3,-7.71) -- confirmed clear of every tree obstacle on that map.
+#   - position.disc_step_position: reduced to 0.5m (was 1.0 in
+#     problem4) -- the space-discretization merge-grid step.
+#   - battery.idle_drain_rate/moving_drain_rate: reduced (were 0.05/5.0
+#     in problem4) -- back down near problem0-3's own original shared
+#     baseline, so a long multi-leg plowing plan doesn't drain the
+#     battery unrealistically fast.
+#   - battery.disc_step_battery and grounding.disc_step_time: KEPT
+#     identical to problem4's own values (10 / 20) -- this problem's
+#     own request was to reduce SPACE discretization only, not time or
+#     battery-level discretization.
+#   - position.lateral/tangential noise tables: KEPT identical to
+#     problem4's own (same 3-point discretized Gaussian, same sigma).
+#   - new tool:/ploughing: sections (problem4 has neither) -- ONE plow
+#     instance, positioned at (0,0). tool.install/uninstall/deploy/
+#     retract sections are all OMITTED, so every one of those
+#     success_probability/duration/drain_rate values defaults (see
+#     config_to_prolog.py's own note on each). tool.equipped is ALSO
+#     omitted, on purpose: this problem's own request was to keep the
+#     SAME speed/drain-rate parameters whether or not the plow is
+#     installed/deployed, for now -- omitting tool.equipped entirely
+#     means tool_speed(Kind,_)/tool_moving_drain_rate(Kind,_) (and
+#     their own _deployed variants) all fall back to this file's plain
+#     motion.speed/battery.moving_drain_rate directly, exactly the
+#     "no difference yet" behavior requested; a later problem can
+#     override just this section once real plow-specific physics are
+#     wanted.
+
+initial_situation:
+  # (11.3,-7.71): inside the orchard, between tree rows -- verified
+  # against the raw occupancy grid (orchard_map_a.pgm) to be clear of
+  # every one of the map's 144 tree obstacles.
+  start_x: 11.3   # metres
+  start_y: -7.71  # metres
+
+robot:
+  radius: 0.20          # metres -- robot_radius/1
+  safety_buffer: 0.10   # metres -- safety_buffer/1 (safety_margin = radius + safety_buffer)
+
+motion:
+  speed: 1.0   # metres per time-unit -- constant-speed spline traversal (speed/1)
+
+position:
+  disc_step_position: 0.5   # metres -- reduced from problem4's own 1.0,
+                     # per this problem's own request (space
+                     # discretization only).
+  lateral:
+    sigma: 0.15   # metres per sqrt(time-unit) -- z/2's scale (sigma/1)
+    discretized_gaussian:
+      - value: -1.0
+        weight: 0.25
+      - value: 0.0
+        weight: 0.5
+      - value: 1.0
+        weight: 0.25
+  tangential:
+    sigma: 0.15   # metres per sqrt(time-unit) -- zt/2's scale (sigma_tangential/1)
+    discretized_gaussian:
+      - value: -1.0
+        weight: 0.25
+      - value: 0.0
+        weight: 0.5
+      - value: 1.0
+        weight: 0.25
+
+battery:
+  enabled: true
+  start: 100                 # percent -- battery_start/1
+  idle_drain_rate: 0.02      # percent/time-unit while not moving -- reduced from problem4's own 0.05
+  moving_drain_rate: 0.5     # percent/time-unit while moving -- reduced from problem4's own 5.0,
+                              # back down near problem0-3's own original shared baseline
+  sigma: 0.5   # percent per sqrt(time-unit) -- zbatt/1's scale (sigma_battery/1)
+  disc_step_battery: 10   # percent -- KEPT identical to problem4's own (battery-level discretization unchanged)
+  discretized_gaussian:
+    - value: -1.0
+      weight: 0.25
+    - value: 0.0
+      weight: 0.5
+    - value: 1.0
+      weight: 0.25
+
+tolerances:
+  on_track: 0.5   # metres -- tolerance/1 (on_track/1 drift-reporting diagnostic)
+
+verification:
+  num_samples: 20        # reporting/plotting resolution -- decoupled from
+                          # detection, which is exact (see bracket_samples below)
+  bracket_samples: 60    # collision/obstacle_sighted bracket-scan sample count
+  crossing_eps: 0.01     # bisection refinement tolerance, time-units
+
+grounding:
+  disc_step_time: 20   # seconds -- KEPT identical to problem4's own (time discretization unchanged)
+
+tool:
+  instances:
+    - {id: plow1, kind: plow, x: 0.0, y: 0.0}
+
+ploughing:
+  cell_size: 1.0   # metres -- plough_cell_size/1

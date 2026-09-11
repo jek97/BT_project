@@ -2,8 +2,9 @@
 #
 # See problem4/config.yaml for the full field-by-field documentation;
 # this file follows the exact same layout, with these changes:
-#   - initial_situation: repositioned onto orchard_map_a.pgm (map.yaml),
-#     (11.3,-7.71) -- confirmed clear of every tree obstacle on that map.
+#   - initial_situation: on orchard_map_a.pgm (map.yaml), (11.3,-15.0)
+#     -- between the house and the south fence, ~6.7m clear of both
+#     (see this section's own note for how this was picked).
 #   - position.disc_step_position: reduced to 0.5m (was 1.0 in
 #     problem4) -- the space-discretization merge-grid step.
 #   - battery.idle_drain_rate/moving_drain_rate: reduced (were 0.05/5.0
@@ -32,21 +33,48 @@
 #     wanted.
 
 initial_situation:
-  # (11.3,-7.71): inside the house fence, between the house and the
-  # fence's own boundary -- confirmed against the raw occupancy grid
-  # (orchard_map_a.pgm) to be free (not itself on an occupied pixel).
-  # KNOWN ISSUE, reported but not fixed (per this problem's own
-  # request to keep the positions as given for now): the nearest
-  # occupied pixel is only ~0.1m away (the fence's own wall/gap edge),
-  # well inside the robot's own 0.3m safety margin (robot.radius+
-  # safety_buffer below) -- once obstacles are inflated by that margin
-  # (as they always are, for every consumer -- see occgrid_to_problog
-  # .py's own module docstring), this start cell itself falls inside
-  # the inflated fence boundary, so EVERY planner call in this
-  # problem's own plan currently reports no_path, starting with the
-  # very first one.
-  start_x: 11.3   # metres
-  start_y: -7.71  # metres
+  # (11.3,-15.0): between the house (house_1, centered ~(11.5,0.0),
+  # per new_maps/orchard_map_a_dimensions.png) and the south fence
+  # (hfence_s, at y~=-21.9 per that same diagram) -- an EARLIER
+  # version of this start point, (11.3,-7.71), sat only ~0.1m from the
+  # house's own south wall, well inside the robot's own 0.3m safety
+  # margin (robot.radius+safety_buffer below); once obstacles are
+  # inflated by that margin (as they always are -- see
+  # occgrid_to_problog.py's own module docstring), that start CELL
+  # itself fell inside the inflated house boundary, so every planner
+  # call failed with no_path starting from the very first one,
+  # regardless of destination. This point was picked empirically
+  # against the actual occupancy grid (not just the dimensions
+  # diagram, which lists nominal/CAD sizes rather than the inflated,
+  # rasterized boundary planners actually see): ~6.7m clear of the
+  # nearest obstacle in any direction (vs. the house's own south wall
+  # at y~=-7.7 and the south fence at y~=-21.7 -- roughly the midpoint,
+  # and not coincidentally also where clearance peaks scanning either
+  # direction along x=11.3).
+  #
+  # SECOND, DEEPER KNOWN ISSUE (found fixing the first one, NOT fixed
+  # here): with this start point, astar now finds a path (no more
+  # no_path at the very first leg), but the subsequent MoveTo reports
+  # crashed(obs1) -- see behavior_tree.xml's own header for the full
+  # diagnosis. obs1 is this map's ENTIRE outer perimeter fence, a
+  # closed loop, extracted by occgrid_to_problog.py's own cv2.
+  # findContours(RETR_EXTERNAL, ...) as a single simple polygon; that
+  # extraction has no notion of "thin ring with a hollow interior", so
+  # the containment check every collision/planning routine uses
+  # (planners.py's own _inside_polygon) treats EVERYTHING inside the
+  # fence line -- the whole walkable orchard, this start point and the
+  # plow's own (0,0) included -- as inside the obstacle. Confirmed
+  # directly: _inside_polygon(11.3,-15.0,obs1) and _inside_polygon
+  # (0,0,obs1) both return True, while a point genuinely outside the
+  # map correctly returns False. The OLD 144-tree map (problems/
+  # new_map/) never hit this, since none of its obstacles formed a
+  # closed loop. Not something to fix by moving a point -- it needs
+  # either occgrid_to_problog.py's own extraction to handle ring-
+  # shaped/hollow regions (e.g. cv2.RETR_CCOMP plus hole-aware
+  # containment), or a different way of representing a perimeter
+  # fence than "one solid obstacle polygon".
+  start_x: 11.3    # metres
+  start_y: -15.0   # metres
 
 robot:
   radius: 0.20          # metres -- robot_radius/1

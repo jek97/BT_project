@@ -4,15 +4,33 @@
 
   install_closest_plow, then plan+walk to (5,27), plough the swath from
   (5,27) to (41,27), uninstall the plow (walking to (0,0) first), then
-  plan+walk back to the start position (11.3,-7.71).
+  plan+walk back to the start position (11.3,-15.0).
 
-  Note: with the real orchard_map_a (new_maps/), every point this tree
-  targets is within the map's own extent. See config.yaml's own
-  initial_situation note for a KNOWN, still-open issue with the start
-  position itself (too close to the fence once the robot's own safety
-  margin is applied), which currently makes the whole plan report
-  no_path starting from the very first leg. Kept as-is on request,
-  pending a closer look at the map.
+  Start position history: an earlier version used (11.3,-7.71), only
+  ~0.1m from the house's own south wall. Once inflated by the robot's
+  own safety margin, that start CELL itself was blocked, so every
+  planner call failed with no_path from the very first leg. See
+  config.yaml's own initial_situation note for how the current point
+  was picked (empirically, against the real occupancy grid): roughly
+  the midpoint between the house and the south fence, ~6.7m clear of
+  either.
+
+  KNOWN, UNFIXED ISSUE with THIS map (orchard_map_a): the plan now
+  gets past PlanWith (astar finds a route) but the FIRST MoveTo
+  (install_closest_plow's own walk toward the plow at (0,0)) reports
+  crashed(obs1) at 100%. obs1 is the map's entire outer perimeter
+  fence, extracted as ONE closed-loop polygon (occgrid_to_problog.py's
+  own cv2.findContours(RETR_EXTERNAL,...) has no notion of a thin ring
+  with a hollow interior), so the containment check every collision/
+  planning routine uses (planners.py's own _inside_polygon) treats
+  EVERYTHING inside the fence line as inside the obstacle, this
+  start point, the plow's own (0,0), all of it. Confirmed directly by
+  calling _inside_polygon on both points against obs1's own vertex
+  list. The old 144-tree map (problems/new_map/) never hit this, since
+  none of its obstacles formed a closed loop. Needs a fix at the
+  occgrid_to_problog.py/planners.py level (ring-aware extraction and/
+  or containment), not a coordinate change: every point on this map
+  is affected equally, not just this one.
 -->
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
   <include path="install_closest_plow.xml"/>
@@ -25,7 +43,7 @@
       <MoveTo control_points="{cp1}"/>
       <SubTree ID="plowing" p1="5;27" p2="41;27"/>
       <SubTree ID="uninstall_plow" p1="0;0"/>
-      <PlanWith algorithm="astar" goal="11.3;-7.71" control_points="{cp2}"/>
+      <PlanWith algorithm="astar" goal="11.3;-15.0" control_points="{cp2}"/>
       <MoveTo control_points="{cp2}"/>
     </Sequence>
   </BehaviorTree>

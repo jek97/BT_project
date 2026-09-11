@@ -13,7 +13,7 @@ query(outcome_signature(_)).
 query(any_reason_pattern(battery_depleted)).
 query(any_reason_pattern(completed)).
 query(any_reason_pattern(completed(astar,point(0.0,0.0)))).
-query(any_reason_pattern(completed(astar,point(11.3,-7.71)))).
+query(any_reason_pattern(completed(astar,point(11.3,-15.0)))).
 query(any_reason_pattern(completed(astar,point(41.0,27.0)))).
 query(any_reason_pattern(completed(astar,point(5.0,27.0)))).
 query(any_reason_pattern(completed(astar,wild))).
@@ -26,7 +26,7 @@ query(any_reason_pattern(install_tool_failure(wild))).
 query(any_reason_pattern(install_tool_success(wild))).
 query(any_reason_pattern(nearest_tool_found(plow,wild))).
 query(any_reason_pattern(no_path(astar,point(0.0,0.0)))).
-query(any_reason_pattern(no_path(astar,point(11.3,-7.71)))).
+query(any_reason_pattern(no_path(astar,point(11.3,-15.0)))).
 query(any_reason_pattern(no_path(astar,point(41.0,27.0)))).
 query(any_reason_pattern(no_path(astar,point(5.0,27.0)))).
 query(any_reason_pattern(no_path(astar,wild))).
@@ -97,8 +97,8 @@ query(any_reason_pattern_detail_by_action(uninstall_tool_success(_),a23)).
 query(any_reason_pattern_by_action(uninstall_tool_failure(wild),a23)).
 query(any_reason_pattern_detail_by_action(uninstall_tool_failure(_),a23)).
 query(any_reason_pattern_by_action(battery_depleted,a23)).
-query(any_reason_pattern_by_action(completed(astar,point(11.3,-7.71)),a24)).
-query(any_reason_pattern_by_action(no_path(astar,point(11.3,-7.71)),a24)).
+query(any_reason_pattern_by_action(completed(astar,point(11.3,-15.0)),a24)).
+query(any_reason_pattern_by_action(no_path(astar,point(11.3,-15.0)),a24)).
 query(any_reason_pattern_by_action(completed,a25)).
 query(any_reason_pattern_by_action(crashed(wild),a25)).
 query(any_reason_pattern_detail_by_action(crashed(_),a25)).

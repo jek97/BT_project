@@ -3,7 +3,7 @@
 % instead and regenerate (main.py does this automatically before
 % every run).
 
-start(11.3,-7.71).
+start(11.3,-15.0).
 robot_radius(0.2).
 safety_buffer(0.1).
 speed(1.0).

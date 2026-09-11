@@ -1049,6 +1049,44 @@ conditions:
     ports: []
 
   # ----------------------------------------------------------------
+  # holds(ploughed_at(GX,GY),S)/holds(ploughed_between(X1,Y1,X2,Y2),S)
+  # in basic_action_theory.pl -- thin BT-tree-facing wrappers around
+  # ploughed/3 (the cell-indexed ploughing fluent the plow-deploy leg
+  # already marks), discretizing a continuous point/box through the
+  # SAME plough_cell_size grid ploughed/3 itself uses. NON-CONTINUOUS
+  # (see bt_to_prolog.py's own _NON_CONTINUOUS_CONDITIONS note) --
+  # ploughed/3 only ever becomes newly true at a MoveTo leg's own halt/
+  # interrupt, never incrementally mid-leg.
+  # ----------------------------------------------------------------
+  - id: PloughedAt
+    prolog_condition: ploughed_at
+    description: "True iff the cell at goal is already ploughed."
+    ports:
+      - name: goal
+        direction: input
+        type: Point
+        required: true
+        description: "\"X;Y\" -- discretized to a cell via this problem's own ploughing.cell_size before checking."
+
+  - id: PloughedBetween
+    prolog_condition: ploughed_between
+    description: >
+      True iff EVERY cell overlapping the axis-aligned box spanned by
+      p1 and p2 (corners in either order) is already ploughed -- "has
+      this whole area already been ploughed".
+    ports:
+      - name: p1
+        direction: input
+        type: Point
+        required: true
+        description: "\"X;Y\" -- one corner of the box to check."
+      - name: p2
+        direction: input
+        type: Point
+        required: true
+        description: "\"X;Y\" -- the opposite corner of the box to check."
+
+  # ----------------------------------------------------------------
   # holds(line_of_sight_clear(ObstacleId,GX,GY), S) in
   # basic_action_theory.pl -- Bug0's own boundary-leave rule as a
   # standalone condition node. NO CrossesSegment condition counterpart

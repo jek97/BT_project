@@ -573,6 +573,29 @@ def deployed_cond_term():
     return "cond(deployed)"
 
 
+def ploughed_at_cond_term(goal):
+    """cond(ploughed_at(GX,GY)) term text -- matches PloughedAt's goal
+    port in schema.yaml. Same shape as distance_below_cond_term above
+    (one Point, no threshold).
+
+    goal: an (x,y) pair.
+    """
+    gx, gy = goal
+    return f"cond(ploughed_at({float(gx)},{float(gy)}))"
+
+
+def ploughed_between_cond_term(p1, p2):
+    """cond(ploughed_between(X1,Y1,X2,Y2)) term text -- matches
+    PloughedBetween's p1/p2 ports in schema.yaml. TRUE iff every cell
+    overlapping the axis-aligned box spanned by p1 and p2 is ploughed.
+
+    p1, p2: (x,y) pairs, the box's corners (either order).
+    """
+    x1, y1 = p1
+    x2, y2 = p2
+    return f"cond(ploughed_between({float(x1)},{float(y1)},{float(x2)},{float(y2)}))"
+
+
 # =====================================================================
 # Registry -- maps schema.yaml's IDs to their implementation here.
 # Not required for either caller to function (both can call the
@@ -714,5 +737,15 @@ CONDITIONS = {
         "kind": "interface_only",
         "prolog_condition": "deployed",
         "term_builder": deployed_cond_term,
+    },
+    "PloughedAt": {
+        "kind": "interface_only",
+        "prolog_condition": "ploughed_at",
+        "term_builder": ploughed_at_cond_term,
+    },
+    "PloughedBetween": {
+        "kind": "interface_only",
+        "prolog_condition": "ploughed_between",
+        "term_builder": ploughed_between_cond_term,
     },
 }

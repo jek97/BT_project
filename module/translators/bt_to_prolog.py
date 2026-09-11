@@ -286,6 +286,15 @@ _CONDITION_DISPATCH = {
     # deployed -- see basic_action_theory.pl's own holds(deployed,S)
     # note, right below hitched's own.
     "Deployed": {"kind": "deployed_cond"},
+    # ploughed_at(GX,GY) / ploughed_between(X1,Y1,X2,Y2) -- see
+    # basic_action_theory.pl's own holds(ploughed_at(...))/holds(
+    # ploughed_between(...)) note, right below hitched/deployed's own.
+    # PloughedAt takes ONE Point port (goal, like DistanceBelow's own);
+    # PloughedBetween takes TWO (p1, p2 -- the box's corners, either
+    # order), so each gets its own dispatch kind rather than sharing
+    # distance_cond's shape (which also carries a Threshold).
+    "PloughedAt": {"kind": "ploughed_at_cond"},
+    "PloughedBetween": {"kind": "ploughed_between_cond"},
     "HaltedWith": {"kind": "halted_with_cond"},
     # line_of_sight_clear(ObstacleId,GX,GY) -- obstacle_id verbatim
     # Prolog text (like HaltedWith's reason), goal a Point literal.
@@ -355,7 +364,7 @@ _RETRY_DECORATORS = {
 # elapse), so there is nothing for a mid-leg crossing-search to watch.
 _NON_CONTINUOUS_CONDITIONS = {
     "HaltedWith", "SampleValueBelow", "SampleValueEqual", "SampleValueOver",
-    "Hitched", "Deployed",
+    "Hitched", "Deployed", "PloughedAt", "PloughedBetween",
 }
 
 # Trigger-list functors that are REACTIVE-classified in leg_status/9
@@ -735,6 +744,13 @@ def _leaf_condition_term(tag, attrs):
         return f"hitched({kind_value})"
     if info["kind"] == "deployed_cond":
         return "deployed"
+    if info["kind"] == "ploughed_at_cond":
+        gx, gy = _point_xy(attrs["goal"], tag, "goal")
+        return f"ploughed_at({gx},{gy})"
+    if info["kind"] == "ploughed_between_cond":
+        x1, y1 = _point_xy(attrs["p1"], tag, "p1")
+        x2, y2 = _point_xy(attrs["p2"], tag, "p2")
+        return f"ploughed_between({x1},{y1},{x2},{y2})"
     raise BTValidationError(f"Unhandled condition kind for <{tag}>.")
 
 

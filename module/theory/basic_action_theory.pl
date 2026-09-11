@@ -3158,6 +3158,57 @@ holds(hitched(Kind), S) :- hitch(Kind, S).
 % retract_tool also require \+ moving(S) to start).
 holds(deployed, S) :- deployed(S).
 
+% ploughed_at(GX,GY) / ploughed_between(X1,Y1,X2,Y2): BT-tree-facing
+% wrappers around ploughed/3 (Section on ploughing, above quantize_up/3
+% /cell_index/3) -- ploughed/3 itself takes CELL INDICES (Cx,Cy), not
+% continuous coordinates, so these discretize a continuous point (or
+% axis-aligned box corner pair) through the SAME plough_cell_size/
+% cell_index/3 the ploughing engine itself already uses, then defer
+% straight to ploughed/3 -- no new marking logic, purely a coordinate-
+% space adapter.
+%
+% ploughed_at(GX,GY): TRUE iff the single cell (GX,GY) falls into is
+% ploughed.
+%
+% ploughed_between(X1,Y1,X2,Y2): TRUE iff EVERY cell overlapping the
+% axis-aligned box spanned by (X1,Y1) and (X2,Y2) (corners in EITHER
+% order -- min/max normalizes) is ploughed -- "has this whole area
+% already been ploughed". No forall/2 builtin in ProbLog, so this is
+% the standard double-negation Prolog idiom instead: "there is no cell
+% in the box that is NOT ploughed". Confirmed this reduces to the
+% correct JOINT probability (not merely a yes/no check) against
+% ProbLog's own semantics via a small scratch model (independent per-
+% cell ploughed facts multiplied out exactly as expected) before
+% adopting it here.
+%
+% Both NON-CONTINUOUS, same reason hitched/0 and deployed/0 above are:
+% ploughed/3 only ever becomes newly true at a MoveTo leg's own halt/
+% interrupt situation (see its own note), never incrementally mid-leg,
+% so there is nothing for a reactive crossing-search to watch for
+% either -- see bt_to_prolog.py's own _NON_CONTINUOUS_CONDITIONS note.
+holds(ploughed_at(GX,GY), S) :-
+    plough_cell_size(CellSize),
+    cell_index(GX, CellSize, Cx),
+    cell_index(GY, CellSize, Cy),
+    ploughed(Cx, Cy, S).
+holds(ploughed_between(X1,Y1,X2,Y2), S) :-
+    plough_cell_size(CellSize),
+    cell_index(X1, CellSize, CxA),
+    cell_index(X2, CellSize, CxB),
+    cell_index(Y1, CellSize, CyA),
+    cell_index(Y2, CellSize, CyB),
+    MinCx is min(CxA,CxB), MaxCx is max(CxA,CxB),
+    MinCy is min(CyA,CyB), MaxCy is max(CyA,CyB),
+    \+ ( between(MinCx,MaxCx,Cx), between(MinCy,MaxCy,Cy),
+         \+ ploughed(Cx,Cy,S) ).
+
+% ploughed_at/3, ploughed_between/5 (bare, NOT holds(...)-wrapped): thin
+% pass-throughs so a goal_formula.pl can reference either directly, same
+% reasoning as sample_value_below/3's own bare wrapper above -- see
+% vocabulary.yaml's own entries for these two.
+ploughed_at(GX, GY, S) :- holds(ploughed_at(GX,GY), S).
+ploughed_between(X1, Y1, X2, Y2, S) :- holds(ploughed_between(X1,Y1,X2,Y2), S).
+
 % obstacle_in_bound(Threshold): true iff the CURRENT position (at the
 % current time, via now/2) is within Threshold of ANY obstacle. Same
 % parameter, same underlying geometry as the obstacle_in_bound(Threshold)
@@ -3752,6 +3803,21 @@ visited(Loc, Tol, do(_A, S)) :- visited(Loc, Tol, S).
 % systematic bias, and it's the same kind of approximation error
 % already accepted by choosing a coarse cell size in the first place --
 % not a new source of imprecision on top of it.
+%
+% plough_cell_size/1 ITSELF is pure config data (config_to_prolog.py's
+% own ploughing.cell_size), only ever emitted as a fact when a
+% problem's config.yaml has a ploughing: section with a cell_size key
+% -- same "config-generated, no real clause in this file" shape as
+% tool_instance/2 above, and the same placeholder-clause fix applies:
+% a problem with a plow tool.instance but NO ploughing.cell_size could
+% still reach hitch(plow,S)=true (installing a plow needs no
+% ploughing config at all), and PloughedAt/PloughedBetween (see
+% holds(ploughed_at(...))/holds(ploughed_between(...)) above) query
+% plough_cell_size directly, unconditionally, before ever touching
+% ploughed/3 -- so this predicate needs to be "known" even in a
+% problem that never configures ploughing.
+plough_cell_size(no_ploughing_configured) :- fail.
+
 ploughed(Cx, Cy, do(haltMoveto(T1,_Reason,_Status), S)) :-
     current_walk(S, CP, Triggers, ActionCode, T0, SPrev),
     hitch(plow, SPrev),

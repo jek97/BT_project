@@ -223,6 +223,34 @@ predicates:
       closest right now -- fails outright if Kind has no free instance
       at all.
 
+  - name: ploughed_at
+    arity: 3
+    situation_arg: 3
+    args:
+      - {position: 1, name: GX, type: float, description: "X position, metres."}
+      - {position: 2, name: GY, type: float, description: "Y position, metres."}
+      - {position: 3, name: S, type: situation, description: "The situation to check at."}
+    description: >
+      TRUE iff the cell (GX,GY) discretizes into (via this problem's own
+      ploughing.cell_size, same grid ploughed/3 itself uses) is
+      currently ploughed. See schema.yaml's own PloughedAt condition for
+      the BT-tree-facing version of the same check.
+
+  - name: ploughed_between
+    arity: 5
+    situation_arg: 5
+    args:
+      - {position: 1, name: X1, type: float, description: "X of one box corner, metres."}
+      - {position: 2, name: Y1, type: float, description: "Y of one box corner, metres."}
+      - {position: 3, name: X2, type: float, description: "X of the opposite box corner, metres."}
+      - {position: 4, name: Y2, type: float, description: "Y of the opposite box corner, metres."}
+      - {position: 5, name: S, type: situation, description: "The situation to check at."}
+    description: >
+      TRUE iff EVERY cell overlapping the axis-aligned box spanned by
+      (X1,Y1) and (X2,Y2) (corners in either order) is currently
+      ploughed. See schema.yaml's own PloughedBetween condition for the
+      BT-tree-facing version of the same check.
+
   - name: halted_with
     arity: 2
     situation_arg: 2

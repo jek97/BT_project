@@ -1,0 +1,46 @@
+<?xml version="1.0"?>
+<!--
+  plowing.xml
+
+  If the swath between p1 and p2 is already ploughed, does nothing.
+  Otherwise: makes sure a plow is installed (install_closest_plow
+  already skips the install itself if one is already hitched, so this
+  is called directly, with no extra outer hitch(plow) guard around it;
+  that would just duplicate install_closest_plow's own); makes sure it
+  isn't left over-deployed from an earlier, interrupted run; walks to
+  p1, deploys, walks to p2 (ploughing the swath along the way, see
+  basic_action_theory.pl's own ploughed/3 note), then retracts.
+
+  Ports (remap these at the SubTree(ID=plowing, p1=..., p2=...) call
+  site):
+    p1 (input, Point): where to start ploughing from.
+    p2 (input, Point): where to plough to.
+
+  tool is looked up FRESH via HitchedId right after install_closest_
+  plow, rather than threaded out of it as an output port: install_
+  closest_plow's own id (powlid) is only produced on the branch that
+  actually installs something, never on the "already hitched" fast
+  path, so there would be nothing to reuse there; HitchedId works
+  either way.
+-->
+<root BTCPP_format="4">
+  <BehaviorTree ID="plowing">
+    <Fallback name="plowing">
+      <PloughedBetween p1="{p1}" p2="{p2}"/>
+      <Sequence>
+        <SubTree ID="install_closest_plow"/>
+        <HitchedId id="{tool}"/>
+        <Fallback>
+          <Inverter><Deployed/></Inverter>
+          <RetractTool tool="{tool}"/>
+        </Fallback>
+        <PlanWith algorithm="astar" goal="{p1}" control_points="{cp1}"/>
+        <MoveTo control_points="{cp1}"/>
+        <DeployTool tool="{tool}"/>
+        <PlanWith algorithm="astar" goal="{p2}" control_points="{cp2}"/>
+        <MoveTo control_points="{cp2}"/>
+        <RetractTool tool="{tool}"/>
+      </Sequence>
+    </Fallback>
+  </BehaviorTree>
+</root>

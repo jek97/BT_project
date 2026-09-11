@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<!--
+  install_closest_plow.xml
+
+  If a plow is already hitched, does nothing (skips straight to
+  success). Otherwise finds the nearest free plow instance, plans and
+  walks to it, and installs it.
+
+  No ports of its own: powlid/powlposition/cp are all PRIVATE,
+  internal to whichever SubTree(ID=install_closest_plow) call site
+  instantiates this (a caller may not remap them; they are never meant
+  to be read from outside).
+-->
+<root BTCPP_format="4">
+  <BehaviorTree ID="install_closest_plow">
+    <Fallback name="install_closest_plow">
+      <Hitched kind="plow"/>
+      <Sequence>
+        <NearestToolOfKind kind="plow" id="{powlid}" position="{powlposition}"/>
+        <PlanWith algorithm="astar" goal="{powlposition}" control_points="{cp}"/>
+        <MoveTo control_points="{cp}"/>
+        <InstallTool tool="{powlid}"/>
+      </Sequence>
+    </Fallback>
+  </BehaviorTree>
+</root>

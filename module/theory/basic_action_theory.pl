@@ -2817,6 +2817,31 @@ do_node(nearest_tool_of_kind_query(Kind,_Id,_Pos,ActionCode), S, do(nearest_tool
     \+ nearest_tool_of_kind(Kind, S, _, _, _, _),
     tag_reason(no_tool_of_kind(Kind), ActionCode, Reason).
 
+% hitched_id_query(-Id,+ActionCode): a FOURTH query leaf, same "pure
+% computation, no primitive_action/poss layer" shape as the three
+% above -- outputs the id of whatever tool is CURRENTLY hitched (Section
+% 5c's own hitch_id/2, a plain persistent fluent, single-valued: either
+% free or exactly one instance id), fails (Status=false) if nothing is.
+% Exists specifically so a tree can say "deploy/retract/uninstall
+% WHATEVER is hitched right now" without needing to have plumbed that
+% id in from wherever it originally got installed -- e.g. a plow that
+% was ALREADY hitched before a "make sure it's installed" guard even
+% ran never flows through an InstallTool/NearestToolOfKind occurrence
+% at all in THIS run, so there is no earlier output port to reuse; this
+% queries hitch_id/2 fresh, works regardless of how the tool got
+% hitched. TWO mutually exclusive clauses (hitch_id(free,S) is a total,
+% single-valued relation -- never BOTH free and some Id at once -- so,
+% unlike tool_position_query's own \+ tool_position(...) false clause,
+% the false clause here can match hitch_id(free,S) directly, no
+% negation needed).
+do_node(hitched_id_query(Id,ActionCode), S, do(hitched_id_result(Reason), S), true) :-
+    hitch_id(Id, S),
+    Id \= free,
+    tag_reason(hitched_id_found(Id), ActionCode, Reason).
+do_node(hitched_id_query(_Id,ActionCode), S, do(hitched_id_result(Reason), S), false) :-
+    hitch_id(free, S),
+    tag_reason(hitched_id_unavailable, ActionCode, Reason).
+
 % planned_with(+Algorithm, +Reason, +S): the direct parallel to
 % halted_with/2, for the (now-recorded) planning marker. Searches the
 % WHOLE history, so it can distinguish which of SEVERAL planning
@@ -3636,6 +3661,10 @@ outcome_entry(nearest_tool_result(Reason), Code-Pattern) :-
     Reason =.. [Functor|Args],
     append(Args0, [Code], Args),
     Pattern =.. [Functor|Args0].
+outcome_entry(hitched_id_result(Reason), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
 
 % history_outcomes(+S, -Entries): every outcome_entry/2 found ANYWHERE
 % in S's own history, oldest-first -- the one GENERIC pass behind
@@ -3799,6 +3828,7 @@ halted_with(Reason, do(halt_retract_tool(_,Reason,_), _)).
 halted_with(Reason, do(tool_position_result(Reason), _)).
 halted_with(Reason, do(tools_of_kind_result(Reason), _)).
 halted_with(Reason, do(nearest_tool_result(Reason), _)).
+halted_with(Reason, do(hitched_id_result(Reason), _)).
 halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 
 % visited(+Loc, +Tol, +S): TRUE iff the robot ACTUALLY ARRIVED at

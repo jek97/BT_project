@@ -232,6 +232,15 @@ _ACTION_DISPATCH = {
     "ToolPosition": {"kind": "tool_position_query"},
     "ToolsOfKind": {"kind": "tools_of_kind_query"},
     "NearestToolOfKind": {"kind": "nearest_tool_of_kind_query"},
+    # hitched_id_query(Id,ActionCode) -- a FOURTH query leaf, same
+    # "pure computation, no primitive_action/poss layer" shape as the
+    # three above. Outputs the id of whatever tool is CURRENTLY
+    # hitched, no input port at all -- see basic_action_theory.pl's own
+    # do_node(hitched_id_query(...)) note for why this exists
+    # separately from NearestToolOfKind/ToolPosition (an already-
+    # hitched tool never flows through either of those in the SAME
+    # run).
+    "HitchedId": {"kind": "hitched_id_query"},
 }
 
 # InstallTool/UninstallTool's own tool="..." port names a specific
@@ -1053,24 +1062,54 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
                         f"<{tag}> has algorithm=\"{algorithm}\", which "
                         f"requires a goal port.")
                 algorithm_term = algorithm
-                goal_term = _point_literal(attrs["goal"], tag, "goal")
-                reason_goal_text = goal_term
+                goal_attr = attrs["goal"]
+                if _is_blackboard_ref(goal_attr):
+                    # A Point goal WIRED from another node's own output
+                    # port (e.g. NearestToolOfKind's own position) --
+                    # goal_term becomes the bare Prolog VARIABLE that
+                    # port's own producer binds to a point(GX,GY) term at
+                    # runtime, exactly like control_points/cp_var above
+                    # (same var_pool.var_for/consumers/note_key_scope
+                    # bookkeeping). The concrete point is then genuinely
+                    # unknown at TRANSLATION time -- unlike a literal
+                    # goal, there is no fixed (GX,GY) to bake into this
+                    # PlanWith's own Reason universe, so reason_goal_text
+                    # becomes the ground atom 'wild' (see _reason_
+                    # pattern_for_manual_trigger's own note on this
+                    # convention) rather than a real point(...) term;
+                    # goal_label_text keeps the ORIGINAL "{key}" text for
+                    # the cosmetic action-code legend, since 'wild' alone
+                    # would be a less useful label than naming which key.
+                    goal_key = _blackboard_key(goal_attr)
+                    var_pool.consumers.add(goal_key)
+                    var_pool.note_key_scope(goal_key, reactive_code)
+                    goal_term = var_pool.var_for(goal_key)
+                    reason_goal_text = "wild"
+                    goal_label_text = goal_attr
+                else:
+                    goal_term = _point_literal(goal_attr, tag, "goal")
+                    reason_goal_text = goal_term
+                    goal_label_text = reason_goal_text
 
             action_code = var_pool.next_action_code()
             # See do_node(planWith(...))'s own note in basic_action_
             # theory.pl for why ActionCode is fully concrete here too
             # (never 'wild'): unlike an argmin ObstacleId, ActionCode/
-            # Algorithm/Goal are ALL already known at translation time
-            # for a given PlanWith occurrence -- there's nothing
-            # runtime-random about which occurrence this is, only
-            # whether it actually succeeds, which the by-action query
-            # already reports as a probability regardless.
+            # Algorithm are ALWAYS known at translation time for a given
+            # PlanWith occurrence -- there's nothing runtime-random about
+            # which occurrence this is, only whether it actually
+            # succeeds, which the by-action query already reports as a
+            # probability regardless. Goal is the ONE exception, and
+            # only when wired from another node's own output port (see
+            # this branch's own goal_attr handling above) -- there,
+            # reason_goal_text is already 'wild', for the same "known
+            # only at runtime" reason an argmin ObstacleId is.
             var_pool.reason_patterns_by_action[action_code] = [
                 f"completed({algorithm_term},{reason_goal_text})",
                 f"no_path({algorithm_term},{reason_goal_text})",
             ]
             plan_label = (f"PlanWith({algorithm_term})" if algorithm == "follow_boarder"
-                          else f"PlanWith({algorithm_term}, goal={reason_goal_text})")
+                          else f"PlanWith({algorithm_term}, goal={goal_label_text})")
             var_pool.action_labels[action_code] = _with_branch_suffix(plan_label, branch_name)
 
             return f"planWith({algorithm_term},{goal_term},{cp_var},{action_code})"
@@ -1235,6 +1274,38 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
                 f"NearestToolOfKind({kind})", branch_name)
             return f"nearest_tool_of_kind_query({kind},{id_var},{pos_var},{action_code})"
 
+        if info["kind"] == "hitched_id_query":
+            # NO input port at all -- unlike ToolPosition/ToolsOfKind/
+            # NearestToolOfKind, HitchedId takes nothing to look UP,
+            # only reports whatever's already hitched. id is this
+            # node's own OUTPUT -- always a blackboard reference, same
+            # "always a var, never a literal" requirement control_points
+            # already has.
+            id_value = attrs["id"]
+            if not _is_blackboard_ref(id_value):
+                raise BTValidationError(
+                    f"<{tag}>'s id port ('{id_value}') must be a blackboard "
+                    f"reference like \"{{tool}}\" -- it is this node's own "
+                    f"OUTPUT, never a literal.")
+            id_key = _blackboard_key(id_value)
+            var_pool.producers.add(id_key)
+            var_pool.note_key_scope(id_key, reactive_code)
+            id_var = var_pool.var_for(id_key)
+
+            action_code = var_pool.next_action_code()
+            # WHICH instance (if any) is hitched is only known at
+            # RUNTIME -- 'wild' for Id, same "known only at runtime"
+            # rule NearestToolOfKind's own Id already follows; there is
+            # no Kind (or anything else) known at translation time here
+            # at all, unlike NearestToolOfKind.
+            var_pool.reason_patterns_by_action[action_code] = [
+                "hitched_id_found(wild)",
+                "hitched_id_unavailable",
+            ]
+            var_pool.action_labels[action_code] = _with_branch_suffix(
+                "HitchedId", branch_name)
+            return f"hitched_id_query({id_var},{action_code})"
+
         if info["kind"] in ("install_tool", "uninstall_tool", "deploy_tool", "retract_tool"):
             # Shared shape for InstallTool/UninstallTool/DeployTool/
             # RetractTool -- they differ ONLY in which functor prefix
@@ -1246,15 +1317,37 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             # mirror images.
             functor_prefix = info["kind"]
 
-            tool = attrs["tool"].strip()
-            if not _VALID_PROLOG_ATOM_RE.match(tool):
-                raise BTValidationError(
-                    f"<{tag}>'s tool port ('{tool}') is not a valid Prolog "
-                    f"atom -- must start with a lowercase letter, then "
-                    f"letters/digits/underscores only. This names a tool "
-                    f"INSTANCE id from this problem's own config.yaml "
-                    f"tool.instances (e.g. 'cart1'), not a kind -- see "
-                    f"basic_action_theory.pl's own tool_instance/2.")
+            # tool may ALSO now be wired from another node's own output
+            # port (e.g. HitchedId's own id, or NearestToolOfKind's own
+            # id) instead of a literal -- same "blackboard ref OR
+            # literal" treatment PlanWith's own goal port gets above.
+            # Blackboard-sourced: tool becomes the bare Prolog VARIABLE
+            # that port's own producer binds at runtime; the concrete id
+            # is unknown at TRANSLATION time, so tool_reason_text (fed
+            # into this action's own Reason universe below) becomes the
+            # ground atom 'wild', same convention reason_goal_text uses
+            # above -- tool_label_text keeps the original "{key}" text
+            # for the cosmetic action-code legend instead.
+            tool_attr = attrs["tool"].strip()
+            if _is_blackboard_ref(tool_attr):
+                tool_key = _blackboard_key(tool_attr)
+                var_pool.consumers.add(tool_key)
+                var_pool.note_key_scope(tool_key, reactive_code)
+                tool = var_pool.var_for(tool_key)
+                tool_reason_text = "wild"
+                tool_label_text = tool_attr
+            else:
+                tool = tool_attr
+                if not _VALID_PROLOG_ATOM_RE.match(tool):
+                    raise BTValidationError(
+                        f"<{tag}>'s tool port ('{tool}') is not a valid Prolog "
+                        f"atom -- must start with a lowercase letter, then "
+                        f"letters/digits/underscores only. This names a tool "
+                        f"INSTANCE id from this problem's own config.yaml "
+                        f"tool.instances (e.g. 'cart1'), not a kind -- see "
+                        f"basic_action_theory.pl's own tool_instance/2.")
+                tool_reason_text = tool
+                tool_label_text = tool
 
             # triggers is OPTIONAL, same as MoveTo's own port -- but
             # RESTRICTED to battery-related names only (reusing
@@ -1362,11 +1455,14 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             action_code = var_pool.next_action_code()
 
             # Tool is LITERAL here (known at translation time, like
-            # PlanWith's own Algorithm/Goal), never 'wild' -- only
-            # success-or-failure is genuinely runtime-random.
+            # PlanWith's own Algorithm) UNLESS wired from a blackboard
+            # ref (see tool_attr's own handling above), in which case
+            # tool_reason_text is already 'wild' -- only success-or-
+            # failure is ALWAYS genuinely runtime-random, tool sometimes
+            # additionally is.
             reason_patterns = [
-                f"{functor_prefix}_success({tool})",
-                f"{functor_prefix}_failure({tool})",
+                f"{functor_prefix}_success({tool_reason_text})",
+                f"{functor_prefix}_failure({tool_reason_text})",
             ]
             reason_patterns += [_reason_pattern_for_manual_trigger(t) for t in default_tokens]
             reason_patterns += [_reason_pattern_for_manual_trigger(t) for t in manual_tokens
@@ -1376,7 +1472,7 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             reason_patterns += [f"guard_break({cond_term})" for cond_term, _code in guard_stack
                                  if battery_enabled or not _guard_condition_mentions_battery(cond_term)]
             var_pool.reason_patterns_by_action[action_code] = reason_patterns
-            var_pool.action_labels[action_code] = _with_branch_suffix(f"{tag}({tool})", branch_name)
+            var_pool.action_labels[action_code] = _with_branch_suffix(f"{tag}({tool_label_text})", branch_name)
 
             return f"{functor_prefix}_leg({tool},{triggers},{action_code})"
 

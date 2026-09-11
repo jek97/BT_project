@@ -444,6 +444,22 @@ def nearest_tool_of_kind_query_term(kind, id_var, pos_var, action_code):
     return f"nearest_tool_of_kind_query({kind},{id_var},{pos_var},{action_code})"
 
 
+def hitched_id_query_term(id_var, action_code):
+    """Build the basic_action_theory.pl TERM TEXT for one HitchedId
+    node's bound inputs -- hitched_id_query(Id,ActionCode). NO input
+    port at all (unlike tool_position_query_term/nearest_tool_of_kind_
+    query_term above) -- Id is this node's own OUTPUT, same "leave a
+    variable free" pattern.
+
+    id_var: a free Prolog variable name, as text (e.g. "Id").
+    action_code: a free Prolog variable name or bound atom, as text.
+
+    Returns Prolog source text, e.g.:
+        "hitched_id_query(Id,a3)"
+    """
+    return f"hitched_id_query({id_var},{action_code})"
+
+
 # =====================================================================
 # CONDITIONS -- interface-only: term builders
 # =====================================================================
@@ -661,6 +677,11 @@ ACTIONS = {
         "kind": "interface_only",
         "prolog_action": "nearest_tool_of_kind_query",
         "term_builder": nearest_tool_of_kind_query_term,
+    },
+    "HitchedId": {
+        "kind": "interface_only",
+        "prolog_action": "hitched_id_query",
+        "term_builder": hitched_id_query_term,
     },
 }
 

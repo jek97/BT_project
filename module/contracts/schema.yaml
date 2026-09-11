@@ -281,7 +281,15 @@ actions:
           all -- see its own note above). Maps directly to planWith's
           own point(GX,GY) argument in basic_action_theory.pl --
           per-call, not shared across other planning calls in the same
-          tree.
+          tree. Either a literal "X;Y" OR a blackboard reference like
+          "{target}" bound by an earlier node's own Point output (e.g.
+          NearestToolOfKind's own position) -- the ONE exception to
+          this schema's usual "input ports are literals" rule (same
+          treatment InstallTool/DeployTool/RetractTool/UninstallTool's
+          own tool port gets, below); when blackboard-sourced, this
+          call's own Reason records the ground atom `wild` in place of
+          the concrete point (unknown until runtime), same convention
+          an argmin ObstacleId already uses elsewhere.
       - name: obstacle_id
         direction: input
         type: std::string
@@ -445,6 +453,12 @@ actions:
           translator never parses config.yaml); an unknown id simply
           makes this action's own precondition unsatisfiable (see
           basic_action_theory.pl's own poss(start_install_tool(...))).
+          Either a literal id OR a blackboard reference like "{tool}"
+          bound by an earlier node's own std::string output (e.g.
+          NearestToolOfKind's own id, or HitchedId's) -- see PlanWith's
+          own goal port note above for the full "literal OR blackboard
+          ref" convention this follows, including the `wild` Reason
+          substitution when blackboard-sourced.
       - name: triggers
         direction: input
         type: std::vector<std::string>
@@ -495,7 +509,9 @@ actions:
         required: true
         description: >
           The tool INSTANCE id (e.g. "cart1") currently attached --
-          same id= an earlier <InstallTool> in this tree used.
+          same id= an earlier <InstallTool> in this tree used. Either a
+          literal or a blackboard reference (e.g. HitchedId's own id
+          output) -- see InstallTool's own tool port note above.
       - name: triggers
         direction: input
         type: std::vector<std::string>
@@ -565,6 +581,8 @@ actions:
           The tool INSTANCE id (e.g. "plow1") currently attached --
           same id= an earlier <InstallTool> in this tree used. Its own
           kind must be plow (checked at the Prolog level, not here).
+          Either a literal or a blackboard reference (e.g. HitchedId's
+          own id output) -- see InstallTool's own tool port note above.
       - name: triggers
         direction: input
         type: std::vector<std::string>
@@ -597,7 +615,9 @@ actions:
         required: true
         description: >
           The tool INSTANCE id (e.g. "plow1") currently deployed --
-          same id= an earlier <DeployTool> in this tree used.
+          same id= an earlier <DeployTool> in this tree used. Either a
+          literal or a blackboard reference (e.g. HitchedId's own id
+          output) -- see InstallTool's own tool port note above.
       - name: triggers
         direction: input
         type: std::vector<std::string>
@@ -719,6 +739,34 @@ actions:
         direction: output
         type: bool
         description: "true iff reason is nearest_tool_found(...)."
+
+  - id: HitchedId
+    prolog_action: hitched_id_query
+    description: >
+      Looks up the id of WHATEVER tool is currently hitched (if any) --
+      no input port, unlike ToolPosition/ToolsOfKind/NearestToolOfKind:
+      it reports on the hitch's own current state directly (basic_
+      action_theory.pl's own hitch_id/2), not a lookup keyed by
+      kind/id. Succeeds (status=true) iff something is currently
+      hitched. Exists so a tree can say "deploy/retract/uninstall
+      WHATEVER is hitched right now" without needing to have plumbed
+      that id in from wherever it was originally installed -- e.g. a
+      tool that was ALREADY hitched before some "make sure it's
+      installed" guard even ran never flows through an InstallTool/
+      NearestToolOfKind occurrence in THAT run at all.
+    ports:
+      - name: id
+        direction: output
+        type: std::string
+        description: "Bound to the currently-hitched instance's own id, if any."
+      - name: reason
+        direction: output
+        type: std::string
+        description: "hitched_id_found(Id) or hitched_id_unavailable."
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is hitched_id_found(...)."
 
 conditions:
 

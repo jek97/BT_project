@@ -484,7 +484,10 @@ actions:
       (Tool,ActionCode) in place of install_tool_success/
       install_tool_failure. Requires hitch_id(Tool,S) to start (THIS
       SPECIFIC tool INSTANCE currently attached, not just any instance
-      of its kind), not just hitch(free,S)'s own negation.
+      of its kind), not just hitch(free,S)'s own negation -- AND
+      \+ deployed(S): a tool currently deployed (see DeployTool/
+      RetractTool below) must be retracted first, it cannot be
+      uninstalled while still lowered.
     ports:
       - name: tool
         direction: input
@@ -509,6 +512,108 @@ actions:
         direction: output
         type: bool
         description: "true iff reason is uninstall_tool_success(...)."
+
+  # ----------------------------------------------------------------
+  # DeployTool / RetractTool -- correspond to deploy_tool_leg(Tool,
+  # Triggers,ActionCode)/retract_tool_leg(Tool,Triggers,ActionCode) in
+  # basic_action_theory.pl: SAME shape as InstallTool/UninstallTool
+  # above (fixed Duration, battery-only triggers, robot must be still,
+  # coin-flip success/failure once the full Duration elapses) -- but
+  # lowers/raises a tool that's ALREADY installed, rather than
+  # attaching/detaching it. Currently restricted to tool kind=plow ONLY
+  # (checked at the Prolog level, since this translator never parses
+  # config.yaml to know a given id's own kind -- see basic_action_
+  # theory.pl's own poss(start_deploy_tool(...))); other tool kinds may
+  # gain their own deploy/retract behaviour later.
+  #
+  # WHY THIS EXISTS, SEPARATELY FROM InstallTool/UninstallTool: merely
+  # having the plow installed (hitch(plow,S)) does NOT plough anything
+  # while the robot moves -- basic_action_theory.pl's own ploughed/3
+  # additionally requires deployed(S), which only becomes true between
+  # a successful DeployTool and its matching RetractTool. Between the
+  # two, MoveTo's own speed and battery drain rate also switch to the
+  # DEPLOYED-specific values (tool.equipped.plow.deployed_speed/
+  # deployed_moving_drain_rate, this problem's own config.yaml, see
+  # basic_action_theory.pl's own effective_tool_speed/3).
+  #
+  # Preconditions: neither can start while the robot is moving.
+  # DeployTool additionally requires hitch_id(Tool,S) (THIS SPECIFIC
+  # instance currently attached -- can't deploy something not
+  # installed) and \+ deployed(S) (not already deployed). RetractTool
+  # requires hitch_id(Tool,S) AND deployed(S) (can't retract what
+  # isn't deployed). UninstallTool, in turn, now requires \+ deployed
+  # (S) too -- a deployed tool must be retracted before it can be
+  # uninstalled (see UninstallTool's own note above).
+  # ----------------------------------------------------------------
+  - id: DeployTool
+    prolog_action: deploy_tool_leg
+    description: >
+      Runs a fixed-Duration deploy (lower into the ground) of `tool`,
+      an ALREADY-INSTALLED tool instance id whose own kind must
+      currently be plow. Halts early on whichever of `triggers` occurs
+      first, or resolves a success/failure coin flip once the full
+      Duration elapses with nothing halting it early (tool.deploy.
+      success_probability, this problem's own config.yaml, default
+      0.9). Only battery-related trigger names are accepted, same
+      restriction as InstallTool's own triggers port.
+    ports:
+      - name: tool
+        direction: input
+        type: std::string
+        required: true
+        description: >
+          The tool INSTANCE id (e.g. "plow1") currently attached --
+          same id= an earlier <InstallTool> in this tree used. Its own
+          kind must be plow (checked at the Prolog level, not here).
+      - name: triggers
+        direction: input
+        type: std::vector<std::string>
+        required: false
+        description: "Same battery-only restriction as InstallTool's own triggers port."
+      - name: reason
+        direction: output
+        type: std::string
+        description: >
+          deploy_tool_success(Tool,ActionCode)/deploy_tool_failure
+          (Tool,ActionCode), or a battery Reason -- same shape as
+          InstallTool's own reason port.
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is deploy_tool_success(...)."
+
+  - id: RetractTool
+    prolog_action: retract_tool_leg
+    description: >
+      The mirror image of DeployTool above -- same ports/mechanism,
+      retract_tool_success(Tool,ActionCode)/retract_tool_failure(Tool,
+      ActionCode) in place of deploy_tool_success/deploy_tool_failure
+      (tool.retract.success_probability, default 0.9). Requires `tool`
+      to be currently DEPLOYED to start, not just attached.
+    ports:
+      - name: tool
+        direction: input
+        type: std::string
+        required: true
+        description: >
+          The tool INSTANCE id (e.g. "plow1") currently deployed --
+          same id= an earlier <DeployTool> in this tree used.
+      - name: triggers
+        direction: input
+        type: std::vector<std::string>
+        required: false
+        description: "Same battery-only restriction as InstallTool's own triggers port."
+      - name: reason
+        direction: output
+        type: std::string
+        description: >
+          retract_tool_success(Tool,ActionCode)/retract_tool_failure
+          (Tool,ActionCode), or a battery Reason -- same shape as
+          InstallTool's own reason port.
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is retract_tool_success(...)."
 
 conditions:
 

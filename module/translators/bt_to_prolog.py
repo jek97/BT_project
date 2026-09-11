@@ -177,6 +177,23 @@ _ACTION_DISPATCH = {
     # port validation.
     "InstallTool": {"kind": "install_tool"},
     "UninstallTool": {"kind": "uninstall_tool"},
+    # deploy_tool_leg(Tool,Triggers,ActionCode)/retract_tool_leg(Tool,
+    # Triggers,ActionCode) -- SAME shared shape as InstallTool/
+    # UninstallTool just above (the "install_tool"/"uninstall_tool"/
+    # "deploy_tool"/"retract_tool" kind branch in _translate_leaf is
+    # 100% generic over info["kind"] as the functor prefix, no special-
+    # casing needed here at all): lowers/raises whichever tool is
+    # ALREADY hitched (requires it be installed first -- see
+    # basic_action_theory.pl's own poss(start_deploy_tool(...))), and
+    # currently only ever possible for Tool's own kind=plow (checked at
+    # the Prolog level, not here -- this translator never parses
+    # config.yaml, so it can't know a given id's own kind). Between a
+    # successful DeployTool and its matching RetractTool, MoveTo starts
+    # marking ploughed/3 cells and picks up the deployed-specific speed/
+    # battery-drain-rate values -- see basic_action_theory.pl's own
+    # Section 5d.
+    "DeployTool": {"kind": "deploy_tool"},
+    "RetractTool": {"kind": "retract_tool"},
 }
 
 # InstallTool/UninstallTool's own tool="..." port names a specific
@@ -963,13 +980,15 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
                 f"TakeSample({sample_id})", branch_name)
             return f"take_sample({sample_id},{action_code})"
 
-        if info["kind"] in ("install_tool", "uninstall_tool"):
-            # Shared shape for both InstallTool and UninstallTool --
-            # they differ ONLY in which functor prefix everything gets
-            # (info["kind"] IS that prefix, e.g. "install_tool"), never
-            # in structure -- see basic_action_theory.pl's own
-            # do_node(install_tool_leg(...))/do_node(uninstall_tool_leg
-            # (...)) for why they're genuine mirror images.
+        if info["kind"] in ("install_tool", "uninstall_tool", "deploy_tool", "retract_tool"):
+            # Shared shape for InstallTool/UninstallTool/DeployTool/
+            # RetractTool -- they differ ONLY in which functor prefix
+            # everything gets (info["kind"] IS that prefix, e.g.
+            # "install_tool"), never in structure -- see basic_action_
+            # theory.pl's own do_node(install_tool_leg(...))/do_node
+            # (uninstall_tool_leg(...))/do_node(deploy_tool_leg(...))/
+            # do_node(retract_tool_leg(...)) for why they're all genuine
+            # mirror images.
             functor_prefix = info["kind"]
 
             tool = attrs["tool"].strip()

@@ -375,8 +375,8 @@ arc_length(ControlPoints, Length) :-
 % (free,_) is DERIVED from it at generation time, not the other way
 % round.
 
-% walk_duration(+ControlPoints,+Tool,-Duration): Tool is WHICH tool (if
-% any -- free/cart/plow, see hitch/2) is equipped for the walk this
+% walk_duration(+ControlPoints,+Tool,+S,-Duration): Tool is WHICH tool
+% (if any -- free/cart/plow, see hitch/2) is equipped for the walk this
 % Duration is being computed for, per this feature's own request
 % ("if the robot is equipped with the cart or the plow... the moveto
 % action will use these parameters (velocity and battery drain rate)
@@ -388,11 +388,45 @@ arc_length(ControlPoints, Length) :-
 % halt_install_tool/halt_uninstall_tool ever change it, and both
 % REQUIRE \+ moving(S) just to start -- see their own poss/2 notes), so
 % it makes no difference whether a given call site re-derives it from S
-% or from SPrev; either reads the SAME value.
-walk_duration(ControlPoints, Tool, Duration) :-
+% or from SPrev; either reads the SAME value. deployed/1 (Section 5c)
+% has the SAME provably-constant-for-one-walk property, for the SAME
+% reason (start_deploy_tool/start_retract_tool also require \+ moving
+% (S)) -- S is threaded through here ONLY so effective_tool_speed/3
+% below can tell whether Tool is currently DEPLOYED (a plow lowered
+% into the ground moves differently than one just carried along), same
+% situation argument, same "either S or SPrev works" property.
+walk_duration(ControlPoints, Tool, S, Duration) :-
     arc_length(ControlPoints, Length),
-    tool_speed(Tool, Speed),
+    effective_tool_speed(Tool, S, Speed),
     Duration is Length / Speed.
+
+% effective_tool_speed(+Tool,+S,-Speed) / effective_tool_moving_drain_
+% rate(+Tool,+S,-Rate): the deployed-aware wrapper around tool_speed/2/
+% tool_moving_drain_rate/2 -- TWO mutually exclusive clauses (deployed(
+% S) vs. \+ deployed(S)), not an if-then-else (ProbLog's own dialect
+% doesn't support '->'/2, same convention every other multi-case
+% predicate in this file already uses). tool_speed_deployed/2 and
+% tool_moving_drain_rate_deployed/2 (this problem's own config.yaml,
+% tool.equipped.<kind>.deployed_speed/.deployed_moving_drain_rate) are
+% emitted for EVERY tool kind, same as tool_speed/2 itself, even though
+% only the plow can currently ever actually be deployed (see poss(
+% start_deploy_tool(...))'s own kind restriction) -- a kind that can
+% never deploy simply never has deployed(S) true while it's the one
+% hitched, so its own _deployed value is harmless, never-consulted
+% config, not a special case to avoid emitting.
+effective_tool_speed(Tool, S, Speed) :-
+    deployed(S),
+    tool_speed_deployed(Tool, Speed).
+effective_tool_speed(Tool, S, Speed) :-
+    \+ deployed(S),
+    tool_speed(Tool, Speed).
+
+effective_tool_moving_drain_rate(Tool, S, Rate) :-
+    deployed(S),
+    tool_moving_drain_rate_deployed(Tool, Rate).
+effective_tool_moving_drain_rate(Tool, S, Rate) :-
+    \+ deployed(S),
+    tool_moving_drain_rate(Tool, Rate).
 
 % ---------------------------------------------------------------
 % 4. STOCHASTIC LATERAL DRIFT -- ONE discretized-Gaussian draw
@@ -511,6 +545,33 @@ current_uninstall_tool(do(A,S), Tool, Triggers, ActionCode, T0, SPrev) :-
     A \= start_uninstall_tool(_,_,_,_),
     current_uninstall_tool(S, Tool, Triggers, ActionCode, T0, SPrev).
 
+% deploying_tool/2, retracting_tool/2, current_deploy_tool/6,
+% current_retract_tool/6: the deploy_tool/retract_tool analogues of
+% installing_tool/2, uninstalling_tool/2, current_install_tool/6,
+% current_uninstall_tool/6 just above -- IDENTICAL shape, start_deploy_
+% tool/start_retract_tool in place of start_install_tool/start_
+% uninstall_tool, halt_deploy_tool/halt_retract_tool in place of
+% halt_install_tool/halt_uninstall_tool.
+deploying_tool(Tool, do(start_deploy_tool(Tool,_,_,_), _)).
+deploying_tool(Tool, do(A,S)) :-
+    A \= halt_deploy_tool(_,_,_),
+    deploying_tool(Tool, S).
+
+retracting_tool(Tool, do(start_retract_tool(Tool,_,_,_), _)).
+retracting_tool(Tool, do(A,S)) :-
+    A \= halt_retract_tool(_,_,_),
+    retracting_tool(Tool, S).
+
+current_deploy_tool(do(start_deploy_tool(Tool,Triggers,ActionCode,T0),SPrev), Tool, Triggers, ActionCode, T0, SPrev).
+current_deploy_tool(do(A,S), Tool, Triggers, ActionCode, T0, SPrev) :-
+    A \= start_deploy_tool(_,_,_,_),
+    current_deploy_tool(S, Tool, Triggers, ActionCode, T0, SPrev).
+
+current_retract_tool(do(start_retract_tool(Tool,Triggers,ActionCode,T0),SPrev), Tool, Triggers, ActionCode, T0, SPrev).
+current_retract_tool(do(A,S), Tool, Triggers, ActionCode, T0, SPrev) :-
+    A \= start_retract_tool(_,_,_,_),
+    current_retract_tool(S, Tool, Triggers, ActionCode, T0, SPrev).
+
 % ---------------------------------------------------------------
 % 5c. THE HITCH FLUENT -- which tool KIND (if any) is currently
 %     attached: free (nothing attached), or the kind's own name
@@ -565,6 +626,34 @@ hitch_id(State, do(A,S)) :-
     A \= halt_install_tool(_,install_tool_success(_,_),true),
     A \= halt_uninstall_tool(_,uninstall_tool_success(_,_),true),
     hitch_id(State, S).
+
+% ---------------------------------------------------------------
+% 5d. THE DEPLOYED FLUENT -- true while the currently-hitched tool is
+%     LOWERED (deployed), as opposed to merely attached. Starts false
+%     (no clause covers s0, same "absence is false" convention moving/1
+%     itself relies on). Flips to true ONLY on a SUCCESSFUL
+%     halt_deploy_tool(...), back to false ONLY on a SUCCESSFUL
+%     halt_retract_tool(...) -- a FAILED attempt at either leaves it
+%     unchanged, same "only a SUCCESSFUL halt flips it" discipline
+%     hitch/2 already uses (the frame clause's own negative guard
+%     simply doesn't match a successful retract, so there's no separate
+%     "becomes false" clause to also write -- same trick moving/1 uses
+%     for its own ending case). No Tool/Id argument, unlike hitch/hitch_
+%     id -- only ONE tool can ever be hitched at a time, so "is the
+%     currently-hitched tool deployed" needs no further qualification.
+%
+%     WHY THIS EXISTS: merely installing the plow (hitch(plow,S)) does
+%     NOT plough anything while the robot moves -- see ploughed/3's own
+%     note, further down -- and does NOT switch MoveTo to the deployed-
+%     specific speed/drain-rate either (effective_tool_speed/3,
+%     effective_tool_moving_drain_rate/3, near walk_duration/4 above).
+%     Both require deployed(S) too, which only a genuine DeployTool
+%     (poss(start_deploy_tool(...)), below) can make true.
+deployed(do(halt_deploy_tool(_T,deploy_tool_success(_Id,_ActionCode),true), _)).
+deployed(do(A,S)) :-
+    A \= halt_deploy_tool(_,deploy_tool_success(_,_),true),
+    A \= halt_retract_tool(_,retract_tool_success(_,_),true),
+    deployed(S).
 
 % tool_position(+Id, -GX, -GY, +S): relational fluent -- WHERE tool
 % instance Id currently sits, or fails outright if Id is currently
@@ -772,10 +861,10 @@ leg_start_battery(T0, SPrev, B0) :-
 battery(Level, T, do(startMoveto(CP,_Triggers,_ActionCode,T0), S)) :-
     leg_start_battery(T0, S, B0),
     hitch(Tool, S),
-    walk_duration(CP, Tool, Duration),
+    walk_duration(CP, Tool, S, Duration),
     Elapsed0 is T - T0,
     Elapsed is max(0.0, min(Elapsed0, Duration)),
-    tool_moving_drain_rate(Tool, MovingRate),
+    effective_tool_moving_drain_rate(Tool, S, MovingRate),
     sigma_battery(SigmaB),
     zbatt(Zb),
     Deviation is Zb * SigmaB * Elapsed / sqrt(Duration),
@@ -829,7 +918,7 @@ battery(Level, T, do(interrupt(T1), S)) :-
 % idle_drain_rate's own configured value if config.yaml doesn't
 % override it, see config_to_prolog.py's own note), and install_tool_
 % duration(Tool,Duration) (or uninstall_tool_duration(Tool,Duration))
-% in place of walk_duration(CP,Tool,Duration). Even though install_
+% in place of walk_duration(CP,Tool,S,Duration). Even though install_
 % tool/uninstall_tool never move the robot, each one is still a FIXED-
 % DURATION leg exactly like a MoveTo leg is -- so it gets the SAME
 % "nominal drain minus a Duration-normalized signed deviation"
@@ -905,15 +994,86 @@ battery(Level, T, do(halt_uninstall_tool(T1,Reason,Status), S)) :-
     noisy_drain(NominalDrain, Deviation, TotalDrain),
     Level is max(0, min(100, B1 - TotalDrain)).
 
+% start_deploy_tool/halt_deploy_tool/start_retract_tool/halt_retract_
+% tool: SAME Duration-normalized anchor shape as the install/uninstall
+% pair just above -- deploy_tool_duration/2 (or retract_tool_
+% duration/2, both KIND-keyed via tool_instance/2) and deploy_tool_
+% drain_rate/1 (or retract_tool_drain_rate/1) in place of install_tool_
+% duration/uninstall_tool_duration/install_tool_drain_rate/
+% uninstall_tool_drain_rate; post-halt idle drain is the SAME plain
+% idle_drain_rate every other action's own post-halt clause already
+% uses (once the leg ends the robot -- and the tool -- are just idle
+% again).
+battery(Level, T, do(start_deploy_tool(Id,_Triggers,_ActionCode,T0), S)) :-
+    leg_start_battery(T0, S, B0),
+    tool_instance(Id, Kind),
+    deploy_tool_duration(Kind, Duration),
+    deploy_tool_drain_rate(Rate),
+    Elapsed0 is T - T0,
+    Elapsed is max(0.0, min(Elapsed0, Duration)),
+    sigma_battery(SigmaB),
+    zbatt(Zb),
+    Deviation is Zb * SigmaB * Elapsed / sqrt(Duration),
+    NominalDrain is Rate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B0 - TotalDrain)).
+
+battery(Level, T, do(halt_deploy_tool(T1,Reason,Status), S)) :-
+    T =< T1,
+    battery(Level, T, S).
+battery(Level, T, do(halt_deploy_tool(T1,Reason,Status), S)) :-
+    T > T1,
+    battery(B1, T1, S),
+    idle_drain_rate(IdleRate),
+    sigma_battery(SigmaB),
+    zbatt(Zb),
+    Elapsed is T - T1,
+    Deviation is Zb * SigmaB * sqrt(Elapsed),
+    NominalDrain is IdleRate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B1 - TotalDrain)).
+
+battery(Level, T, do(start_retract_tool(Id,_Triggers,_ActionCode,T0), S)) :-
+    leg_start_battery(T0, S, B0),
+    tool_instance(Id, Kind),
+    retract_tool_duration(Kind, Duration),
+    retract_tool_drain_rate(Rate),
+    Elapsed0 is T - T0,
+    Elapsed is max(0.0, min(Elapsed0, Duration)),
+    sigma_battery(SigmaB),
+    zbatt(Zb),
+    Deviation is Zb * SigmaB * Elapsed / sqrt(Duration),
+    NominalDrain is Rate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B0 - TotalDrain)).
+
+battery(Level, T, do(halt_retract_tool(T1,Reason,Status), S)) :-
+    T =< T1,
+    battery(Level, T, S).
+battery(Level, T, do(halt_retract_tool(T1,Reason,Status), S)) :-
+    T > T1,
+    battery(B1, T1, S),
+    idle_drain_rate(IdleRate),
+    sigma_battery(SigmaB),
+    zbatt(Zb),
+    Elapsed is T - T1,
+    Deviation is Zb * SigmaB * sqrt(Elapsed),
+    NominalDrain is IdleRate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B1 - TotalDrain)).
+
 % pass-through: any future non-movement, non-tool action doesn't change
 % how battery is computed -- it's a pure function of T and of whichever
 % startMoveto/haltMoveto/interrupt/start_install_tool/halt_install_tool/
-% start_uninstall_tool/halt_uninstall_tool anchors exist in the
+% start_uninstall_tool/halt_uninstall_tool/start_deploy_tool/halt_
+% deploy_tool/start_retract_tool/halt_retract_tool anchors exist in the
 % history, same principle as at/4's own pass-through clause.
 battery(Level, T, do(A,S)) :-
     A \= startMoveto(_,_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
     A \= start_install_tool(_,_,_,_), A \= halt_install_tool(_,_,_),
     A \= start_uninstall_tool(_,_,_,_), A \= halt_uninstall_tool(_,_,_),
+    A \= start_deploy_tool(_,_,_,_), A \= halt_deploy_tool(_,_,_),
+    A \= start_retract_tool(_,_,_,_), A \= halt_retract_tool(_,_,_),
     battery(Level, T, S).
 
 % first_battery_depletion_time(+CP,+T0,+Duration,+B0,+Zb,+Tool,-Tcross):
@@ -1402,12 +1562,13 @@ tool_cond_supported(battery_equal(_)).
 tool_cond_supported(battery_over(_)).
 
 % tool_leg_status(+Reason,+Code,-Status): the install_tool/
-% uninstall_tool analogue of leg_status/9 above -- but NOTE the
-% difference from moveto's own rule: reaching "natural completion" is
-% NOT itself a success (unlike moveto's Reason=completed->true) --
-% *_tool_success(Tool,_)/*_tool_failure(Tool,_) are BOTH possible
-% outcomes of natural completion (the coin flip already resolved which
-% one -- see poss(halt_install_tool(...)) below), so THIS predicate
+% uninstall_tool/deploy_tool/retract_tool analogue of leg_status/9
+% above -- but NOTE the difference from moveto's own rule: reaching
+% "natural completion" is NOT itself a success (unlike moveto's
+% Reason=completed->true) -- *_tool_success(Tool,_)/*_tool_failure
+% (Tool,_) are BOTH possible outcomes of natural completion (the coin
+% flip already resolved which one -- see poss(halt_install_tool(...))
+% below), so THIS predicate
 % only ever sees the ALREADY-DECIDED Reason, never the completed
 % sentinel itself (see earliest_halt/13's own WARNING on why that
 % shared spelling with MoveTo's own completed does NOT share its
@@ -1419,10 +1580,16 @@ tool_leg_status(install_tool_success(_Tool), _Code, true).
 tool_leg_status(uninstall_tool_success(_Tool), _Code, true).
 tool_leg_status(install_tool_failure(_Tool), _Code, false).
 tool_leg_status(uninstall_tool_failure(_Tool), _Code, false).
+tool_leg_status(deploy_tool_success(_Tool), _Code, true).
+tool_leg_status(retract_tool_success(_Tool), _Code, true).
+tool_leg_status(deploy_tool_failure(_Tool), _Code, false).
+tool_leg_status(retract_tool_failure(_Tool), _Code, false).
 tool_leg_status(battery_depleted, _Code, false).
 tool_leg_status(Reason, Code, reactive(Code)) :-
     Reason \= install_tool_success(_), Reason \= uninstall_tool_success(_),
     Reason \= install_tool_failure(_), Reason \= uninstall_tool_failure(_),
+    Reason \= deploy_tool_success(_), Reason \= retract_tool_success(_),
+    Reason \= deploy_tool_failure(_), Reason \= retract_tool_failure(_),
     Reason \= battery_depleted.
 
 % walk_noisy_point(+CP,+T0,+Duration,+Z,+Zt,+T,-X,-Y): position along
@@ -1553,10 +1720,19 @@ now(T0, do(start_install_tool(_,_,_,T0),_)).
 now(T, do(halt_install_tool(T,_,_),_)).
 now(T0, do(start_uninstall_tool(_,_,_,T0),_)).
 now(T, do(halt_uninstall_tool(T,_,_),_)).
+% start_deploy_tool/halt_deploy_tool/start_retract_tool/halt_retract_
+% tool: SAME genuine-clock-advance shape as the install/uninstall pair
+% just above -- deploying/retracting is a fixed-Duration action too.
+now(T0, do(start_deploy_tool(_,_,_,T0),_)).
+now(T, do(halt_deploy_tool(T,_,_),_)).
+now(T0, do(start_retract_tool(_,_,_,T0),_)).
+now(T, do(halt_retract_tool(T,_,_),_)).
 now(T, do(A,S)) :-
     A \= startMoveto(_,_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
     A \= start_install_tool(_,_,_,_), A \= halt_install_tool(_,_,_),
     A \= start_uninstall_tool(_,_,_,_), A \= halt_uninstall_tool(_,_,_),
+    A \= start_deploy_tool(_,_,_,_), A \= halt_deploy_tool(_,_,_),
+    A \= start_retract_tool(_,_,_,_), A \= halt_retract_tool(_,_,_),
     now(T, S).
 
 % haltMoveto(T,Reason): the ways a walk stops other than an interrupt.
@@ -1586,7 +1762,7 @@ now(T, do(A,S)) :-
 % battery drain rate for whichever consumer is calling in, already
 % resolved to a plain number by this predicate's own FIVE callers --
 % poss(haltMoveto(...))/poss(interrupt(...))/verify_safe (MoveTo,
-% tool_moving_drain_rate(Tool,Rate), Mode=0) and poss(halt_install_
+% effective_tool_moving_drain_rate(Tool,S,Rate), Mode=0) and poss(halt_install_
 % tool(...))/poss(halt_uninstall_tool(...)) (install_tool_drain_rate/1
 % or uninstall_tool_drain_rate/1, Mode=1) -- it rides alongside CP/Z/
 % Zt/Zb/B0/Mode into all_trigger_candidates/11, same as every other
@@ -1639,8 +1815,8 @@ poss(haltMoveto(T, Reason, Status), S) :-
     moving(S),
     current_walk(S, CP, Triggers, ActionCode, T0, SPrev),
     hitch(Tool, SPrev),
-    walk_duration(CP, Tool, Duration),
-    tool_moving_drain_rate(Tool, Rate),
+    walk_duration(CP, Tool, SPrev, Duration),
+    effective_tool_moving_drain_rate(Tool, SPrev, Rate),
     z(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Z),
     zt(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Zt),
     zbatt(Zb),
@@ -1756,8 +1932,8 @@ poss(interrupt(T), S) :-
     moving(S),
     current_walk(S, CP, Triggers, T0, SPrev),
     hitch(Tool, SPrev),
-    walk_duration(CP, Tool, Duration),
-    tool_moving_drain_rate(Tool, Rate),
+    walk_duration(CP, Tool, SPrev, Duration),
+    effective_tool_moving_drain_rate(Tool, SPrev, Rate),
     z(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Z),
     zt(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Zt),
     zbatt(Zb),
@@ -1900,10 +2076,14 @@ tool_install_reason(false, Id, install_tool_failure(Id)).
 % and hitch_id(Id,S) (per this action's own request: uninstalling A
 % SPECIFIC tool INSTANCE requires THAT instance -- not just "something
 % of its kind" -- to currently be the one attached; hitch_id/2, not
-% hitch/2, is the fluent that can tell cart1 apart from cart2).
+% hitch/2, is the fluent that can tell cart1 apart from cart2). ALSO
+% \+ deployed(S) -- a tool currently deployed (Section 5d) must be
+% retracted first, per this feature's own request: uninstalling
+% something still lowered into the ground isn't allowed.
 poss(start_uninstall_tool(Id,_Triggers,_ActionCode,T0), S) :-
     \+ moving(S),
     hitch_id(Id, S),
+    \+ deployed(S),
     now(T0Exact, S),
     disc_step_time(Grid),
     quantize_up(T0Exact, Grid, T0).
@@ -1943,6 +2123,114 @@ poss(halt_uninstall_tool(T,Reason,Status), S) :-
 tool_uninstall_reason(true, Id, uninstall_tool_success(Id)).
 tool_uninstall_reason(false, Id, uninstall_tool_failure(Id)).
 
+% poss(start_deploy_tool(Id,Triggers,ActionCode,T0), S): the deploy_
+% tool analogue of poss(start_install_tool(...)) above -- \+ moving(S)
+% (can't deploy mid-walk); hitch_id(Id,S) (Id must ALREADY be attached
+% -- can't lower a tool that isn't installed); tool_instance(Id,plow)
+% (currently restricted to the plow ONLY -- per this feature's own
+% request, "for now"; a future tool kind that can also deploy just
+% needs its own atom added here, or this replaced with a proper
+% deployable-kinds table if the list grows past one); \+ deployed(S)
+% (can't deploy what's already deployed). T0 quantization mirrors every
+% other durative action's own poss/2 (same merge-grid rationale).
+poss(start_deploy_tool(Id,_Triggers,_ActionCode,T0), S) :-
+    \+ moving(S),
+    hitch_id(Id, S),
+    tool_instance(Id, plow),
+    \+ deployed(S),
+    now(T0Exact, S),
+    disc_step_time(Grid),
+    quantize_up(T0Exact, Grid, T0).
+
+% poss(halt_deploy_tool(T,Reason,Status), S): the deploy_tool analogue
+% of poss(halt_install_tool(...)) above -- deploying_tool(Id,S) checked
+% EXPLICITLY (same redundant-but-explicit style), tool_instance(Id,
+% Kind) joined through for deploy_tool_duration/2 (KIND-keyed, same
+% reasoning install_tool_duration/2 already has -- every plow takes the
+% same time to deploy), deploy_tool_drain_rate/1 its own dedicated
+% action-specific rate (mirroring install_tool_drain_rate/1). Same TWO-
+% clause "completed is a sentinel, not a real Reason" contract as
+% poss(halt_install_tool(...)).
+poss(halt_deploy_tool(T,Reason,Status), S) :-
+    deploying_tool(Id, S),
+    current_deploy_tool(S, Id, Triggers, ActionCode, T0, SPrev),
+    tool_instance(Id, Kind),
+    deploy_tool_duration(Kind, Duration),
+    deploy_tool_drain_rate(Rate),
+    zbatt(Zb),
+    leg_start_battery(T0, SPrev, B0),
+    earliest_halt(_CP,Triggers,T0,Duration,_Z,_Zt,Zb,B0,Rate,1, completed,T,_Code),
+    deploy_tool_result(S, ActionCode, CoinStatus),
+    tool_deploy_reason(CoinStatus, Id, Reason0),
+    tool_leg_status(Reason0, none, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+poss(halt_deploy_tool(T,Reason,Status), S) :-
+    deploying_tool(Id, S),
+    current_deploy_tool(S, Id, Triggers, ActionCode, T0, SPrev),
+    tool_instance(Id, Kind),
+    deploy_tool_duration(Kind, Duration),
+    deploy_tool_drain_rate(Rate),
+    zbatt(Zb),
+    leg_start_battery(T0, SPrev, B0),
+    earliest_halt(_CP,Triggers,T0,Duration,_Z,_Zt,Zb,B0,Rate,1, Reason0,T,Code),
+    Reason0 \= completed,
+    tool_leg_status(Reason0, Code, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+
+tool_deploy_reason(true, Id, deploy_tool_success(Id)).
+tool_deploy_reason(false, Id, deploy_tool_failure(Id)).
+
+% poss(start_retract_tool(Id,Triggers,ActionCode,T0), S): the mirror
+% image of poss(start_deploy_tool(...)) above -- \+ moving(S), Id
+% currently hitched AND deployed(S) (can't retract what isn't
+% deployed). No tool_instance(Id,plow) check needed here explicitly --
+% deployed(S) can only ever be true for a plow in the first place (the
+% ONLY way it becomes true is via a successful halt_deploy_tool, which
+% itself already required tool_instance(Id,plow) -- see poss(start_
+% deploy_tool(...)) above), so requiring deployed(S) already implies it.
+poss(start_retract_tool(Id,_Triggers,_ActionCode,T0), S) :-
+    \+ moving(S),
+    hitch_id(Id, S),
+    deployed(S),
+    now(T0Exact, S),
+    disc_step_time(Grid),
+    quantize_up(T0Exact, Grid, T0).
+
+% poss(halt_retract_tool(T,Reason,Status), S): the mirror image of
+% poss(halt_deploy_tool(...)) above, retract_tool_result/3 (this
+% problem's own config.yaml, tool.retract.success_probability) in
+% place of deploy_tool_result/3, and retract_tool_duration/2 (also
+% KIND-keyed, same tool_instance/2 join) in place of deploy_tool_
+% duration/2.
+poss(halt_retract_tool(T,Reason,Status), S) :-
+    retracting_tool(Id, S),
+    current_retract_tool(S, Id, Triggers, ActionCode, T0, SPrev),
+    tool_instance(Id, Kind),
+    retract_tool_duration(Kind, Duration),
+    retract_tool_drain_rate(Rate),
+    zbatt(Zb),
+    leg_start_battery(T0, SPrev, B0),
+    earliest_halt(_CP,Triggers,T0,Duration,_Z,_Zt,Zb,B0,Rate,1, completed,T,_Code),
+    retract_tool_result(S, ActionCode, CoinStatus),
+    tool_retract_reason(CoinStatus, Id, Reason0),
+    tool_leg_status(Reason0, none, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+poss(halt_retract_tool(T,Reason,Status), S) :-
+    retracting_tool(Id, S),
+    current_retract_tool(S, Id, Triggers, ActionCode, T0, SPrev),
+    tool_instance(Id, Kind),
+    retract_tool_duration(Kind, Duration),
+    retract_tool_drain_rate(Rate),
+    zbatt(Zb),
+    leg_start_battery(T0, SPrev, B0),
+    earliest_halt(_CP,Triggers,T0,Duration,_Z,_Zt,Zb,B0,Rate,1, Reason0,T,Code),
+    Reason0 \= completed,
+    tool_leg_status(Reason0, Code, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+
+tool_retract_reason(true, Id, retract_tool_success(Id)).
+tool_retract_reason(false, Id, retract_tool_failure(Id)).
+
 % ---------------------------------------------------------------
 % 6. THE POSITION FLUENT -- pure situation-calculus regression.
 %    at(X,Y,T,S): position of the robot at time T in situation S.
@@ -1963,7 +2251,7 @@ at(X,Y,_,s0) :- start(X,Y).
 
 at(X,Y,T, do(startMoveto(ControlPoints,Triggers,ActionCode,T0), S)) :-
     hitch(Tool, S),
-    walk_duration(ControlPoints, Tool, Duration),
+    walk_duration(ControlPoints, Tool, S, Duration),
     z(do(startMoveto(ControlPoints,Triggers,ActionCode,T0),S), Z),
     zt(do(startMoveto(ControlPoints,Triggers,ActionCode,T0),S), Zt),
     walk_noisy_point(ControlPoints, T0, Duration, Z, Zt, T, X, Y).
@@ -2086,6 +2374,10 @@ primitive_action(start_install_tool(_,_,_,_)).
 primitive_action(halt_install_tool(_,_,_)).
 primitive_action(start_uninstall_tool(_,_,_,_)).
 primitive_action(halt_uninstall_tool(_,_,_)).
+primitive_action(start_deploy_tool(_,_,_,_)).
+primitive_action(halt_deploy_tool(_,_,_)).
+primitive_action(start_retract_tool(_,_,_,_)).
+primitive_action(halt_retract_tool(_,_,_)).
 
 do_action(A, S, do(A,S)) :- primitive_action(A), poss(A, S).
 
@@ -2223,6 +2515,17 @@ do_node(install_tool_leg(Tool,Triggers,ActionCode), S, S1, Status) :-
 do_node(uninstall_tool_leg(Tool,Triggers,ActionCode), S, S1, Status) :-
     do_action(start_uninstall_tool(Tool,Triggers,ActionCode,_T0), S, S2),
     do_action(halt_uninstall_tool(_T,_Reason,Status), S2, S1).
+
+% do_node(deploy_tool_leg(...))/do_node(retract_tool_leg(...)): the
+% deploy_tool/retract_tool analogues of do_node(install_tool_leg(...))/
+% do_node(uninstall_tool_leg(...)) just above -- IDENTICAL shape.
+do_node(deploy_tool_leg(Tool,Triggers,ActionCode), S, S1, Status) :-
+    do_action(start_deploy_tool(Tool,Triggers,ActionCode,_T0), S, S2),
+    do_action(halt_deploy_tool(_T,_Reason,Status), S2, S1).
+
+do_node(retract_tool_leg(Tool,Triggers,ActionCode), S, S1, Status) :-
+    do_action(start_retract_tool(Tool,Triggers,ActionCode,_T0), S, S2),
+    do_action(halt_retract_tool(_T,_Reason,Status), S2, S1).
 
 % -- PLANNING actions: deliberately NOT part of the full action theory
 %    -- no primitive_action/1 entry, no Poss axiom, no do_action call
@@ -2808,7 +3111,7 @@ holds(line_of_sight_clear(ObstacleId,GX,GY), S) :-
 holds(obstacle_on_path(Threshold), S) :-
     current_walk(S, CP, Triggers, T0, SPrev),
     hitch(Tool, SPrev),
-    walk_duration(CP, Tool, Duration),
+    walk_duration(CP, Tool, SPrev, Duration),
     z(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Z),
     zt(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Zt),
     now(T, S), at(X,Y,T,S),
@@ -3094,6 +3397,14 @@ outcome_entry(halt_uninstall_tool(_,Reason,_), Code-Pattern) :-
     Reason =.. [Functor|Args],
     append(Args0, [Code], Args),
     Pattern =.. [Functor|Args0].
+outcome_entry(halt_deploy_tool(_,Reason,_), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
+outcome_entry(halt_retract_tool(_,Reason,_), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
 
 % history_outcomes(+S, -Entries): every outcome_entry/2 found ANYWHERE
 % in S's own history, oldest-first -- the one GENERIC pass behind
@@ -3183,7 +3494,7 @@ last_action_time(do(haltMoveto(T,_,_),_), _, _, T).
 last_action_time(do(interrupt(T),_), _, _, T).
 last_action_time(do(startMoveto(_,_,_,_),SPrev), CP, T0, TEnd) :-
     hitch(Tool, SPrev),
-    walk_duration(CP, Tool, Duration),
+    walk_duration(CP, Tool, SPrev, Duration),
     TEnd is T0 + Duration.
 last_action_time(do(A,S), CP, T0, TEnd) :-
     A \= haltMoveto(_,_,_), A \= interrupt(_), A \= startMoveto(_,_,_,_),
@@ -3203,7 +3514,7 @@ sample_walk_frac(I, S, WalkFrac) :-
     plan_time_span(S, T0, TEnd),
     current_walk(S, CP, T0, SPrev),
     hitch(Tool, SPrev),
-    walk_duration(CP, Tool, Duration),
+    walk_duration(CP, Tool, SPrev, Duration),
     sample_frac(I, Frac),
     T is T0 + (TEnd-T0)*Frac,
     WalkFrac is (T - T0) / Duration.
@@ -3252,6 +3563,8 @@ halted_with(Reason, do(planned(_Algorithm,Reason), _)).
 halted_with(Reason, do(take_sample(_SampleId,_ActionCode,Reason,_Status), _)).
 halted_with(Reason, do(halt_install_tool(_,Reason,_), _)).
 halted_with(Reason, do(halt_uninstall_tool(_,Reason,_), _)).
+halted_with(Reason, do(halt_deploy_tool(_,Reason,_), _)).
+halted_with(Reason, do(halt_retract_tool(_,Reason,_), _)).
 halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 
 % visited(+Loc, +Tol, +S): TRUE iff the robot ACTUALLY ARRIVED at
@@ -3298,8 +3611,13 @@ visited(Loc, Tol, do(_A, S)) :- visited(Loc, Tol, S).
 % plough_cell_size/1, this problem's own config.yaml ploughing.
 % cell_size, deliberately coarser than disc_step_position -- see
 % config_to_prolog.py's own note) was swept by the robot's ACTUAL path
-% during some MoveTo leg while the plow was equipped, anywhere in S's
-% history. Same monotonic "search the whole history, no frame axiom
+% during some MoveTo leg while the plow was BOTH equipped AND DEPLOYED
+% (hitch(plow,SPrev), deployed(SPrev) -- see Section 5c/5d) -- merely
+% having the plow installed is not enough, per this feature's own
+% request: nothing gets marked ploughed between InstallTool and the
+% first DeployTool, or after RetractTool, only in between a successful
+% deploy and its matching retract. Anywhere in S's history. Same
+% monotonic "search the whole history, no frame axiom
 % needed beyond a plain pass-through" shape as visited/3 above and
 % halted_with/2 -- once true for a situation, stays true for every
 % situation built on top of it.
@@ -3334,7 +3652,8 @@ visited(Loc, Tol, do(_A, S)) :- visited(Loc, Tol, S).
 ploughed(Cx, Cy, do(haltMoveto(T1,_Reason,_Status), S)) :-
     current_walk(S, CP, Triggers, ActionCode, T0, SPrev),
     hitch(plow, SPrev),
-    walk_duration(CP, plow, Duration),
+    deployed(SPrev),
+    walk_duration(CP, plow, SPrev, Duration),
     z(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Z),
     zt(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Zt),
     Elapsed is T1 - T0,
@@ -3344,7 +3663,8 @@ ploughed(Cx, Cy, do(haltMoveto(T1,_Reason,_Status), S)) :-
 ploughed(Cx, Cy, do(interrupt(T1), S)) :-
     current_walk(S, CP, Triggers, ActionCode, T0, SPrev),
     hitch(plow, SPrev),
-    walk_duration(CP, plow, Duration),
+    deployed(SPrev),
+    walk_duration(CP, plow, SPrev, Duration),
     z(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Z),
     zt(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Zt),
     Elapsed is T1 - T0,
@@ -3726,7 +4046,7 @@ first_hit(I) :-
     S = do(haltMoveto(Tcross,crashed(_ObstacleId,_ActionCode),_), _),
     current_walk(S, CP, _Triggers, T0, SPrev),
     hitch(Tool, SPrev),
-    walk_duration(CP, Tool, Duration),
+    walk_duration(CP, Tool, SPrev, Duration),
     sample_index_for_time(Tcross,T0,Duration,I).
 
 % -- Feature 2a analogue: P(the exact collision, if any, falls at or
@@ -3736,7 +4056,7 @@ hit_by(N) :-
     S = do(haltMoveto(Tcross,crashed(_ObstacleId,_ActionCode),_), _),
     current_walk(S, CP, _Triggers, T0, SPrev),
     hitch(Tool, SPrev),
-    walk_duration(CP, Tool, Duration),
+    walk_duration(CP, Tool, SPrev, Duration),
     sample_index_for_time(Tcross,T0,Duration,I),
     I =< N.
 
@@ -3790,8 +4110,8 @@ verify_safe :-
     final_situation(S),
     current_walk(S, CP, Triggers, T0, SPrev),
     hitch(Tool, SPrev),
-    walk_duration(CP, Tool, Duration),
-    tool_moving_drain_rate(Tool, Rate),
+    walk_duration(CP, Tool, SPrev, Duration),
+    effective_tool_moving_drain_rate(Tool, SPrev, Rate),
     leg_start_battery(T0, SPrev, B0),
     earliest_halt(CP,Triggers,T0,Duration,0.0,0.0,0.0,B0,Rate,0, completed,_,_).
 

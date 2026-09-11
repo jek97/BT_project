@@ -222,6 +222,30 @@ def _tool_moveto_param_facts(functor, param_key, equipped_cfg, base_value):
     return "\n".join(lines)
 
 
+def _tool_deployed_param_facts(functor, param_key, equipped_cfg, base_value):
+    """Like _tool_moveto_param_facts above, but for the DEPLOYED-
+    specific variant of a MoveTo parameter (e.g. functor=
+    "tool_speed_deployed" for param_key="speed") -- each kind's own
+    tool.equipped.<kind>.deployed_<param_key> config key, defaulting to
+    THAT SAME KIND's own regular <param_key> value (not just the flat
+    base_value free/1 itself uses) if not separately overridden, so
+    "deploying changes nothing" is the default unless config.yaml says
+    otherwise -- a safer default than silently reverting to the global
+    base and ignoring an already-customized per-kind speed. Emitted for
+    free too (mirroring _tool_moveto_param_facts's own shape exactly),
+    even though deployed(S) can never actually be true while hitch(S)=
+    free (deploying requires something already hitched) -- harmless,
+    never-consulted, same reasoning cart's own deployed value is
+    harmless (only plow can currently ever deploy at all)."""
+    lines = [f"{functor}(free, {_format_number(base_value)})."]
+    for tool in _TOOL_KINDS:
+        tool_cfg = equipped_cfg.get(tool, {})
+        regular_value = float(tool_cfg.get(param_key, base_value))
+        deployed_value = float(tool_cfg.get(f"deployed_{param_key}", regular_value))
+        lines.append(f"{functor}({tool}, {_format_number(deployed_value)}).")
+    return "\n".join(lines)
+
+
 def _tool_duration_facts(functor, duration_cfg):
     """Build one Duration fact per tool kind, e.g. for
     functor="install_tool_duration":
@@ -345,6 +369,33 @@ def render_prolog(config):
     uninstall_drain_rate = float(
         uninstall_cfg.get("drain_rate", battery_cfg["idle_drain_rate"]))
 
+    # tool.deploy/tool.retract -- SAME shape as tool.install/tool.
+    # uninstall just above (own success_probability, own duration_
+    # seconds per kind, own drain_rate), currently only ever actually
+    # exercised for the plow (basic_action_theory.pl's own poss(start_
+    # deploy_tool(...)) restricts it to tool_instance(Id,plow) at the
+    # Prolog level -- this file has no reason to also special-case it
+    # here, generating the SAME KIND-keyed facts every other tool
+    # action already gets is simpler than carving out an exception).
+    # Same "optional section, sensible defaults" treatment as tool.
+    # install/tool.uninstall.
+    deploy_cfg = config.get("tool", {}).get("deploy", {})
+    retract_cfg = config.get("tool", {}).get("retract", {})
+    deploy_success_probability = float(
+        deploy_cfg.get("success_probability", _DEFAULT_TOOL_SUCCESS_PROBABILITY))
+    retract_success_probability = float(
+        retract_cfg.get("success_probability", _DEFAULT_TOOL_SUCCESS_PROBABILITY))
+    deploy_tool_result_block = _binary_result_block("deploy_tool_result", deploy_success_probability)
+    retract_tool_result_block = _binary_result_block("retract_tool_result", retract_success_probability)
+    deploy_tool_duration_facts = _tool_duration_facts(
+        "deploy_tool_duration", deploy_cfg.get("duration_seconds", {}))
+    retract_tool_duration_facts = _tool_duration_facts(
+        "retract_tool_duration", retract_cfg.get("duration_seconds", {}))
+    deploy_drain_rate = float(
+        deploy_cfg.get("drain_rate", battery_cfg["idle_drain_rate"]))
+    retract_drain_rate = float(
+        retract_cfg.get("drain_rate", battery_cfg["idle_drain_rate"]))
+
     # tool.equipped.<cart|plow>.speed / .moving_drain_rate: the MoveTo
     # parameters used WHILE that tool is equipped (hitch(Tool,S) --
     # see basic_action_theory.pl's own walk_duration/3 and tool_
@@ -358,6 +409,25 @@ def render_prolog(config):
         "tool_speed", "speed", equipped_cfg, config["motion"]["speed"])
     tool_moving_drain_rate_facts = _tool_moveto_param_facts(
         "tool_moving_drain_rate", "moving_drain_rate", equipped_cfg,
+        battery_cfg["moving_drain_rate"])
+
+    # tool.equipped.<kind>.deployed_speed / .deployed_moving_drain_rate
+    # -- the MoveTo parameters used while that tool is BOTH equipped
+    # AND DEPLOYED (basic_action_theory.pl's own effective_tool_speed/3,
+    # effective_tool_moving_drain_rate/3 -- consulted instead of tool_
+    # speed/tool_moving_drain_rate themselves whenever deployed(S)
+    # holds), per this feature's own request ("the velocity and drain
+    # rate of the battery have one more value" between DeployTool and
+    # RetractTool). Each kind's own default is THAT SAME KIND's regular
+    # (non-deployed) value, not just the global motion.speed/battery.
+    # moving_drain_rate base -- "deploying changes nothing" unless
+    # config.yaml says otherwise, a safer default than silently
+    # reverting to the global base and ignoring an already-customized
+    # per-kind speed.
+    tool_speed_deployed_facts = _tool_deployed_param_facts(
+        "tool_speed_deployed", "speed", equipped_cfg, config["motion"]["speed"])
+    tool_moving_drain_rate_deployed_facts = _tool_deployed_param_facts(
+        "tool_moving_drain_rate_deployed", "moving_drain_rate", equipped_cfg,
         battery_cfg["moving_drain_rate"])
 
     # tool.instances -- the tool INSTANCES this problem actually has, as
@@ -477,17 +547,29 @@ def render_prolog(config):
         "",
         install_tool_duration_facts,
         uninstall_tool_duration_facts,
+        deploy_tool_duration_facts,
+        retract_tool_duration_facts,
         f"install_tool_drain_rate({_format_number(install_drain_rate)}).",
         f"uninstall_tool_drain_rate({_format_number(uninstall_drain_rate)}).",
+        f"deploy_tool_drain_rate({_format_number(deploy_drain_rate)}).",
+        f"retract_tool_drain_rate({_format_number(retract_drain_rate)}).",
         f"install_tool_range({_format_number(install_range)}).",
         "",
         install_tool_result_block,
         "",
         uninstall_tool_result_block,
         "",
+        deploy_tool_result_block,
+        "",
+        retract_tool_result_block,
+        "",
         tool_speed_facts,
         "",
         tool_moving_drain_rate_facts,
+        "",
+        tool_speed_deployed_facts,
+        "",
+        tool_moving_drain_rate_deployed_facts,
         "",
     ]
     # tool_position_facts is the one block above that can genuinely be

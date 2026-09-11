@@ -615,6 +615,111 @@ actions:
         type: bool
         description: "true iff reason is retract_tool_success(...)."
 
+  # ----------------------------------------------------------------
+  # ToolPosition / ToolsOfKind / NearestToolOfKind -- correspond to
+  # tool_position_query(Id,Position,ActionCode)/tools_of_kind_query
+  # (Kind,Tools,ActionCode)/nearest_tool_of_kind_query(Kind,Id,Position,
+  # ActionCode) in basic_action_theory.pl. Pure, side-effect-free QUERY
+  # leaves against tool_position/4, tools_of_kind/5, nearest_tool_of_
+  # kind/6 (Section 5c/5d) -- INSTANTANEOUS, like PlanWith/TakeSample,
+  # but with no precondition of their own to state (unlike TakeSample,
+  # they can be asked ANYTIME, not just \+ moving(S)) and no world-
+  # changing effect at all (unlike TakeSample's own genuine coin flip,
+  # these never draw new randomness -- asking twice in the same
+  # situation always reports the SAME answer).
+  #
+  # NearestToolOfKind is NOT simply "ToolPosition then ToolsOfKind
+  # chained in the tree" -- picking the CLOSEST candidate needs an
+  # argmin fold (findall/3 + a hand-written min_candidate/2 in the
+  # theory, since ProbLog has no aggregate_all/3) that has no BT.cpp-
+  # tree-composable equivalent, so it is its own self-contained leaf --
+  # even though its own Prolog implementation internally composes
+  # tools_of_kind/5 (which itself composes tool_instance/2 with tool_
+  # position/4), that composition happens ENTIRELY inside one Prolog
+  # predicate, not across multiple tree nodes.
+  # ----------------------------------------------------------------
+  - id: ToolPosition
+    prolog_action: tool_position_query
+    description: >
+      Looks up WHERE tool instance `id` currently sits. Succeeds
+      (status=true) iff it's a known instance (config.yaml tool.
+      instances) that is NOT currently hitched -- a hitched tool's
+      position is wherever the robot is, not a separate thing to track,
+      so this fails for one (see basic_action_theory.pl's own
+      tool_position/4 note).
+    ports:
+      - name: id
+        direction: input
+        type: std::string
+        required: true
+        description: "A tool INSTANCE id, e.g. \"cart1\" -- a literal, not yet blackboard-wireable."
+      - name: position
+        direction: output
+        type: Point
+        description: "Bound to the tool's own current (X,Y) if found."
+      - name: reason
+        direction: output
+        type: std::string
+        description: "tool_position_found(Id) or tool_position_unavailable(Id)."
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is tool_position_found(...)."
+
+  - id: ToolsOfKind
+    prolog_action: tools_of_kind_query
+    description: >
+      Lists every instance of `kind` that currently has a position
+      (i.e. is not hitched). Succeeds (status=true) iff at least one
+      such instance exists.
+    ports:
+      - name: kind
+        direction: input
+        type: std::string
+        required: true
+        description: "cart, plow, or any future kind -- not validated against a fixed set here (this translator never parses config.yaml)."
+      - name: tools
+        direction: output
+        type: std::string
+        description: "Bound to a Prolog list of tool(Id,point(X,Y)) terms, one per matching free instance."
+      - name: reason
+        direction: output
+        type: std::string
+        description: "tools_of_kind_found(Kind) or tools_of_kind_empty(Kind)."
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is tools_of_kind_found(...)."
+
+  - id: NearestToolOfKind
+    prolog_action: nearest_tool_of_kind_query
+    description: >
+      Picks whichever free instance of `kind` is closest to the
+      robot's own CURRENT position right now. Succeeds (status=true)
+      iff `kind` has at least one free instance.
+    ports:
+      - name: kind
+        direction: input
+        type: std::string
+        required: true
+        description: "cart, plow, or any future kind -- same validation as ToolsOfKind's own kind port."
+      - name: id
+        direction: output
+        type: std::string
+        description: "Bound to the closest matching instance's own id."
+      - name: position
+        direction: output
+        type: Point
+        description: "Bound to that instance's own current (X,Y)."
+      - name: reason
+        direction: output
+        type: std::string
+        description: "nearest_tool_found(Kind,Id) or no_tool_of_kind(Kind)."
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is nearest_tool_found(...)."
+
 conditions:
 
   # ----------------------------------------------------------------
@@ -911,6 +1016,37 @@ conditions:
         type: double
         required: true
         description: "Value threshold, 0-10."
+
+  # ----------------------------------------------------------------
+  # holds(hitched,S)/holds(hitched(Kind),S) in basic_action_theory.pl --
+  # a thin BT-tree-facing wrapper around hitch/2 (Section 5c), which is
+  # a plain fluent, not itself holds(...)-wrapped. NON-CONTINUOUS (see
+  # bt_to_prolog.py's own _NON_CONTINUOUS_CONDITIONS note) -- hitch/2 is
+  # provably constant for the whole span of any one MoveTo leg.
+  # ----------------------------------------------------------------
+  - id: Hitched
+    prolog_condition: hitched
+    description: >
+      True iff a tool is currently attached (kind omitted), or
+      specifically a tool of `kind` is (kind given).
+    ports:
+      - name: kind
+        direction: input
+        type: std::string
+        required: false
+        description: "cart or plow -- OMIT to check \"is anything attached\" instead of one specific kind."
+
+  # ----------------------------------------------------------------
+  # holds(deployed,S) in basic_action_theory.pl -- a thin BT-tree-
+  # facing wrapper around deployed/1 (Section 5d). No ports -- only one
+  # tool can ever be hitched at a time, so there is nothing to
+  # parametrize (unlike Hitched's own optional kind). Same NON-
+  # CONTINUOUS treatment as Hitched above, for the same reason.
+  # ----------------------------------------------------------------
+  - id: Deployed
+    prolog_condition: deployed
+    description: "True iff the currently-hitched tool is deployed (lowered), not just attached."
+    ports: []
 
   # ----------------------------------------------------------------
   # holds(line_of_sight_clear(ObstacleId,GX,GY), S) in

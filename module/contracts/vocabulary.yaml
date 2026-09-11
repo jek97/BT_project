@@ -150,6 +150,79 @@ predicates:
       checked directly at S, e.g. "goal_formula(S) :- hitch(plow,S)."
       for "the plow is attached by the end of the mission."
 
+  - name: hitch_id
+    arity: 2
+    situation_arg: 2
+    args:
+      - {position: 1, name: Id, type: atom, description: "free, or the specific tool INSTANCE id currently attached (e.g. cart1)."}
+      - {position: 2, name: S, type: situation, description: "The situation to check at."}
+    description: >
+      Like hitch/2, but reports the specific tool INSTANCE id (e.g.
+      "cart1") rather than just its kind ("cart") -- can tell cart1
+      apart from cart2. Same state machine, same "plain persistent
+      fluent" shape.
+
+  - name: deployed
+    arity: 1
+    situation_arg: 1
+    args:
+      - {position: 1, name: S, type: situation, description: "The situation to check at."}
+    description: >
+      TRUE iff the currently-hitched tool is DEPLOYED (lowered), not
+      just attached -- starts false, flips true only on a SUCCESSFUL
+      DeployTool halt, back to false only on a SUCCESSFUL RetractTool
+      halt (see basic_action_theory.pl's own deployed/1 note, Section
+      5d). No Id/Kind argument -- only one tool can ever be hitched at
+      a time. e.g. "goal_formula(S) :- \+ deployed(S)." for "nothing
+      left lowered into the ground by the end of the mission."
+
+  - name: tool_position
+    arity: 4
+    situation_arg: 4
+    args:
+      - {position: 1, name: Id, type: atom, description: "A tool instance id, e.g. cart1."}
+      - {position: 2, name: GX, type: float, description: "Its current X position, metres."}
+      - {position: 3, name: GY, type: float, description: "Its current Y position, metres."}
+      - {position: 4, name: S, type: situation, description: "The situation to check at."}
+    description: >
+      TRUE iff tool instance Id currently sits at (GX,GY) -- wherever it
+      started (config.yaml tool.instances) or was last dropped by a
+      successful UninstallTool. FAILS outright while Id is currently
+      hitched (its position is trivially wherever the robot is, at/4,
+      not a separate thing to track) -- see basic_action_theory.pl's
+      own tool_position/4 note, Section 5c.
+
+  - name: tools_of_kind
+    arity: 5
+    situation_arg: 2
+    args:
+      - {position: 1, name: Kind, type: atom, description: "cart or plow."}
+      - {position: 2, name: S, type: situation, description: "The situation to check at."}
+      - {position: 3, name: Id, type: atom, description: "A matching instance's own id."}
+      - {position: 4, name: GX, type: float, description: "That instance's current X position, metres."}
+      - {position: 5, name: GY, type: float, description: "That instance's current Y position, metres."}
+    description: >
+      Nondeterministically enumerates every instance of Kind that
+      CURRENTLY has a position (i.e. is not hitched) -- composes
+      tool_instance/2 with tool_position/4 above. In a goal formula,
+      use findall/3 around it to collect every candidate at once.
+
+  - name: nearest_tool_of_kind
+    arity: 6
+    situation_arg: 2
+    args:
+      - {position: 1, name: Kind, type: atom, description: "cart or plow."}
+      - {position: 2, name: S, type: situation, description: "The situation to check at."}
+      - {position: 3, name: Id, type: atom, description: "The CLOSEST matching instance's own id."}
+      - {position: 4, name: GX, type: float, description: "Its current X position, metres."}
+      - {position: 5, name: GY, type: float, description: "Its current Y position, metres."}
+      - {position: 6, name: Dist, type: float, description: "Distance from the robot's own current position, metres."}
+    description: >
+      Composes tools_of_kind/5 above with the robot's own current
+      position (now/2+at/4) to pick whichever free instance of Kind is
+      closest right now -- fails outright if Kind has no free instance
+      at all.
+
   - name: halted_with
     arity: 2
     situation_arg: 2

@@ -672,6 +672,25 @@ deployed(do(A,S)) :-
 % currently equipped" so the fluent goes silent (fails) for exactly as
 % long as Id stays attached, per this feature's own request, rather
 % than continuing to report a now-meaningless frozen value.
+%
+% tool_instance/2 and tool_start_position/3 THEMSELVES are pure config
+% data (config_to_prolog.py's own tool.instances -- see that file's own
+% note), never defined by a real clause anywhere in THIS file -- a
+% problem whose config.yaml has no tool.instances at all (or an empty
+% list) then has ZERO facts for either, anywhere in the whole consulted
+% program. ProbLog's own engine treats that as an outright "unknown
+% procedure" ERROR (not a graceful failure) the moment anything calls
+% either one -- unlike ordinary Prolog, ProbLog's parser also doesn't
+% support a ':- dynamic Name/Arity.' declaration to pre-empt this (tried
+% directly, confirmed unsupported). The fix is the classic Prolog
+% workaround instead: one placeholder clause per predicate whose own
+% body can never succeed, purely so the predicate is "known" to the
+% engine -- any REAL config-generated facts simply add MORE clauses
+% alongside this one, and a query against an unknown id/kind still
+% fails cleanly, exactly as intended, instead of throwing.
+tool_instance(no_tool_instances_configured, no_tool_instances_configured) :- fail.
+tool_start_position(no_tool_instances_configured, 0.0, 0.0) :- fail.
+
 tool_position(Id, GX, GY, s0) :-
     tool_start_position(Id, GX, GY).
 tool_position(Id, GX, GY, do(halt_uninstall_tool(T,uninstall_tool_success(Id,_ActionCode),true), S)) :-
@@ -2758,6 +2777,46 @@ do_node(planWith(Algorithm, point(GX,GY), CP, ActionCode), S,
     Reason1 =.. [Functor, Algorithm, point(GX,GY)],
     tag_reason(Reason1, ActionCode, Reason).
 
+% -- QUERY leaves: ToolPosition/ToolsOfKind/NearestToolOfKind --------
+% Same "pure computation, no primitive_action/poss layer" shape as
+% planWith/4 just above and cond(C,Code) further down -- read-only,
+% side-effect-free lookups against tool_position/4, tools_of_kind/5,
+% nearest_tool_of_kind/6 (Section 5d), with no precondition of their
+% own to state (they can be asked ANYTIME, unlike a durative action).
+% Each gets its OWN distinct marker functor (tool_position_result/1,
+% tools_of_kind_result/1, nearest_tool_result/1), mirroring planned/2's
+% own "record what happened" role, but kept SEPARATE per query type
+% (rather than one shared marker the way every PlanWith algorithm
+% shares planned/2) since these three have different output shapes --
+% sharing one marker would make halted_with/2's own pattern-match
+% ambiguous across them. TWO mutually exclusive clauses each (found vs
+% not), same "no if-then-else" convention every other multi-case
+% predicate in this file already uses.
+do_node(tool_position_query(Id,Pos,ActionCode), S, do(tool_position_result(Reason), S), true) :-
+    tool_position(Id, GX, GY, S),
+    Pos = point(GX,GY),
+    tag_reason(tool_position_found(Id), ActionCode, Reason).
+do_node(tool_position_query(Id,_Pos,ActionCode), S, do(tool_position_result(Reason), S), false) :-
+    \+ tool_position(Id, _, _, S),
+    tag_reason(tool_position_unavailable(Id), ActionCode, Reason).
+
+do_node(tools_of_kind_query(Kind,Tools,ActionCode), S, do(tools_of_kind_result(Reason), S), true) :-
+    findall(tool(Id,point(GX,GY)), tools_of_kind(Kind,S,Id,GX,GY), Tools),
+    Tools \= [],
+    tag_reason(tools_of_kind_found(Kind), ActionCode, Reason).
+do_node(tools_of_kind_query(Kind,Tools,ActionCode), S, do(tools_of_kind_result(Reason), S), false) :-
+    findall(tool(Id,point(GX,GY)), tools_of_kind(Kind,S,Id,GX,GY), Tools),
+    Tools == [],
+    tag_reason(tools_of_kind_empty(Kind), ActionCode, Reason).
+
+do_node(nearest_tool_of_kind_query(Kind,Id,Pos,ActionCode), S, do(nearest_tool_result(Reason), S), true) :-
+    nearest_tool_of_kind(Kind, S, Id, GX, GY, _Dist),
+    Pos = point(GX,GY),
+    tag_reason(nearest_tool_found(Kind,Id), ActionCode, Reason).
+do_node(nearest_tool_of_kind_query(Kind,_Id,_Pos,ActionCode), S, do(nearest_tool_result(Reason), S), false) :-
+    \+ nearest_tool_of_kind(Kind, S, _, _, _, _),
+    tag_reason(no_tool_of_kind(Kind), ActionCode, Reason).
+
 % planned_with(+Algorithm, +Reason, +S): the direct parallel to
 % halted_with/2, for the (now-recorded) planning marker. Searches the
 % WHOLE history, so it can distinguish which of SEVERAL planning
@@ -3069,6 +3128,35 @@ holds(sample_value_over(SampleId,Threshold), S) :-
 sample_value_below(SampleId, Threshold, S) :- holds(sample_value_below(SampleId,Threshold), S).
 sample_value_equal(SampleId, Threshold, S) :- holds(sample_value_equal(SampleId,Threshold), S).
 sample_value_over(SampleId, Threshold, S) :- holds(sample_value_over(SampleId,Threshold), S).
+
+% hitched / hitched(Kind): the BT-tree-facing CONDITION wrapper around
+% the ALREADY-existing hitch/2 fluent (Section 5c) -- hitch/2 itself is
+% a plain relational fluent, not holds(...)-wrapped, so a cond(C,Code)
+% BT leaf (which always dispatches through holds/2) needs this thin
+% bridge to use it, the same reason sample_value_below/3's own holds(
+% ...) clause exists alongside the bare wrapper, just in the opposite
+% direction here (bare fluent -> holds(...), not the other way round).
+% hitched (no argument) is TRUE iff ANYTHING is currently attached
+% (\+ hitch(free,S)) -- "is the hitch busy". hitched(Kind) checks ONE
+% SPECIFIC kind instead (cart/plow) -- "is it busy WITH THIS kind".
+% Both are NON-CONTINUOUS (see bt_to_prolog.py's own _NON_CONTINUOUS_
+% CONDITIONS note) -- hitch/2 is PROVABLY constant for the whole span
+% of any single MoveTo leg (only a successful (un)install can change
+% it, and both require \+ moving(S) to even start), so there is
+% nothing for a reactive crossing-search to watch mid-leg.
+holds(hitched, S) :- \+ hitch(free, S).
+holds(hitched(Kind), S) :- hitch(Kind, S).
+
+% deployed (bare atom, zero-arg CONDITION term -- NOT the same thing as
+% the deployed/1 FLUENT it wraps, disambiguated by arity/position the
+% same way every other bare-atom condition already is): the BT-tree-
+% facing wrapper around deployed/1 (Section 5d), same reasoning as
+% hitched/0 above. No Kind argument -- only one tool can ever be
+% hitched at a time, so "is the CURRENTLY-hitched tool deployed" needs
+% no further qualification, mirroring deployed/1's own shape exactly.
+% Also NON-CONTINUOUS, for the same reason hitched/0 is (deploy_tool/
+% retract_tool also require \+ moving(S) to start).
+holds(deployed, S) :- deployed(S).
 
 % obstacle_in_bound(Threshold): true iff the CURRENT position (at the
 % current time, via now/2) is within Threshold of ANY obstacle. Same
@@ -3405,6 +3493,18 @@ outcome_entry(halt_retract_tool(_,Reason,_), Code-Pattern) :-
     Reason =.. [Functor|Args],
     append(Args0, [Code], Args),
     Pattern =.. [Functor|Args0].
+outcome_entry(tool_position_result(Reason), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
+outcome_entry(tools_of_kind_result(Reason), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
+outcome_entry(nearest_tool_result(Reason), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
 
 % history_outcomes(+S, -Entries): every outcome_entry/2 found ANYWHERE
 % in S's own history, oldest-first -- the one GENERIC pass behind
@@ -3565,6 +3665,9 @@ halted_with(Reason, do(halt_install_tool(_,Reason,_), _)).
 halted_with(Reason, do(halt_uninstall_tool(_,Reason,_), _)).
 halted_with(Reason, do(halt_deploy_tool(_,Reason,_), _)).
 halted_with(Reason, do(halt_retract_tool(_,Reason,_), _)).
+halted_with(Reason, do(tool_position_result(Reason), _)).
+halted_with(Reason, do(tools_of_kind_result(Reason), _)).
+halted_with(Reason, do(nearest_tool_result(Reason), _)).
 halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 
 % visited(+Loc, +Tol, +S): TRUE iff the robot ACTUALLY ARRIVED at

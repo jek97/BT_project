@@ -42,14 +42,27 @@ deterministic stand-in would silently misrepresent what the theory
 actually says happens -- worse than no implementation at all.
 DistanceBelow/DistanceEqual/DistanceOver/HaltedWith are native Prolog
 conditions over a situation; Python has no situation to evaluate them
-against on its own. InstallTool/UninstallTool join this same
-interface-only group -- UNLIKE TakeSample below, their own outcome
-isn't just a bare coin flip: it's a fixed-Duration walk-alike with its
-own battery-only Triggers/earliest-halt search (tool_earliest_halt/8
-in basic_action_theory.pl) gating WHETHER the coin flip even happens,
-the same non-trivial "stochastic action theory with real preconditions
-and a trigger race" shape MoveTo has, just without the continuous
-trajectory -- no faithful plain-Python stand-in for that either.
+against on its own. InstallTool/UninstallTool/DeployTool/RetractTool
+join this same interface-only group -- UNLIKE TakeSample below, their
+own outcome isn't just a bare coin flip: it's a fixed-Duration walk-
+alike with its own battery-only Triggers/earliest-halt search
+(earliest_halt/13's own Mode=1 case, in basic_action_theory.pl) gating
+WHETHER the coin flip even happens, the same non-trivial "stochastic
+action theory with real preconditions and a trigger race" shape
+MoveTo has, just without the continuous trajectory -- no faithful
+plain-Python stand-in for that either.
+
+ToolPosition/ToolsOfKind/NearestToolOfKind, Hitched/Deployed, and
+SampleValueBelow/Equal/Over are ALSO interface-only, for the SAME
+"Python has no situation to evaluate this against" reason
+DistanceBelow/HaltedWith already have -- WHERE a tool instance
+currently sits, WHETHER a tool is hitched or deployed, and WHAT VALUE a
+named sample recorded are all facts about the CURRENT situation
+(tool_position/4, hitch/2, deployed/1, halted_with/2 -- see basic_
+action_theory.pl's own Section 5c/5d), not something a stateless
+Python function can answer on its own without a real handle onto that
+state (a future BT.cpp bridge's own C++ node would read its OWN
+blackboard/world-model instead).
 
 TakeSample, despite ALSO being part of the stochastic action theory
 (its outcome is a genuine ProbLog annotated disjunction, sample_result/3
@@ -166,34 +179,48 @@ _PLAN_ALGORITHM_FUNCS = {
 }
 
 
-def bt_take_sample(success_probability=0.5):
+def bt_take_sample(success_probability=0.5, value_mean=5.0, value_sigma=2.0):
     """
     BT.cpp-compatible implementation of TakeSample -- a single
     fixed-probability coin flip, matching basic_action_theory.pl's own
     sample_result/3 EXACTLY (see this module's own header for why this
-    gets a real implementation, unlike MoveTo). success_probability is
-    NOT read from config.yaml here -- this file never touches
-    config.yaml directly; the caller supplies it, same as every other
-    parameter throughout this file (a future BT.cpp bridge would read
-    this problem's own config.yaml sample.success_probability itself
-    and pass it through).
+    gets a real implementation, unlike MoveTo), PLUS, only on success, a
+    SECOND independent draw for the value (0..10) -- matching
+    sample_value/3 EXACTLY too: round(random.gauss(mean,sigma)) clipped
+    to [0,10] is not an approximation of that predicate's own
+    discretized-Normal table, it's mathematically the SAME distribution
+    -- P(round(X)=v) for X~Normal(mean,sigma) is exactly CDF(v+0.5)-CDF
+    (v-0.5) (with the two boundary bins absorbing their own outer tail
+    the same way), which is precisely how config_to_prolog.py's own
+    _discretized_normal_block computes sample_value/3's weights in the
+    first place. success_probability/value_mean/value_sigma are NOT
+    read from config.yaml here -- this file never touches config.yaml
+    directly; the caller supplies them, same as every other parameter
+    throughout this file (a future BT.cpp bridge would read this
+    problem's own config.yaml sample.success_probability/sample.value.
+    mean/sample.value.sigma itself and pass them through).
 
-    Returns {reason, status} matching TakeSample's own two output
-    ports in schema.yaml -- reason is the BARE outcome ("sample_success"
-    or "sample_failure"), the same "no ActionCode, no extra info" shape
-    bt_plan_astar's own reason ("completed"/"no_path") already uses:
-    ActionCode-tagging and recording the robot's own position (X,Y)
-    happen ONLY on the ProbLog/translation side (see
-    basic_action_theory.pl's own do_node(take_sample(...)) and
-    tag_reason/3), not something this plain-Python callable needs to
-    reproduce -- a real BT.cpp caller already knows its own current
-    position without this function echoing it back.
+    Returns {reason, status, value} matching TakeSample's own reason/
+    status ports in schema.yaml plus the drawn value -- reason is the
+    BARE outcome ("sample_success"/"sample_failure"), the same "no
+    ActionCode/SampleId, no extra info" shape bt_plan_astar's own
+    reason ("completed"/"no_path") already uses: ActionCode/SampleId-
+    tagging and recording the robot's own position (X,Y) happen ONLY on
+    the ProbLog/translation side (see basic_action_theory.pl's own
+    do_node(take_sample(...)) and tag_reason/3), not something this
+    plain-Python callable needs to reproduce -- a real BT.cpp caller
+    already knows its own current position and its own configured id
+    without this function echoing either back. value is the one genuine
+    new piece of information only this function's own random draw can
+    supply -- None on failure (no value is ever drawn then, see poss
+    (take_sample(...))'s own note: a failed reading is exactly that, no
+    number to report).
     """
     success = random.random() < success_probability
-    return {
-        "reason": "sample_success" if success else "sample_failure",
-        "status": success,
-    }
+    if not success:
+        return {"reason": "sample_failure", "status": False, "value": None}
+    value = min(10, max(0, round(random.gauss(value_mean, value_sigma))))
+    return {"reason": "sample_success", "status": True, "value": value}
 
 
 def bt_plan_with(algorithm, sx, sy, gx=None, gy=None, obstacle_id=None, offset=None):
@@ -248,13 +275,16 @@ def install_tool_leg_term(tool, triggers, action_code):
     moveto_leg_term above, but RESTRICTED to battery-related names only
     -- see schema.yaml's own InstallTool entry.
 
-    tool: "cart" or "plow", as text (a bare Prolog atom, unquoted).
+    tool: a tool INSTANCE id (e.g. "cart1", from this problem's own
+        config.yaml tool.instances -- NOT a kind), as text (a bare
+        Prolog atom, unquoted). See basic_action_theory.pl's own
+        tool_instance/2 note for the kind-vs-instance distinction.
     triggers: list of strings (e.g. ["battery","battery_below(20)"]).
     action_code: a free Prolog variable name or bound atom, as text
         (e.g. "a5").
 
     Returns Prolog source text, e.g.:
-        "install_tool_leg(cart,[battery],a5)"
+        "install_tool_leg(cart1,[battery],a5)"
     """
     trig_text = "[" + ",".join(str(t) for t in triggers) + "]"
     return f"install_tool_leg({tool},{trig_text},{action_code})"
@@ -264,9 +294,28 @@ def uninstall_tool_leg_term(tool, triggers, action_code):
     """Build the basic_action_theory.pl TERM TEXT for one
     UninstallTool node's bound inputs -- uninstall_tool_leg(Tool,
     Triggers,ActionCode). Same shape/rationale as install_tool_leg_term
-    above."""
+    above (tool is an INSTANCE id, e.g. "cart1")."""
     trig_text = "[" + ",".join(str(t) for t in triggers) + "]"
     return f"uninstall_tool_leg({tool},{trig_text},{action_code})"
+
+
+def deploy_tool_leg_term(tool, triggers, action_code):
+    """Build the basic_action_theory.pl TERM TEXT for one DeployTool
+    node's bound inputs -- deploy_tool_leg(Tool,Triggers,ActionCode).
+    Same shape/rationale as install_tool_leg_term above -- tool must be
+    an ALREADY-INSTALLED instance id whose own kind is currently plow
+    (checked in the theory, not here -- see basic_action_theory.pl's
+    own poss(start_deploy_tool(...)))."""
+    trig_text = "[" + ",".join(str(t) for t in triggers) + "]"
+    return f"deploy_tool_leg({tool},{trig_text},{action_code})"
+
+
+def retract_tool_leg_term(tool, triggers, action_code):
+    """Build the basic_action_theory.pl TERM TEXT for one RetractTool
+    node's bound inputs -- retract_tool_leg(Tool,Triggers,ActionCode).
+    The mirror image of deploy_tool_leg_term above."""
+    trig_text = "[" + ",".join(str(t) for t in triggers) + "]"
+    return f"retract_tool_leg({tool},{trig_text},{action_code})"
 
 
 # =====================================================================
@@ -338,6 +387,61 @@ def follow_boarder_term(obstacle_id, offset, cp_var, action_code):
         "planWith(follow_boarder(obs5,0.6),point(0.0,0.0),CP,a4)"
     """
     return f"planWith(follow_boarder({obstacle_id},{float(offset)}),point(0.0,0.0),{cp_var},{action_code})"
+
+
+# =====================================================================
+# ACTIONS -- interface-only (ToolPosition/ToolsOfKind/NearestToolOfKind):
+# term builders. Genuinely state-dependent -- WHERE a tool instance
+# currently sits (or whether it's hitched, or which free instance is
+# closest to the robot's own current position) is a fact about the
+# CURRENT situation, exactly the same "Python has no situation to
+# evaluate this against on its own" reasoning DistanceBelow/BatteryOver/
+# HaltedWith already have (see this module's own header) -- there is no
+# plain-Python stand-in to write here, only the term shape.
+# =====================================================================
+def tool_position_query_term(tool_id, pos_var, action_code):
+    """Build the basic_action_theory.pl TERM TEXT for one ToolPosition
+    node's bound inputs -- tool_position_query(Id,Pos,ActionCode). Pos
+    is left as a FREE PROLOG VARIABLE NAME (e.g. "Pos"), not a value --
+    it's this node's own OUTPUT, same "leave a variable free" pattern
+    plan_with_term's own cp_var already uses.
+
+    tool_id: a tool instance id, as text (e.g. "cart1").
+    pos_var: a free Prolog variable name, as text (e.g. "Pos").
+    action_code: a free Prolog variable name or bound atom, as text.
+
+    Returns Prolog source text, e.g.:
+        "tool_position_query(cart1,Pos,a6)"
+    """
+    return f"tool_position_query({tool_id},{pos_var},{action_code})"
+
+
+def tools_of_kind_query_term(kind, tools_var, action_code):
+    """Build the basic_action_theory.pl TERM TEXT for one ToolsOfKind
+    node's bound inputs -- tools_of_kind_query(Kind,Tools,ActionCode).
+    Same "leave the output variable free" pattern as
+    tool_position_query_term above -- Tools ends up bound to a Prolog
+    list of tool(Id,point(X,Y)) terms.
+
+    kind: "cart", "plow", or any future kind, as text (a bare atom).
+    tools_var: a free Prolog variable name, as text (e.g. "Tools").
+    action_code: a free Prolog variable name or bound atom, as text.
+    """
+    return f"tools_of_kind_query({kind},{tools_var},{action_code})"
+
+
+def nearest_tool_of_kind_query_term(kind, id_var, pos_var, action_code):
+    """Build the basic_action_theory.pl TERM TEXT for one
+    NearestToolOfKind node's bound inputs -- nearest_tool_of_kind_query
+    (Kind,Id,Pos,ActionCode). TWO free output variables this time (Id
+    AND Pos), same pattern as the two builders above.
+
+    kind: "cart", "plow", or any future kind, as text (a bare atom).
+    id_var: a free Prolog variable name, as text (e.g. "ChosenId").
+    pos_var: a free Prolog variable name, as text (e.g. "ChosenPos").
+    action_code: a free Prolog variable name or bound atom, as text.
+    """
+    return f"nearest_tool_of_kind_query({kind},{id_var},{pos_var},{action_code})"
 
 
 # =====================================================================
@@ -429,6 +533,46 @@ def line_of_sight_clear_cond_term(obstacle_id, goal):
     return f"cond(line_of_sight_clear({obstacle_id},{float(gx)},{float(gy)}))"
 
 
+def sample_value_below_cond_term(sample_id, threshold):
+    """cond(sample_value_below(SampleId,Threshold)) term text --
+    matches SampleValueBelow's id/threshold ports in schema.yaml.
+    sample_id must match the id= of an earlier TakeSample in the same
+    tree (written VERBATIM as Prolog text, a bare atom -- same
+    convention as halted_with_cond_term's own reason argument)."""
+    return f"cond(sample_value_below({sample_id},{float(threshold)}))"
+
+
+def sample_value_equal_cond_term(sample_id, threshold):
+    """cond(sample_value_equal(SampleId,Threshold)) term text --
+    matches SampleValueEqual's ports. Same shape as
+    sample_value_below_cond_term above, exact-equality comparison."""
+    return f"cond(sample_value_equal({sample_id},{float(threshold)}))"
+
+
+def sample_value_over_cond_term(sample_id, threshold):
+    """cond(sample_value_over(SampleId,Threshold)) term text --
+    matches SampleValueOver's ports. Same shape as
+    sample_value_below_cond_term above, ">" comparison."""
+    return f"cond(sample_value_over({sample_id},{float(threshold)}))"
+
+
+def hitched_cond_term(kind=None):
+    """cond(hitched) or cond(hitched(Kind)) term text -- matches
+    Hitched's own optional kind port in schema.yaml. Pass kind=None (or
+    omit it) for "is anything attached", a kind string (e.g. "plow")
+    for "is specifically this kind attached"."""
+    if kind:
+        return f"cond(hitched({kind}))"
+    return "cond(hitched)"
+
+
+def deployed_cond_term():
+    """cond(deployed) term text -- matches Deployed's own (zero-port)
+    entry in schema.yaml. No arguments -- only one tool can ever be
+    hitched at a time, so there's nothing to parametrize."""
+    return "cond(deployed)"
+
+
 # =====================================================================
 # Registry -- maps schema.yaml's IDs to their implementation here.
 # Not required for either caller to function (both can call the
@@ -467,6 +611,31 @@ ACTIONS = {
         "kind": "interface_only",
         "prolog_action": "uninstall_tool_leg",
         "term_builder": uninstall_tool_leg_term,
+    },
+    "DeployTool": {
+        "kind": "interface_only",
+        "prolog_action": "deploy_tool_leg",
+        "term_builder": deploy_tool_leg_term,
+    },
+    "RetractTool": {
+        "kind": "interface_only",
+        "prolog_action": "retract_tool_leg",
+        "term_builder": retract_tool_leg_term,
+    },
+    "ToolPosition": {
+        "kind": "interface_only",
+        "prolog_action": "tool_position_query",
+        "term_builder": tool_position_query_term,
+    },
+    "ToolsOfKind": {
+        "kind": "interface_only",
+        "prolog_action": "tools_of_kind_query",
+        "term_builder": tools_of_kind_query_term,
+    },
+    "NearestToolOfKind": {
+        "kind": "interface_only",
+        "prolog_action": "nearest_tool_of_kind_query",
+        "term_builder": nearest_tool_of_kind_query_term,
     },
 }
 
@@ -520,5 +689,30 @@ CONDITIONS = {
         "kind": "interface_only",
         "prolog_condition": "line_of_sight_clear",
         "term_builder": line_of_sight_clear_cond_term,
+    },
+    "SampleValueBelow": {
+        "kind": "interface_only",
+        "prolog_condition": "sample_value_below",
+        "term_builder": sample_value_below_cond_term,
+    },
+    "SampleValueEqual": {
+        "kind": "interface_only",
+        "prolog_condition": "sample_value_equal",
+        "term_builder": sample_value_equal_cond_term,
+    },
+    "SampleValueOver": {
+        "kind": "interface_only",
+        "prolog_condition": "sample_value_over",
+        "term_builder": sample_value_over_cond_term,
+    },
+    "Hitched": {
+        "kind": "interface_only",
+        "prolog_condition": "hitched",
+        "term_builder": hitched_cond_term,
+    },
+    "Deployed": {
+        "kind": "interface_only",
+        "prolog_condition": "deployed",
+        "term_builder": deployed_cond_term,
     },
 }

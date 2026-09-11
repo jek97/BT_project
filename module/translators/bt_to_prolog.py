@@ -194,6 +194,22 @@ _ACTION_DISPATCH = {
     # Section 5d.
     "DeployTool": {"kind": "deploy_tool"},
     "RetractTool": {"kind": "retract_tool"},
+    # tool_position_query(Id,Pos,ActionCode)/tools_of_kind_query(Kind,
+    # Tools,ActionCode)/nearest_tool_of_kind_query(Kind,Id,Pos,
+    # ActionCode) -- pure, side-effect-free QUERY leaves against
+    # tool_position/4, tools_of_kind/5, nearest_tool_of_kind/6
+    # (basic_action_theory.pl Section 5c/5d), same "pure computation, no
+    # primitive_action/poss layer" shape as PlanWith itself (can be
+    # asked ANYTIME, no precondition of its own). NearestToolOfKind is
+    # NOT simply "ToolPosition then ToolsOfKind chained in the tree" --
+    # picking the CLOSEST candidate needs an argmin fold (findall/3 +
+    # min_candidate/2 in the theory) that has no BT.cpp-tree-composable
+    # equivalent, so it's its own self-contained leaf, even though its
+    # own Prolog implementation internally composes tools_of_kind/5
+    # (which itself composes tool_instance/2 with tool_position/4).
+    "ToolPosition": {"kind": "tool_position_query"},
+    "ToolsOfKind": {"kind": "tools_of_kind_query"},
+    "NearestToolOfKind": {"kind": "nearest_tool_of_kind_query"},
 }
 
 # InstallTool/UninstallTool's own tool="..." port names a specific
@@ -264,6 +280,12 @@ _CONDITION_DISPATCH = {
     "SampleValueBelow": {"kind": "sample_value_cond", "functor": "sample_value_below"},
     "SampleValueEqual": {"kind": "sample_value_cond", "functor": "sample_value_equal"},
     "SampleValueOver": {"kind": "sample_value_cond", "functor": "sample_value_over"},
+    # hitched / hitched(Kind) -- see basic_action_theory.pl's own
+    # holds(hitched,S)/holds(hitched(Kind),S) note, near distance_below/3.
+    "Hitched": {"kind": "hitched_cond"},
+    # deployed -- see basic_action_theory.pl's own holds(deployed,S)
+    # note, right below hitched's own.
+    "Deployed": {"kind": "deployed_cond"},
     "HaltedWith": {"kind": "halted_with_cond"},
     # line_of_sight_clear(ObstacleId,GX,GY) -- obstacle_id verbatim
     # Prolog text (like HaltedWith's reason), goal a Point literal.
@@ -331,7 +353,10 @@ _RETRY_DECORATORS = {
 # HaltedWith for exactly this reason -- a take_sample's own value is
 # fixed the instant it's drawn (an INSTANTANEOUS action, no Duration to
 # elapse), so there is nothing for a mid-leg crossing-search to watch.
-_NON_CONTINUOUS_CONDITIONS = {"HaltedWith", "SampleValueBelow", "SampleValueEqual", "SampleValueOver"}
+_NON_CONTINUOUS_CONDITIONS = {
+    "HaltedWith", "SampleValueBelow", "SampleValueEqual", "SampleValueOver",
+    "Hitched", "Deployed",
+}
 
 # Trigger-list functors that are REACTIVE-classified in leg_status/9
 # (basic_action_theory.pl) -- i.e. everything except the two original,
@@ -698,6 +723,18 @@ def _leaf_condition_term(tag, attrs):
                 f"some earlier <TakeSample> in this tree used.")
         threshold = float(attrs["threshold"])
         return f"{info['functor']}({sample_id},{threshold})"
+    if info["kind"] == "hitched_cond":
+        kind_value = attrs.get("kind", "").strip()
+        if not kind_value:
+            return "hitched"
+        if not _VALID_PROLOG_ATOM_RE.match(kind_value):
+            raise BTValidationError(
+                f"<{tag}>'s kind port ('{kind_value}') is not a valid "
+                f"Prolog atom -- must start with a lowercase letter, then "
+                f"letters/digits/underscores only.")
+        return f"hitched({kind_value})"
+    if info["kind"] == "deployed_cond":
+        return "deployed"
     raise BTValidationError(f"Unhandled condition kind for <{tag}>.")
 
 
@@ -979,6 +1016,127 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             var_pool.action_labels[action_code] = _with_branch_suffix(
                 f"TakeSample({sample_id})", branch_name)
             return f"take_sample({sample_id},{action_code})"
+
+        if info["kind"] == "tool_position_query":
+            # id is a LITERAL tool instance id (same validation/
+            # convention as InstallTool's own tool="..." port -- NOT
+            # blackboard-wireable yet; feeding it from a NearestToolOfKind
+            # node's own output id would need this port relaxed the same
+            # way control_points already is, a follow-up not built here).
+            # position is this node's own OUTPUT -- like control_points,
+            # ALWAYS a blackboard reference, never a literal.
+            tool_id = attrs["id"].strip()
+            if not _VALID_PROLOG_ATOM_RE.match(tool_id):
+                raise BTValidationError(
+                    f"<{tag}>'s id port ('{tool_id}') is not a valid Prolog "
+                    f"atom -- must start with a lowercase letter, then "
+                    f"letters/digits/underscores only.")
+            pos_value = attrs["position"]
+            if not _is_blackboard_ref(pos_value):
+                raise BTValidationError(
+                    f"<{tag}>'s position port ('{pos_value}') must be a "
+                    f"blackboard reference like \"{{pos}}\" -- it is this "
+                    f"node's own OUTPUT, never a literal.")
+            pos_key = _blackboard_key(pos_value)
+            var_pool.producers.add(pos_key)
+            var_pool.note_key_scope(pos_key, reactive_code)
+            pos_var = var_pool.var_for(pos_key)
+
+            action_code = var_pool.next_action_code()
+            # Both Id and the RESULT are already known at translation
+            # time (Id is literal) except which one it actually finds
+            # (found vs unavailable) -- no 'wild' needed, same reasoning
+            # install_tool's own reason_patterns already has for a
+            # translation-time-known Tool.
+            var_pool.reason_patterns_by_action[action_code] = [
+                f"tool_position_found({tool_id})",
+                f"tool_position_unavailable({tool_id})",
+            ]
+            var_pool.action_labels[action_code] = _with_branch_suffix(
+                f"ToolPosition({tool_id})", branch_name)
+            return f"tool_position_query({tool_id},{pos_var},{action_code})"
+
+        if info["kind"] == "tools_of_kind_query":
+            # kind is a bare Prolog atom (cart/plow, or any future kind)
+            # -- same "syntax-only check, let tool_instance/2 fail closed
+            # for an unknown one" philosophy install_tool's own tool=
+            # port already has (this translator never parses config.yaml,
+            # so it can't validate kind against a real fixed set either).
+            # tools is this node's own OUTPUT -- a blackboard reference
+            # bound to a Prolog LIST of tool(Id,point(GX,GY)) terms, one
+            # per matching, currently-free instance.
+            kind = attrs["kind"].strip()
+            if not _VALID_PROLOG_ATOM_RE.match(kind):
+                raise BTValidationError(
+                    f"<{tag}>'s kind port ('{kind}') is not a valid Prolog "
+                    f"atom -- must start with a lowercase letter, then "
+                    f"letters/digits/underscores only.")
+            tools_value = attrs["tools"]
+            if not _is_blackboard_ref(tools_value):
+                raise BTValidationError(
+                    f"<{tag}>'s tools port ('{tools_value}') must be a "
+                    f"blackboard reference like \"{{tools}}\" -- it is this "
+                    f"node's own OUTPUT, never a literal.")
+            tools_key = _blackboard_key(tools_value)
+            var_pool.producers.add(tools_key)
+            var_pool.note_key_scope(tools_key, reactive_code)
+            tools_var = var_pool.var_for(tools_key)
+
+            action_code = var_pool.next_action_code()
+            var_pool.reason_patterns_by_action[action_code] = [
+                f"tools_of_kind_found({kind})",
+                f"tools_of_kind_empty({kind})",
+            ]
+            var_pool.action_labels[action_code] = _with_branch_suffix(
+                f"ToolsOfKind({kind})", branch_name)
+            return f"tools_of_kind_query({kind},{tools_var},{action_code})"
+
+        if info["kind"] == "nearest_tool_of_kind_query":
+            # kind is validated the same way as ToolsOfKind's own kind
+            # port just above. id/position are this node's own OUTPUTS
+            # -- both blackboard references, same "always a var, never a
+            # literal" requirement control_points already has.
+            kind = attrs["kind"].strip()
+            if not _VALID_PROLOG_ATOM_RE.match(kind):
+                raise BTValidationError(
+                    f"<{tag}>'s kind port ('{kind}') is not a valid Prolog "
+                    f"atom -- must start with a lowercase letter, then "
+                    f"letters/digits/underscores only.")
+            id_value = attrs["id"]
+            if not _is_blackboard_ref(id_value):
+                raise BTValidationError(
+                    f"<{tag}>'s id port ('{id_value}') must be a blackboard "
+                    f"reference like \"{{chosen}}\" -- it is this node's own "
+                    f"OUTPUT, never a literal.")
+            id_key = _blackboard_key(id_value)
+            var_pool.producers.add(id_key)
+            var_pool.note_key_scope(id_key, reactive_code)
+            id_var = var_pool.var_for(id_key)
+
+            pos_value = attrs["position"]
+            if not _is_blackboard_ref(pos_value):
+                raise BTValidationError(
+                    f"<{tag}>'s position port ('{pos_value}') must be a "
+                    f"blackboard reference like \"{{pos}}\" -- it is this "
+                    f"node's own OUTPUT, never a literal.")
+            pos_key = _blackboard_key(pos_value)
+            var_pool.producers.add(pos_key)
+            var_pool.note_key_scope(pos_key, reactive_code)
+            pos_var = var_pool.var_for(pos_key)
+
+            action_code = var_pool.next_action_code()
+            # WHICH instance turns out closest is only known at RUNTIME
+            # (it depends on the robot's own noisy position, see
+            # nearest_tool_of_kind/6's own note) -- 'wild' for Id, same
+            # "known only at runtime -> wild" rule an argmin ObstacleId
+            # already follows elsewhere; Kind itself IS known here.
+            var_pool.reason_patterns_by_action[action_code] = [
+                f"nearest_tool_found({kind},wild)",
+                f"no_tool_of_kind({kind})",
+            ]
+            var_pool.action_labels[action_code] = _with_branch_suffix(
+                f"NearestToolOfKind({kind})", branch_name)
+            return f"nearest_tool_of_kind_query({kind},{id_var},{pos_var},{action_code})"
 
         if info["kind"] in ("install_tool", "uninstall_tool", "deploy_tool", "retract_tool"):
             # Shared shape for InstallTool/UninstallTool/DeployTool/

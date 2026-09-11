@@ -161,11 +161,13 @@ _ACTION_DISPATCH = {
     # per schema entry -- see _PLAN_ALGORITHMS below and the "planWith"
     # kind's own branch in _translate_leaf.
     "PlanWith": {"kind": "planWith"},
-    # take_sample(ActionCode) -- INSTANTANEOUS, no ports at all (see
-    # schema.yaml's own TakeSample entry): unlike MoveTo/PlanWith,
-    # nothing about its own Reason universe depends on this occurrence's
-    # own attributes, so its "kind" branch in _translate_leaf below
-    # needs no attrs at all beyond assigning it a fresh ActionCode.
+    # take_sample(SampleId,ActionCode) -- INSTANTANEOUS (see schema.
+    # yaml's own TakeSample entry): its own Reason universe doesn't
+    # depend on Triggers/algorithm the way MoveTo/PlanWith's do, but it
+    # DOES take one port now -- id, the tree author's own name for this
+    # occurrence, needed so a later SampleValueBelow/Equal/Over
+    # condition can reference it (see this file's own "take_sample"
+    # kind branch in _translate_leaf for the full picture).
     "TakeSample": {"kind": "take_sample"},
     # install_tool_leg(Tool,Triggers,ActionCode)/uninstall_tool_leg
     # (Tool,Triggers,ActionCode) -- DURATIVE, same start/halt shape as
@@ -235,6 +237,16 @@ _CONDITION_DISPATCH = {
     "BatteryBelow": {"kind": "single_float_port", "functor": "battery_below", "port": "threshold"},
     "BatteryEqual": {"kind": "single_float_port", "functor": "battery_equal", "port": "threshold"},
     "BatteryOver": {"kind": "single_float_port", "functor": "battery_over", "port": "threshold"},
+    # sample_value_below/equal/over(SampleId,Threshold) -- a SECOND
+    # 2-port condition shape (like distance_cond above), but the first
+    # port is the tree author's own TakeSample id (a string, validated
+    # the same way InstallTool/UninstallTool's own tool="..." port
+    # already is -- see _VALID_PROLOG_ATOM_RE), not a Point. See
+    # basic_action_theory.pl's own holds(sample_value_below(...)) and
+    # its Below/Equal siblings, near distance_below/3.
+    "SampleValueBelow": {"kind": "sample_value_cond", "functor": "sample_value_below"},
+    "SampleValueEqual": {"kind": "sample_value_cond", "functor": "sample_value_equal"},
+    "SampleValueOver": {"kind": "sample_value_cond", "functor": "sample_value_over"},
     "HaltedWith": {"kind": "halted_with_cond"},
     # line_of_sight_clear(ObstacleId,GX,GY) -- obstacle_id verbatim
     # Prolog text (like HaltedWith's reason), goal a Point literal.
@@ -298,8 +310,11 @@ _RETRY_DECORATORS = {
 # exclusion also prevents a missing-clause silently reading as "already
 # false at T0" there. A future condition added to schema.yaml that is
 # similarly history-based (not a function of the CURRENT leg's own
-# position/battery) belongs here too.
-_NON_CONTINUOUS_CONDITIONS = {"HaltedWith"}
+# position/battery) belongs here too. SampleValueBelow/Equal/Over join
+# HaltedWith for exactly this reason -- a take_sample's own value is
+# fixed the instant it's drawn (an INSTANTANEOUS action, no Duration to
+# elapse), so there is nothing for a mid-leg crossing-search to watch.
+_NON_CONTINUOUS_CONDITIONS = {"HaltedWith", "SampleValueBelow", "SampleValueEqual", "SampleValueOver"}
 
 # Trigger-list functors that are REACTIVE-classified in leg_status/9
 # (basic_action_theory.pl) -- i.e. everything except the two original,
@@ -656,6 +671,16 @@ def _leaf_condition_term(tag, attrs):
         gx, gy = _point_xy(attrs["goal"], tag, "goal")
         threshold = float(attrs["threshold"])
         return f"{info['functor']}({gx},{gy},{threshold})"
+    if info["kind"] == "sample_value_cond":
+        sample_id = attrs["id"].strip()
+        if not _VALID_PROLOG_ATOM_RE.match(sample_id):
+            raise BTValidationError(
+                f"<{tag}>'s id port ('{sample_id}') is not a valid Prolog "
+                f"atom -- must start with a lowercase letter, then "
+                f"letters/digits/underscores only. Must match the id= "
+                f"some earlier <TakeSample> in this tree used.")
+        threshold = float(attrs["threshold"])
+        return f"{info['functor']}({sample_id},{threshold})"
     raise BTValidationError(f"Unhandled condition kind for <{tag}>.")
 
 
@@ -900,22 +925,43 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             return f"planWith({algorithm_term},{goal_term},{cp_var},{action_code})"
 
         if info["kind"] == "take_sample":
-            # No ports to read at all (schema.yaml declares none) --
-            # the reason universe is FIXED, the same two patterns for
-            # every occurrence, unlike MoveTo (depends on Triggers) or
-            # PlanWith (depends on algorithm/goal). 'wild' for X,Y --
-            # both are only ever known at RUNTIME (the robot's actual
-            # position when this action ran), same "known only at
-            # runtime -> wild, not a genuine variable" rule
-            # _reason_pattern_for_manual_trigger's own note documents
-            # for an argmin ObstacleId.
+            # id is the ONE port (schema.yaml's own TakeSample entry) --
+            # the tree author's own name for THIS occurrence (e.g.
+            # "soil1"), NOT the auto-generated ActionCode just below --
+            # see basic_action_theory.pl's own poss(take_sample(...))
+            # note for why both exist and what each is for. A LATER
+            # SampleValueBelow/Equal/Over condition node references this
+            # SAME id to point back at this specific sample's own drawn
+            # value -- same validation as InstallTool/UninstallTool's
+            # own tool="..." port (a plain Prolog atom, not otherwise
+            # checked against a fixed set here; an id that was never
+            # actually sampled just makes the referencing condition
+            # false forever, the same "unsatisfied lookup, not a
+            # translator error" shape tool_instance/2 already has).
+            sample_id = attrs["id"].strip()
+            if not _VALID_PROLOG_ATOM_RE.match(sample_id):
+                raise BTValidationError(
+                    f"<{tag}>'s id port ('{sample_id}') is not a valid "
+                    f"Prolog atom -- must start with a lowercase letter, "
+                    f"then letters/digits/underscores only.")
+            # The reason universe is otherwise FIXED, the same two
+            # patterns for every occurrence, unlike MoveTo (depends on
+            # Triggers) or PlanWith (depends on algorithm/goal). 'wild'
+            # for X,Y,V -- all three are only ever known at RUNTIME (the
+            # robot's actual position when this action ran, and the
+            # drawn value itself), same "known only at runtime -> wild,
+            # not a genuine variable" rule _reason_pattern_for_manual_
+            # trigger's own note documents for an argmin ObstacleId.
+            # sample_id itself is NOT wild -- known at translation time,
+            # like Tool was for install_tool's own reason patterns.
             action_code = var_pool.next_action_code()
             var_pool.reason_patterns_by_action[action_code] = [
-                "sample_success(wild,wild)",
-                "sample_failure(wild,wild)",
+                f"sample_success(wild,wild,wild,{sample_id})",
+                f"sample_failure(wild,wild,{sample_id})",
             ]
-            var_pool.action_labels[action_code] = _with_branch_suffix("TakeSample", branch_name)
-            return f"take_sample({action_code})"
+            var_pool.action_labels[action_code] = _with_branch_suffix(
+                f"TakeSample({sample_id})", branch_name)
+            return f"take_sample({sample_id},{action_code})"
 
         if info["kind"] in ("install_tool", "uninstall_tool"):
             # Shared shape for both InstallTool and UninstallTool --

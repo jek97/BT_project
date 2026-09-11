@@ -55,6 +55,7 @@ normally need to run this by hand -- it's here mainly so
 config_generated.pl can be regenerated/inspected on its own, and so the
 generation logic has exactly one implementation.
 """
+import math
 import os
 import re
 import sys
@@ -145,6 +146,44 @@ def _binary_result_block(functor, success_probability):
     p_failure = _format_number(1.0 - success_probability)
     return (f"{p_success}::{functor}(S,ActionCode,true) ;\n"
             f"{p_failure}::{functor}(S,ActionCode,false).")
+
+
+def _discretized_normal_block(functor, mean, sigma, lo, hi):
+    """Build a (hi-lo+1)-outcome annotated disjunction keyed by
+    (S,ActionCode), one outcome per INTEGER v in [lo,hi], weighted by a
+    REAL discretized Normal(mean,sigma) -- each interior v's own weight
+    is the actual normal-CDF probability mass of the bin [v-0.5,v+0.5]
+    (the standard normal CDF, via math.erf); the two boundary bins
+    (v=lo, v=hi) absorb everything BEYOND their own outer edge instead
+    of just their own half-open bin, so the weights sum to EXACTLY 1.0
+    by construction (a telescoping sum of CDF differences) -- unlike
+    position/battery's own discretized_gaussian tables in config.yaml,
+    which are hand-picked weights the AUTHOR must get to sum to 1.0
+    themselves (see _check_gaussian_weights' own note on that risk),
+    there is no missing-mass bug class possible here at all. The final
+    explicit renormalization (divide every weight by their own actual
+    sum) only cleans up ordinary floating-point rounding in the erf
+    computation itself, not a structural gap."""
+    def cdf(x):
+        return 0.5 * (1.0 + math.erf((x - mean) / (sigma * math.sqrt(2.0))))
+
+    values = list(range(lo, hi + 1))
+    weights = {}
+    for v in values:
+        if v == lo:
+            weights[v] = cdf(v + 0.5)
+        elif v == hi:
+            weights[v] = 1.0 - cdf(v - 0.5)
+        else:
+            weights[v] = cdf(v + 0.5) - cdf(v - 0.5)
+    total = sum(weights.values())
+
+    lines = []
+    for i, v in enumerate(values):
+        w = _format_number(weights[v] / total)
+        terminator = " ;" if i < len(values) - 1 else "."
+        lines.append(f"{w}::{functor}(S,ActionCode,{v}){terminator}")
+    return "\n".join(lines)
 
 
 # The only two tool kinds install_tool/uninstall_tool currently accept
@@ -247,6 +286,27 @@ def render_prolog(config):
     # ...) which have no default and are required.
     sample_success_probability = config.get("sample", {}).get("success_probability", 0.5)
     sample_block = _binary_result_block("sample_result", float(sample_success_probability))
+
+    # sample.value.mean/sigma -- the READING a SUCCESSFUL take_sample
+    # draws (basic_action_theory.pl's own sample_value/3, only ever
+    # consulted from poss(take_sample(...))'s own success clause -- a
+    # failed sample draws no value at all). A genuine discretized
+    # Normal(mean,sigma) over the integers 0..10 (see
+    # _discretized_normal_block's own note on why this is a REAL
+    # binned-CDF distribution, not hand-picked weights), independent of
+    # sample_result/3's own success/failure coin flip -- "did the
+    # sample succeed" and "what did it read" are two SEPARATE random
+    # choices, per this feature's own request. mean defaults to 5.0 (the
+    # centre of the 0..10 scale) and sigma to 2.0 (spread enough to
+    # meaningfully populate the whole range without excessive clipping
+    # at either end) if config.yaml gives no sample.value section at
+    # all -- same "optional feature, sensible default" treatment
+    # success_probability itself already gets above.
+    sample_value_cfg = config.get("sample", {}).get("value", {})
+    sample_value_mean = float(sample_value_cfg.get("mean", 5.0))
+    sample_value_sigma = float(sample_value_cfg.get("sigma", 2.0))
+    sample_value_block = _discretized_normal_block(
+        "sample_value", sample_value_mean, sample_value_sigma, 0, 10)
 
     # tool.install/tool.uninstall default entirely if the whole `tool:`
     # section is omitted -- same "optional feature" treatment as
@@ -412,6 +472,8 @@ def render_prolog(config):
         zbatt_block,
         "",
         sample_block,
+        "",
+        sample_value_block,
         "",
         install_tool_duration_facts,
         uninstall_tool_duration_facts,

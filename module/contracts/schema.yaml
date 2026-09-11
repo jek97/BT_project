@@ -336,7 +336,7 @@ actions:
         description: "true iff reason is completed(...)."
 
   # ----------------------------------------------------------------
-  # TakeSample -- corresponds to take_sample(ActionCode) in
+  # TakeSample -- corresponds to take_sample(SampleId,ActionCode) in
   # basic_action_theory.pl. INSTANTANEOUS, like PlanWith above (does
   # not advance now/2, no Duration/Triggers, no continuous trajectory)
   # -- but UNLIKE every other action in this schema, its outcome is a
@@ -346,29 +346,47 @@ actions:
   # -- defaults to 0.5 if omitted), independent per occurrence (see
   # basic_action_theory.pl's own do_node(take_sample(...)) note on
   # exactly what "independent" means here -- keyed on the SITUATION,
-  # not on the robot's physical state). No input ports at all --
-  # deliberately kept to the simplest possible interface; a future
-  # version could add e.g. a sample "kind"/"target" port the same way
-  # PlanWith's own goal port was added, without changing this shape.
+  # not on the robot's physical state). ONLY on success, a SECOND,
+  # independent random draw produces a VALUE too -- a discretized
+  # Normal(mean,sigma) over the integers 0..10 (sample.value.mean/
+  # sigma, this problem's own config.yaml, defaulting to mean=5.0/
+  # sigma=2.0) -- see SampleValueBelow/SampleValueEqual/SampleValueOver
+  # further down for checking it against a threshold.
   # ----------------------------------------------------------------
   - id: TakeSample
     prolog_action: take_sample
     description: >
       An instantaneous action with no target/goal/trigger of its own:
       succeeds or fails via a single fixed-probability coin flip
-      (sample.success_probability, this problem's own config.yaml).
-      Records the robot's own current position (at/4) at the instant
-      of sampling as part of its own Reason -- see the reason port
-      below, and basic_action_theory.pl's own sample_success_at/3 for
-      querying WHERE a successful sample landed.
+      (sample.success_probability, this problem's own config.yaml),
+      and on success draws a further VALUE (0..10, sample.value.mean/
+      sigma) recorded under this node's own id. Records the robot's
+      own current position (at/4) at the instant of sampling as part
+      of its own Reason -- see the reason port below, and
+      basic_action_theory.pl's own sample_success_at/3 for querying
+      WHERE a successful sample landed.
     ports:
+      - name: id
+        direction: input
+        type: std::string
+        required: true
+        description: >
+          This occurrence's own name (e.g. "soil1"), chosen by the
+          tree author -- NOT the auto-generated ActionCode every
+          action's own reason port already carries. A later
+          SampleValueBelow/SampleValueEqual/SampleValueOver condition
+          node references this SAME id to check what value THIS
+          specific sample came back with. Must be a valid Prolog atom
+          (lowercase-start, letters/digits/underscores).
       - name: reason
         direction: output
         type: std::string
         description: >
-          sample_success(X,Y,ActionCode) or sample_failure(X,Y,ActionCode)
-          -- X,Y is the robot's own position (metres, map frame) at the
-          instant this action ran; ActionCode identifies WHICH
+          sample_success(X,Y,V,SampleId,ActionCode) or sample_failure
+          (X,Y,SampleId,ActionCode) -- X,Y is the robot's own position
+          (metres, map frame) at the instant this action ran; V (only
+          present on success) is the drawn value, 0..10; SampleId is
+          this node's own id port, above; ActionCode identifies WHICH
           TakeSample occurrence in the tree this is (same per-
           occurrence code every other action's own reason port
           already uses).
@@ -404,20 +422,29 @@ actions:
   - id: InstallTool
     prolog_action: install_tool_leg
     description: >
-      Runs a fixed-Duration install of `tool` (cart or plow), halting
-      early on whichever of `triggers` occurs first, or resolving a
-      success/failure coin flip once the full Duration elapses with
-      nothing halting it early (see this entry's own header above for
-      the full mechanism). Only battery-related trigger names are
-      accepted -- the robot never moves during this action, so a
-      motion-based trigger has no meaningful geometry to check (see
-      the triggers port's own description below).
+      Runs a fixed-Duration install of `tool` (a specific tool INSTANCE
+      id, e.g. "cart1" -- this problem's own config.yaml tool.instances
+      -- not a kind; see basic_action_theory.pl's own tool_instance/2),
+      halting early on whichever of `triggers` occurs first, or
+      resolving a success/failure coin flip once the full Duration
+      elapses with nothing halting it early (see this entry's own
+      header above for the full mechanism). Only battery-related
+      trigger names are accepted -- the robot never moves during this
+      action, so a motion-based trigger has no meaningful geometry to
+      check (see the triggers port's own description below).
     ports:
       - name: tool
         direction: input
         type: std::string
         required: true
-        description: "cart or plow -- the ONLY two tool kinds accepted."
+        description: >
+          A tool INSTANCE id from this problem's own config.yaml
+          tool.instances (e.g. "cart1"), NOT a kind -- multiple
+          instances of the same kind (cart/plow) can exist. Not
+          validated against a fixed set at translation time (this
+          translator never parses config.yaml); an unknown id simply
+          makes this action's own precondition unsatisfiable (see
+          basic_action_theory.pl's own poss(start_install_tool(...))).
       - name: triggers
         direction: input
         type: std::vector<std::string>
@@ -455,15 +482,17 @@ actions:
       The mirror image of InstallTool above -- same ports/mechanism,
       uninstall_tool_success(Tool,ActionCode)/uninstall_tool_failure
       (Tool,ActionCode) in place of install_tool_success/
-      install_tool_failure. Requires hitch(Tool,S) to start (THIS
-      SPECIFIC tool currently attached), not just hitch(free,S)'s own
-      negation.
+      install_tool_failure. Requires hitch_id(Tool,S) to start (THIS
+      SPECIFIC tool INSTANCE currently attached, not just any instance
+      of its kind), not just hitch(free,S)'s own negation.
     ports:
       - name: tool
         direction: input
         type: std::string
         required: true
-        description: "cart or plow -- must be the tool CURRENTLY attached."
+        description: >
+          The tool INSTANCE id (e.g. "cart1") currently attached --
+          same id= an earlier <InstallTool> in this tree used.
       - name: triggers
         direction: input
         type: std::vector<std::string>
@@ -712,6 +741,71 @@ conditions:
         type: double
         required: true
         description: Battery level threshold, percent (0-100).
+
+  # ----------------------------------------------------------------
+  # holds(sample_value_below/equal/over(SampleId,Threshold), S) in
+  # basic_action_theory.pl -- checks the VALUE a SUCCESSFUL <TakeSample
+  # id="..."/> came back with (see that entry's own note), NOT a live
+  # geometry/battery lookup like BatteryOver above: a sample's own
+  # value is fixed the instant it's drawn (TakeSample is instantaneous,
+  # no Duration to elapse), so this is a HISTORY lookup (searches S's
+  # whole history for a matching sample_success, same shape HaltedWith
+  # uses) -- NON-CONTINUOUS for exactly that reason (excluded from
+  # automatic reactive-guard derivation, same treatment HaltedWith
+  # gets, see bt_to_prolog.py's own _NON_CONTINUOUS_CONDITIONS). Fails
+  # (neither true nor false, simply unsatisfied) if id never had a
+  # successful sample anywhere in S's history.
+  # ----------------------------------------------------------------
+  - id: SampleValueBelow
+    prolog_condition: sample_value_below
+    description: >
+      True iff the value <TakeSample id="..."/> recorded (0..10) is
+      below Threshold.
+    ports:
+      - name: id
+        direction: input
+        type: std::string
+        required: true
+        description: "Must match the id= of an earlier <TakeSample> in this tree."
+      - name: threshold
+        direction: input
+        type: double
+        required: true
+        description: "Value threshold, 0-10."
+
+  - id: SampleValueEqual
+    prolog_condition: sample_value_equal
+    description: >
+      True iff the value <TakeSample id="..."/> recorded (0..10) is
+      exactly Threshold.
+    ports:
+      - name: id
+        direction: input
+        type: std::string
+        required: true
+        description: "Must match the id= of an earlier <TakeSample> in this tree."
+      - name: threshold
+        direction: input
+        type: double
+        required: true
+        description: "Value threshold, 0-10."
+
+  - id: SampleValueOver
+    prolog_condition: sample_value_over
+    description: >
+      True iff the value <TakeSample id="..."/> recorded (0..10) is
+      above Threshold.
+    ports:
+      - name: id
+        direction: input
+        type: std::string
+        required: true
+        description: "Must match the id= of an earlier <TakeSample> in this tree."
+      - name: threshold
+        direction: input
+        type: double
+        required: true
+        description: "Value threshold, 0-10."
 
   # ----------------------------------------------------------------
   # holds(line_of_sight_clear(ObstacleId,GX,GY), S) in

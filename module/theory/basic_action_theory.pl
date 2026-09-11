@@ -1765,26 +1765,51 @@ poss(interrupt(T), S) :-
     earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0,Rate,0, _Reason,Tend,_Code),
     T >= T0, T < Tend.
 
-% poss(take_sample(ActionCode,Reason,Status), S): take_sample's own
-% ONE precondition -- \+ moving(S), can't take a sample mid-walk (the
-% robot's own position is only meaningfully "where I am right now" once
-% a walk has actually stopped -- see at/4's own note on freezing after
-% a halt). Otherwise derives X,Y (at/4, already resolved) and draws
-% sample_result/3, binding Reason/Status TOGETHER -- the SAME "Poss
-% derives the action term's own output arguments" idiom
-% poss(haltMoveto(T,Reason,Status),S) already uses above. See
+% poss(take_sample(SampleId,ActionCode,Reason,Status), S): take_sample's
+% own ONE precondition -- \+ moving(S), can't take a sample mid-walk
+% (the robot's own position is only meaningfully "where I am right
+% now" once a walk has actually stopped -- see at/4's own note on
+% freezing after a halt). Otherwise derives X,Y (at/4, already
+% resolved) and draws sample_result/3, binding Reason/Status TOGETHER
+% -- the SAME "Poss derives the action term's own output arguments"
+% idiom poss(haltMoveto(T,Reason,Status),S) already uses above. See
 % do_node(take_sample(...))'s own note (Section 5, ACTION leaf) for
 % the full picture.
-poss(take_sample(ActionCode,Reason,true), S) :-
+%
+% SampleId is the BT tree author's OWN chosen name for this occurrence
+% (schema.yaml's own TakeSample id port -- e.g. "soil1"), NOT the
+% auto-generated ActionCode: unlike ActionCode (assigned invisibly,
+% sequentially, during translation -- see _VarPool.next_action_code()),
+% a later SampleValueOver/Below/Equal condition node needs a name the
+% TREE AUTHOR can actually write down ahead of time to point back at
+% THIS specific sample, the same reason tool_instance ids exist (see
+% that predicate's own note) -- ActionCode and SampleId serve two
+% different purposes and are BOTH carried in Reason, exactly the same
+% "domain identifier plus auto-appended ActionCode" shape install_tool/
+% uninstall_tool's own Reason (install_tool_success(Id,ActionCode))
+% already established.
+%
+% ONLY on SUCCESS is a VALUE actually drawn (sample_value/3, this
+% problem's own config.yaml sample.value.mean/sigma -- a discretized
+% Normal distribution, see config_to_prolog.py's own note) -- a failed
+% sample reading is exactly that, a failed reading, there is no number
+% to report, same reasoning a failed install_tool never gets a
+% Duration-elapsed coin-flip outcome of its own either. sample_value/3
+% is keyed by (S,ActionCode), the SAME "fresh draw per genuinely new
+% situation" convention sample_result/3 itself already uses -- SampleId
+% plays no role in ITS OWN key, it only travels along inside Reason for
+% a later condition to read back out.
+poss(take_sample(SampleId,ActionCode,Reason,true), S) :-
     \+ moving(S),
     now(T, S), at(X,Y,T,S),
     sample_result(S, ActionCode, true),
-    tag_reason(sample_success(X,Y), ActionCode, Reason).
-poss(take_sample(ActionCode,Reason,false), S) :-
+    sample_value(S, ActionCode, V),
+    tag_reason(sample_success(X,Y,V,SampleId), ActionCode, Reason).
+poss(take_sample(SampleId,ActionCode,Reason,false), S) :-
     \+ moving(S),
     now(T, S), at(X,Y,T,S),
     sample_result(S, ActionCode, false),
-    tag_reason(sample_failure(X,Y), ActionCode, Reason).
+    tag_reason(sample_failure(X,Y,SampleId), ActionCode, Reason).
 
 % poss(start_install_tool(Id,Triggers,ActionCode,T0), S): the three
 % preconditions this action's own design calls for -- \+ moving(S)
@@ -2056,7 +2081,7 @@ nominal_at(X,Y,Frac,ControlPoints) :- spline_point(ControlPoints, Frac, X, Y).
 primitive_action(startMoveto(_,_,_,_)).
 primitive_action(haltMoveto(_,_,_)).
 primitive_action(interrupt(_)).
-primitive_action(take_sample(_,_,_)).
+primitive_action(take_sample(_,_,_,_)).
 primitive_action(start_install_tool(_,_,_,_)).
 primitive_action(halt_install_tool(_,_,_)).
 primitive_action(start_uninstall_tool(_,_,_,_)).
@@ -2079,16 +2104,16 @@ do_node(cond(C,Code), S, do(checked(Code,C,true), S), true)  :- holds(C, S).
 do_node(cond(C,Code), S, do(checked(Code,C,false),S), false) :- \+ holds(C, S).
 
 % -- ACTION leaf: take_sample -------------------------------------------
-% take_sample(ActionCode) -- INSTANTANEOUS (no Duration/Triggers/
-% continuous trajectory of any kind), but UNLIKE PlanWith/cond(C,Code)
-% above, it DOES go through the full primitive_action/poss/do_action
-% machinery every OTHER genuine action in this theory uses -- Reiter's
-% own convention gates EVERY action on a Poss precondition regardless
-% of whether it takes time; PlanWith/cond are the deliberate
-% exceptions (pure computation / a fact about the CURRENT situation
-% with no precondition of its own to state), not the default. The one
-% precondition, for now: \+ moving(S) -- can't take a sample while
-% mid-walk. See primitive_action(take_sample(_,_,_)) and
+% take_sample(SampleId,ActionCode) -- INSTANTANEOUS (no Duration/
+% Triggers/continuous trajectory of any kind), but UNLIKE PlanWith/
+% cond(C,Code) above, it DOES go through the full primitive_action/
+% poss/do_action machinery every OTHER genuine action in this theory
+% uses -- Reiter's own convention gates EVERY action on a Poss
+% precondition regardless of whether it takes time; PlanWith/cond are
+% the deliberate exceptions (pure computation / a fact about the
+% CURRENT situation with no precondition of its own to state), not the
+% default. The one precondition, for now: \+ moving(S) -- can't take a
+% sample while mid-walk. See primitive_action(take_sample(_,_,_,_)) and
 % poss(take_sample(...),S) further up/down (grep for both).
 %
 % Its own outcome is a genuine new probabilistic choice, NOT determined
@@ -2102,35 +2127,45 @@ do_node(cond(C,Code), S, do(checked(Code,C,false),S), false) :- \+ holds(C, S).
 % node) -- same "keyed on the situation term" convention z/2 and zt/2
 % already use for their own per-startMoveto draws, so "does the same
 % PHYSICAL STATE always sample the same way" is emphatically NOT what
-% this guarantees; only an identical SITUATION TERM does.
+% this guarantees; only an identical SITUATION TERM does. sample_value/3
+% is a SECOND, independent annotated disjunction of the SAME shape,
+% drawn ONLY when sample_result/3 comes back true (see poss(take_sample
+% (...))'s own note) -- a discretized Normal(mean,sigma) over the
+% integers 0..10 (config.yaml sample.value.mean/sigma), NOT a fixed
+% coin flip like sample_result/3 itself: this is what actually lets a
+% later condition ask "was the READING above 7", not just "did the
+% sample succeed".
 %
 % X,Y (the robot's own CURRENT position, at/4, already resolved -- no
-% further noise of its own here) is baked directly into the Reason,
-% sample_success(X,Y) or sample_failure(X,Y), then tagged with
-% ActionCode via the SAME generic tag_reason/3 haltMoveto/PlanWith
-% already use -- giving sample_success(X,Y,ActionCode)/sample_failure
-% (X,Y,ActionCode), the standard "trailing ActionCode" Reason shape
-% every other action in this theory produces, all bound TOGETHER by
-% Poss -- the exact same "Poss derives the action term's own output
-% arguments" idiom poss(haltMoveto(T,Reason,Status),S) already uses,
-% now that take_sample is a genuine primitive_action too. This still
-% needed its OWN dedicated clauses at every "outermost do(...) layer"
-% pattern-match site -- halted_with/2 and outcome_entry/2, mirroring
-% haltMoveto/planned's own clauses at each -- verified directly (a
-% standalone ProbLog run caught any_reason_pattern(sample_success
-% (wild,wild)) silently reading 0% before those clauses were added:
-% halted_with/2's own GENERIC do(_A,S) clause only SKIPS an
-% unrecognized marker while searching deeper, it does not also try to
-% unify Reason against whatever's inside it, so this doesn't come "for
-% free" the way at/4/battery/3/moving/1/now/2's OWN generic pass-
-% through clauses do for a bare marker with no Reason of its own to
-% extract). Once halted_with/2 sees it, any_reason_pattern(_by_action)
-% and the outcome-enumeration table (outcome_entry/2's own new clause
-% below) both work correctly with no further changes. See also
+% further noise of its own here) and V (the drawn value, success only)
+% are baked directly into the Reason, sample_success(X,Y,V,SampleId) or
+% sample_failure(X,Y,SampleId), then tagged with ActionCode via the
+% SAME generic tag_reason/3 haltMoveto/PlanWith already use -- giving
+% sample_success(X,Y,V,SampleId,ActionCode)/sample_failure(X,Y,SampleId,
+% ActionCode), the standard "trailing ActionCode" Reason shape every
+% other action in this theory produces, all bound TOGETHER by Poss --
+% the exact same "Poss derives the action term's own output arguments"
+% idiom poss(haltMoveto(T,Reason,Status),S) already uses, now that
+% take_sample is a genuine primitive_action too. This still needed its
+% OWN dedicated clauses at every "outermost do(...) layer" pattern-
+% match site -- halted_with/2 and outcome_entry/2, mirroring haltMoveto/
+% planned's own clauses at each -- verified directly (a standalone
+% ProbLog run caught any_reason_pattern(sample_success(wild,wild))
+% silently reading 0% before those clauses were added: halted_with/2's
+% own GENERIC do(_A,S) clause only SKIPS an unrecognized marker while
+% searching deeper, it does not also try to unify Reason against
+% whatever's inside it, so this doesn't come "for free" the way
+% at/4/battery/3/moving/1/now/2's OWN generic pass-through clauses do
+% for a bare marker with no Reason of its own to extract). Once
+% halted_with/2 sees it, any_reason_pattern(_by_action) and the
+% outcome-enumeration table (outcome_entry/2's own new clause below)
+% both work correctly with no further changes. See also
 % sample_success_at/3 further down, for querying WHERE a successful
-% sample landed.
-do_node(take_sample(ActionCode), S, S1, Status) :-
-    do_action(take_sample(ActionCode,_Reason,Status), S, S1).
+% sample landed, and holds(sample_value_over(...)) and its Below/Equal
+% siblings (Section 8, near distance_below/3) for querying WHAT VALUE a
+% specific, author-named sample (SampleId) came back with.
+do_node(take_sample(SampleId,ActionCode), S, S1, Status) :-
+    do_action(take_sample(SampleId,ActionCode,_Reason,Status), S, S1).
 
 % -- ACTION leaf --------------------------------------------------------
 % moveto_leg(CP,Triggers) -- Triggers is ALWAYS given explicitly here;
@@ -2689,6 +2724,49 @@ holds(distance_equal(GX,GY,Threshold), S) :-
 holds(distance_over(GX,GY,Threshold), S) :-
     now(T, S), at(X,Y,T,S), dist(X,Y,GX,GY,D), D > Threshold.
 
+% sample_value_below(SampleId,Threshold) / sample_value_equal(SampleId,
+% Threshold) / sample_value_over(SampleId,Threshold): true iff the
+% VALUE (0..10, see sample_value/3) a SUCCESSFUL take_sample recorded
+% under SampleId -- the tree author's own id port, schema.yaml's own
+% TakeSample entry, NOT the auto-generated ActionCode -- is,
+% respectively, below/exactly-equal-to/above Threshold. Reads back out
+% of halted_with/2 (searches S's WHOLE history, same "history-based,
+% not a live fluent" shape halted_with_cond/1 itself has), NOT a fresh
+% dist/5-style computation the way distance_below/3 above is -- a
+% sample's value is fixed the INSTANT it's drawn (do_node(take_sample
+% (...)) is INSTANTANEOUS, no Duration to elapse), so there is nothing
+% to re-derive at a later situation, only something to look up. Fails
+% outright (same as every OTHER condition here) if SampleId never had a
+% SUCCESSFUL sample in S's history at all -- a failed or never-taken
+% sample has no value to compare, not a special error case.
+%
+% NON-CONTINUOUS for the SAME reason halted_with_cond/1 is (see
+% bt_to_prolog.py's own _NON_CONTINUOUS_CONDITIONS note): a value that
+% cannot change WHILE a leg is running has nothing for a reactive
+% crossing-search to watch for, so these three are excluded from
+% automatic guard-trigger derivation, same treatment HaltedWith gets.
+holds(sample_value_below(SampleId,Threshold), S) :-
+    halted_with(sample_success(_X,_Y,V,SampleId,_ActionCode), S),
+    V < Threshold.
+holds(sample_value_equal(SampleId,Threshold), S) :-
+    halted_with(sample_success(_X,_Y,V,SampleId,_ActionCode), S),
+    V =:= Threshold.
+holds(sample_value_over(SampleId,Threshold), S) :-
+    halted_with(sample_success(_X,_Y,V,SampleId,_ActionCode), S),
+    V > Threshold.
+
+% sample_value_below/3, sample_value_equal/3, sample_value_over/3 (bare,
+% NOT holds(...)-wrapped): thin pass-throughs so a goal_formula.pl can
+% reference "was SampleId's own reading over Threshold" directly, the
+% same way it already calls hitch/2 or sample_success_at/3 straight,
+% without needing holds/2 itself to be a goal-formula-callable
+% predicate (see vocabulary.yaml's own entries for these three and
+% module/contracts/goal_formula_check.py's own vocabulary-lookup, which
+% checks bare predicate names/arities, not holds(...)-wrapped ones).
+sample_value_below(SampleId, Threshold, S) :- holds(sample_value_below(SampleId,Threshold), S).
+sample_value_equal(SampleId, Threshold, S) :- holds(sample_value_equal(SampleId,Threshold), S).
+sample_value_over(SampleId, Threshold, S) :- holds(sample_value_over(SampleId,Threshold), S).
+
 % obstacle_in_bound(Threshold): true iff the CURRENT position (at the
 % current time, via now/2) is within Threshold of ANY obstacle. Same
 % parameter, same underlying geometry as the obstacle_in_bound(Threshold)
@@ -3004,7 +3082,7 @@ outcome_entry(planned(_,Reason), Code-Pattern) :-
     append(Args0, [Code], Args),
     Pattern =.. [Functor|Args0].
 outcome_entry(checked(Code,_,Status), Code-Status).
-outcome_entry(take_sample(_ActionCode,Reason,_Status), Code-Pattern) :-
+outcome_entry(take_sample(_SampleId,_ActionCode,Reason,_Status), Code-Pattern) :-
     Reason =.. [Functor|Args],
     append(Args0, [Code], Args),
     Pattern =.. [Functor|Args0].
@@ -3171,7 +3249,7 @@ sample_walk_frac(I, S, WalkFrac) :-
 % fate than the final one is still handled correctly.
 halted_with(Reason, do(haltMoveto(_,Reason,_), _)).
 halted_with(Reason, do(planned(_Algorithm,Reason), _)).
-halted_with(Reason, do(take_sample(_ActionCode,Reason,_Status), _)).
+halted_with(Reason, do(take_sample(_SampleId,_ActionCode,Reason,_Status), _)).
 halted_with(Reason, do(halt_install_tool(_,Reason,_), _)).
 halted_with(Reason, do(halt_uninstall_tool(_,Reason,_), _)).
 halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
@@ -3313,7 +3391,7 @@ ploughed_cell_sample(CP,T0,Duration,Elapsed,Z,Zt,CellSize,N,I,Cx,Cy) :-
 % sample_success_at(point(GX2,GY2),Tol,S), ..." in a goal formula --
 % one conjunct per location, same idiom multi-waypoint goal formulas
 % already use for visited/3.
-sample_success_at(point(GX,GY), Tol, do(take_sample(_ActionCode,sample_success(X,Y,_ActionCode),true), _S)) :-
+sample_success_at(point(GX,GY), Tol, do(take_sample(_SampleId,_ActionCode,sample_success(X,Y,_V,_SampleId2,_ActionCode2),true), _S)) :-
     dist(X,Y,GX,GY,D), D =< Tol.
 sample_success_at(Loc, Tol, do(_A, S)) :- sample_success_at(Loc, Tol, S).
 
@@ -3556,7 +3634,7 @@ holds(last_halt(Reason), do(halt_install_tool(_T,Reason,_Status),_SPrev)).
 holds(last_halt(Reason), do(halt_uninstall_tool(_T,Reason,_Status),_SPrev)).
 holds(last_halt(Reason), do(checked(_,_,_), S)) :- holds(last_halt(Reason), S).
 holds(last_halt(Reason), do(planned(_,_), S)) :- holds(last_halt(Reason), S).
-holds(last_halt(Reason), do(take_sample(_,_,_), S)) :- holds(last_halt(Reason), S).
+holds(last_halt(Reason), do(take_sample(_,_,_,_), S)) :- holds(last_halt(Reason), S).
 
 % KNOWN LIMITATION, found while adding cond(C,Code)'s own checked(...)
 % marker (Option B): cond(neg(last_halt(...))) -- problem3's OWN Bug0

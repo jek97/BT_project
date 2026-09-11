@@ -37,6 +37,18 @@ disc_step_time(20).
 0.5::sample_result(S,ActionCode,true) ;
 0.5::sample_result(S,ActionCode,false).
 
+0.012224472655044727::sample_value(S,ActionCode,0) ;
+0.027834684208772387::sample_value(S,ActionCode,1) ;
+0.06559061680303818::sample_value(S,ActionCode,2) ;
+0.12097757871001291::sample_value(S,ActionCode,3) ;
+0.1746663219402081::sample_value(S,ActionCode,4) ;
+0.1974126513658474::sample_value(S,ActionCode,5) ;
+0.17466632194020804::sample_value(S,ActionCode,6) ;
+0.12097757871001291::sample_value(S,ActionCode,7) ;
+0.06559061680303824::sample_value(S,ActionCode,8) ;
+0.027834684208772442::sample_value(S,ActionCode,9) ;
+0.012224472655044671::sample_value(S,ActionCode,10).
+
 install_tool_duration(cart, 10.0).
 install_tool_duration(plow, 10.0).
 uninstall_tool_duration(cart, 10.0).

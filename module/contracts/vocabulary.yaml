@@ -86,15 +86,51 @@ predicates:
       - {position: 3, name: S, type: situation, description: "The situation to check at."}
     description: >
       TRUE iff a take_sample action SUCCEEDED (Reason=sample_success
-      (X,Y,ActionCode) -- see schema.yaml's own TakeSample entry) at
-      some point in S's history whose own recorded (X,Y) -- the
-      robot's actual position, via at/4, at the instant of sampling --
-      is within Tol of Loc. Same monotonic, whole-history-search shape
-      as visited/3 above (once true for a situation, true for every
-      situation built on top of it) -- "did you take the sample at
-      THESE locations" is exactly one sample_success_at(Loc,Tol,S)
-      conjunct per location in a goal formula, same idiom visited/3
-      already uses for multi-waypoint goals.
+      (X,Y,V,SampleId,ActionCode) -- see schema.yaml's own TakeSample
+      entry) at some point in S's history whose own recorded (X,Y) --
+      the robot's actual position, via at/4, at the instant of
+      sampling -- is within Tol of Loc. Same monotonic, whole-history-
+      search shape as visited/3 above (once true for a situation, true
+      for every situation built on top of it) -- "did you take the
+      sample at THESE locations" is exactly one sample_success_at
+      (Loc,Tol,S) conjunct per location in a goal formula, same idiom
+      visited/3 already uses for multi-waypoint goals. See sample_
+      value_below/equal/over below to check WHAT VALUE a specific,
+      author-named sample (not just where) came back with.
+
+  - name: sample_value_below
+    arity: 3
+    situation_arg: 3
+    args:
+      - {position: 1, name: SampleId, type: atom, description: "A <TakeSample id=\"...\"/> node's own id, e.g. soil1."}
+      - {position: 2, name: Threshold, type: float, description: "Value threshold, 0-10."}
+      - {position: 3, name: S, type: situation, description: "The situation to check at."}
+    description: >
+      TRUE iff SampleId's own take_sample SUCCEEDED somewhere in S's
+      history and its own drawn value (0..10, sample.value.mean/sigma
+      -- this problem's own config.yaml) is below Threshold. Same
+      whole-history-search shape as sample_success_at/3 above; fails
+      (neither true nor false) if SampleId never had a successful
+      sample at all. See schema.yaml's own SampleValueBelow condition
+      for the BT-tree-facing version of the same check.
+
+  - name: sample_value_equal
+    arity: 3
+    situation_arg: 3
+    args:
+      - {position: 1, name: SampleId, type: atom, description: "A <TakeSample id=\"...\"/> node's own id, e.g. soil1."}
+      - {position: 2, name: Threshold, type: float, description: "Value threshold, 0-10."}
+      - {position: 3, name: S, type: situation, description: "The situation to check at."}
+    description: "Like sample_value_below/3, but exactly equal to Threshold rather than below it."
+
+  - name: sample_value_over
+    arity: 3
+    situation_arg: 3
+    args:
+      - {position: 1, name: SampleId, type: atom, description: "A <TakeSample id=\"...\"/> node's own id, e.g. soil1."}
+      - {position: 2, name: Threshold, type: float, description: "Value threshold, 0-10."}
+      - {position: 3, name: S, type: situation, description: "The situation to check at."}
+    description: "Like sample_value_below/3, but above Threshold rather than below it."
 
   - name: hitch
     arity: 2

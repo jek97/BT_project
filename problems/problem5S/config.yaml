@@ -77,6 +77,12 @@ grounding:
 tool:
   instances:
     - {id: plow1, kind: plow, x: 18.5, y: -13.5}
+  equipped:
+    plow:
+      speed: 1.0                       # m/time-unit -- PLACEHOLDER, hitched but not deployed (same as base motion.speed for now)
+      moving_drain_rate: 0.5           # percent/time-unit -- PLACEHOLDER, hitched but not deployed (same as base battery.moving_drain_rate for now)
+      deployed_speed: 0.5              # m/time-unit -- PLACEHOLDER, hitched AND deployed (actively plowing: half speed)
+      deployed_moving_drain_rate: 1.0  # percent/time-unit -- PLACEHOLDER, hitched AND deployed (actively plowing: double drain)
 
 ploughing:
   cell_size: 2.0   # metres -- plough_cell_size/1

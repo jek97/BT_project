@@ -1,4 +1,6 @@
-# config.yaml -- problem5
+# config.yaml -- problem5L (formerly problem5 -- renamed once problem5M/
+# problem5S, siblings sharing the same behavior_tree.xml on
+# orchard_map_b/orchard_map_c, were added)
 #
 # See problem4/config.yaml for the full field-by-field documentation;
 # this file follows the exact same layout, with these changes:
@@ -52,27 +54,17 @@ initial_situation:
   # and not coincidentally also where clearance peaks scanning either
   # direction along x=11.3).
   #
-  # SECOND, DEEPER KNOWN ISSUE (found fixing the first one, NOT fixed
-  # here): with this start point, astar now finds a path (no more
-  # no_path at the very first leg), but the subsequent MoveTo reports
-  # crashed(obs1) -- see behavior_tree.xml's own header for the full
-  # diagnosis. obs1 is this map's ENTIRE outer perimeter fence, a
-  # closed loop, extracted by occgrid_to_problog.py's own cv2.
-  # findContours(RETR_EXTERNAL, ...) as a single simple polygon; that
-  # extraction has no notion of "thin ring with a hollow interior", so
-  # the containment check every collision/planning routine uses
-  # (planners.py's own _inside_polygon) treats EVERYTHING inside the
-  # fence line -- the whole walkable orchard, this start point and the
-  # plow's own (0,0) included -- as inside the obstacle. Confirmed
-  # directly: _inside_polygon(11.3,-15.0,obs1) and _inside_polygon
-  # (0,0,obs1) both return True, while a point genuinely outside the
-  # map correctly returns False. The OLD 144-tree map (problems/
-  # new_map/) never hit this, since none of its obstacles formed a
-  # closed loop. Not something to fix by moving a point -- it needs
-  # either occgrid_to_problog.py's own extraction to handle ring-
-  # shaped/hollow regions (e.g. cv2.RETR_CCOMP plus hole-aware
-  # containment), or a different way of representing a perimeter
-  # fence than "one solid obstacle polygon".
+  # SECOND, DEEPER ISSUE found fixing the first one (NOW FIXED): with
+  # this start point, astar found a path but the subsequent MoveTo
+  # reported crashed(obs1) -- occgrid_to_problog.py's cv2.findContours
+  # (RETR_EXTERNAL,...) had no notion of "thin ring with a hollow
+  # interior", so the outer perimeter fence was extracted as one solid
+  # filled polygon and every collision check treated the WHOLE walkable
+  # orchard interior as inside the obstacle. Fixed by switching
+  # extraction to RETR_CCOMP (emitting each fence's interior as an
+  # obstacle_hole/2 fact) and making collision_geometry.py/planners.py
+  # test containment via combined even-odd ray-casting across an
+  # obstacle's outer boundary AND its holes together.
   start_x: 11.3    # metres
   start_y: -15.0   # metres
 

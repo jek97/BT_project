@@ -1,4 +1,4 @@
-% goal_formula.pl -- problem5
+% goal_formula.pl -- problem5L (formerly problem5)
 %
 % Tied to this problem's own behavior_tree.xml: the shipped plan's last
 % leg returns to the start position (11.3,-15.0) -- "visited it" is the

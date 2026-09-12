@@ -118,38 +118,54 @@ def run_staged_inference(plan_file, tee, phase_timeout=300):
     compile / evaluate -- see this module's own header for what each
     one actually is).
 
+    phase_timeout is either a single int/float (the SAME budget, in
+    seconds, applied to all four stages -- the original, still-default
+    behavior) or a dict with any of the keys "parse"/"ground"/
+    "compile"/"evaluate" mapping to that one stage's own budget; any
+    key left out of the dict falls back to 300s. The dict form exists
+    because these four stages do not scale the same way with problem
+    size -- Ground (SLD-resolution over every query) is typically the
+    one that needs more headroom on a large obstacle set, and a single
+    blanket timeout means inflating Parse/Compile/Evaluate's budgets
+    right along with it just to give Ground more room.
+
     Returns (results, timings):
       - results: {str(query_term): float(probability)} -- EXACTLY the
         same shape the old single-call run_problog_api always
         returned, so nothing downstream needs to change.
       - timings: {"parse"|"ground"|"compile"|"evaluate": elapsed_seconds}
 
-    Raises StageTimeout if any single stage exceeds phase_timeout
-    seconds (default 300s = 5 minutes) -- which stage is already named
-    in the [STAGE] line logged just before the exception propagates,
-    so a hang's location is known even though the run itself has to be
-    aborted.
+    Raises StageTimeout if any single stage exceeds ITS OWN budget --
+    which stage is already named in the [STAGE] line logged just
+    before the exception propagates, so a hang's location is known
+    even though the run itself has to be aborted.
     """
+    if isinstance(phase_timeout, dict):
+        timeouts = {"parse": 300, "ground": 300, "compile": 300, "evaluate": 300}
+        timeouts.update(phase_timeout)
+    else:
+        timeouts = {k: phase_timeout for k in ("parse", "ground", "compile", "evaluate")}
+
     timings = {}
 
     model, t = run_stage(tee, "Parse (plan.pl formed)",
-                          lambda: PrologFile(plan_file), phase_timeout)
+                          lambda: PrologFile(plan_file), timeouts["parse"])
     timings["parse"] = t
 
     lf, t = run_stage(tee, "Ground (plan unrolled, regressed to s0)",
                        lambda: LogicFormula.create_from(model, label_all=True),
-                       phase_timeout)
+                       timeouts["ground"])
     timings["ground"] = t
     tee(f"    -> {len(lf)} ground node(s)")
 
     compiled, t = run_stage(tee, "Compile (knowledge compilation)",
                              lambda: get_evaluatable().create_from(lf),
-                             phase_timeout)
+                             timeouts["compile"])
     timings["compile"] = t
 
     raw_result, t = run_stage(
         tee, "Evaluate (weighted model count against the initial database)",
-        lambda: compiled.evaluate(), phase_timeout)
+        lambda: compiled.evaluate(), timeouts["evaluate"])
     timings["evaluate"] = t
 
     results = {str(term): float(prob) for term, prob in raw_result.items()}

@@ -503,11 +503,41 @@ def main():
                           "goal_formula.pl, and map.yaml (default: "
                           "problem0).")
     ap.add_argument("--phase-timeout", type=int, default=300,
-                     help="Per-stage timeout in seconds for the ProbLog "
-                          "resolution pipeline -- parse/ground/compile/"
-                          "evaluate each get their own budget (default: "
-                          "300 = 5 minutes). See pipeline_stages.py.")
+                     help="Timeout in seconds applied to every stage of "
+                          "the ProbLog resolution pipeline (parse/ground/"
+                          "compile/evaluate) that isn't given its own "
+                          "override below (default: 300 = 5 minutes). "
+                          "See pipeline_stages.py.")
+    ap.add_argument("--parse-timeout", type=int, default=None,
+                     help="Override just the Parse stage's timeout "
+                          "(seconds). Defaults to --phase-timeout.")
+    ap.add_argument("--ground-timeout", type=int, default=None,
+                     help="Override just the Ground stage's timeout "
+                          "(seconds) -- the stage most likely to need "
+                          "more headroom on a large obstacle set. "
+                          "Defaults to --phase-timeout.")
+    ap.add_argument("--compile-timeout", type=int, default=None,
+                     help="Override just the Compile stage's timeout "
+                          "(seconds). Defaults to --phase-timeout.")
+    ap.add_argument("--evaluate-timeout", type=int, default=None,
+                     help="Override just the Evaluate stage's timeout "
+                          "(seconds). Defaults to --phase-timeout.")
     args = ap.parse_args()
+
+    # Only build a per-stage dict when at least one override was given,
+    # so the common case (no overrides) keeps passing a plain int
+    # straight through, exactly as before.
+    _overrides = {
+        "parse": args.parse_timeout,
+        "ground": args.ground_timeout,
+        "compile": args.compile_timeout,
+        "evaluate": args.evaluate_timeout,
+    }
+    if any(v is not None for v in _overrides.values()):
+        phase_timeout_arg = {k: (v if v is not None else args.phase_timeout)
+                              for k, v in _overrides.items()}
+    else:
+        phase_timeout_arg = args.phase_timeout
 
     problem_dir = os.path.join(PROBLEMS_DIR, args.problem)
 
@@ -681,13 +711,17 @@ def main():
                                run_label=f"main.py --problem {args.problem}, run {ts}",
                                tee=tee)
 
+        if isinstance(phase_timeout_arg, dict):
+            _timeout_desc = ", ".join(f"{k}={v}s" for k, v in phase_timeout_arg.items())
+        else:
+            _timeout_desc = f"{phase_timeout_arg}s per stage"
         tee(f"\n  Started : {datetime.now():%H:%M:%S}  "
-            f"(phase timeout: {args.phase_timeout}s per stage)")
+            f"(phase timeout: {_timeout_desc})")
         try:
-            results, elapsed = run_problog_api(THEORY_PATH, tee, args.phase_timeout)
+            results, elapsed = run_problog_api(THEORY_PATH, tee, phase_timeout_arg)
         except StageTimeout:
             tee(f"\n  [ERROR] Aborting -- a pipeline stage exceeded its "
-                f"{args.phase_timeout}s timeout (see [STAGE] line above for which).")
+                f"own timeout ({_timeout_desc}; see [STAGE] line above for which).")
             sys.exit(1)
         except ProbLogError as e:
             tee(f"\n  [ERROR] ProbLog error: {e}")

@@ -1,0 +1,82 @@
+<?xml version="1.0"?>
+<!--
+  behavior_tree.xml (problem6M, on orchard_map_b). Sibling of
+  problem6L (orchard_map_a) and problem6S (orchard_map_c); all three
+  share this exact tree shape.
+
+  Translated from an amiga_btcpp-schema mission tree ("sample_trees_11
+  _and_53": walk to entrance 5, walk the row to tree 11, retry
+  approach+sample it up to 3 times, exit back through entrance 5, then
+  the mirror image for tree 53 through entrance 7). Per this project's
+  own schema.yaml, every MoveToGPSLocation/ApproachGPSWaypoint became
+  its own Sequence(PlanWith(astar,goal,CP), MoveTo(CP)) pair, and every
+  SampleLeaf became a TakeSample. RetryUntilSuccessful(num_attempts) is
+  a native BT.cpp decorator bt_to_prolog.py already unrolls into a
+  Fallback of that many identical copies, so it needed no translation
+  of its own.
+
+  WAYPOINTS ARE PLACEHOLDERS: every PlanWith's own goal="TBD;TBD" needs
+  a real "X;Y" (this map's own local frame, metres) before this tree
+  can be translated at all; bt_to_prolog.py's own Point-format
+  validation raises a loud BTValidationError on any non-numeric goal,
+  by design, rather than silently accepting a wrong default. The
+  original mission's own GPS lat/lon is kept in a comment beside each
+  leg for reference while picking real coordinates; config.yaml's own
+  initial_situation.start_x/start_y is a matching placeholder too.
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="MainTree">
+      <!-- move_to_entrance_5: lat=37.266488501443305 lon=-120.42053433807618 -->
+      <Sequence>
+        <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp1}"/>
+        <MoveTo control_points="{cp1}"/>
+      </Sequence>
+      <!-- move_to_tree_11_row_waypoint: lat=37.26640452995226 lon=-120.42053431151196 -->
+      <Sequence>
+        <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp2}"/>
+        <MoveTo control_points="{cp2}"/>
+      </Sequence>
+      <RetryUntilSuccessful num_attempts="3">
+        <Sequence>
+          <!-- approach_tree_11: lat=37.266404577471214 lon=-120.42058159970989 -->
+          <Sequence>
+            <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp3}"/>
+            <MoveTo control_points="{cp3}"/>
+          </Sequence>
+          <TakeSample id="sample_tree_11"/>
+        </Sequence>
+      </RetryUntilSuccessful>
+      <!-- exit_to_entrance_5: lat=37.266488501443305 lon=-120.42053433807618 (same waypoint as move_to_entrance_5) -->
+      <Sequence>
+        <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp4}"/>
+        <MoveTo control_points="{cp4}"/>
+      </Sequence>
+      <!-- move_to_entrance_7: lat=37.26648825932271 lon=-120.42043967229692 -->
+      <Sequence>
+        <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp5}"/>
+        <MoveTo control_points="{cp5}"/>
+      </Sequence>
+      <!-- move_to_tree_53_row_waypoint: lat=37.26621051786413 lon=-120.42043988043025 -->
+      <Sequence>
+        <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp6}"/>
+        <MoveTo control_points="{cp6}"/>
+      </Sequence>
+      <RetryUntilSuccessful num_attempts="3">
+        <Sequence>
+          <!-- approach_tree_53: lat=37.26621083783149 lon=-120.42039269568987 -->
+          <Sequence>
+            <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp7}"/>
+            <MoveTo control_points="{cp7}"/>
+          </Sequence>
+          <TakeSample id="sample_tree_53"/>
+        </Sequence>
+      </RetryUntilSuccessful>
+      <!-- exit_to_entrance_7: lat=37.26648825932271 lon=-120.42043967229692 (same waypoint as move_to_entrance_7) -->
+      <Sequence>
+        <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp8}"/>
+        <MoveTo control_points="{cp8}"/>
+      </Sequence>
+    </Sequence>
+  </BehaviorTree>
+</root>

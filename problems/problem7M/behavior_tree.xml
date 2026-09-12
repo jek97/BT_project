@@ -1,0 +1,85 @@
+<?xml version="1.0"?>
+<!--
+  behavior_tree.xml (problem7M, on orchard_map_b). Sibling of
+  problem7L (orchard_map_a) and problem7S (orchard_map_c); all three
+  share this exact tree shape.
+
+  Translated from an amiga_btcpp-schema mission tree ("sample 11 and
+  13": two independent branches, each walking in from its own
+  entrance, straight to one tree, sampling it once (no retry), then
+  walking straight back out the same way). Per this project's own
+  schema.yaml, every MoveToGPSLocation became its own
+  Sequence(PlanWith(astar,goal,CP), MoveTo(CP)) pair, and the SampleLeaf
+  in each branch became a TakeSample.
+
+  WAYPOINTS ARE PLACEHOLDERS: every PlanWith's own goal="TBD;TBD" needs
+  a real "X;Y" (this map's own local frame, metres) before this tree
+  can be translated at all; bt_to_prolog.py's own Point-format
+  validation raises a loud BTValidationError on any non-numeric goal,
+  by design, rather than silently accepting a wrong default. The
+  original mission's own GPS lat/lon is kept in a comment beside each
+  leg for reference while picking real coordinates; config.yaml's own
+  initial_situation.start_x/start_y is a matching placeholder too.
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="MainTree">
+      <Sequence>
+        <!-- move_to_entrance_3: lat=37.26648874345582 lon=-120.42062900349974 -->
+        <Sequence>
+          <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp1}"/>
+          <MoveTo control_points="{cp1}"/>
+        </Sequence>
+        <!-- move_to_tree_11_wp1: lat=37.26640462497126 lon=-120.42062888790896 -->
+        <Sequence>
+          <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp2}"/>
+          <MoveTo control_points="{cp2}"/>
+        </Sequence>
+        <!-- move_to_tree_11: lat=37.266404577471214 lon=-120.42058159970989 -->
+        <Sequence>
+          <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp3}"/>
+          <MoveTo control_points="{cp3}"/>
+        </Sequence>
+        <TakeSample id="sample_tree_11"/>
+        <!-- return_tree_11_wp1: lat=37.26640462497126 lon=-120.42062888790896 (same waypoint as move_to_tree_11_wp1) -->
+        <Sequence>
+          <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp4}"/>
+          <MoveTo control_points="{cp4}"/>
+        </Sequence>
+        <!-- return_to_entrance_3: lat=37.26648874345582 lon=-120.42062900349974 (same waypoint as move_to_entrance_3) -->
+        <Sequence>
+          <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp5}"/>
+          <MoveTo control_points="{cp5}"/>
+        </Sequence>
+      </Sequence>
+      <Sequence>
+        <!-- move_to_entrance_7: lat=37.26648825932271 lon=-120.42043967229692 -->
+        <Sequence>
+          <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp6}"/>
+          <MoveTo control_points="{cp6}"/>
+        </Sequence>
+        <!-- move_to_tree_13_wp1: lat=37.26640443485763 lon=-120.42043973511964 -->
+        <Sequence>
+          <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp7}"/>
+          <MoveTo control_points="{cp7}"/>
+        </Sequence>
+        <!-- move_to_tree_13: lat=37.266404387281945 lon=-120.42039244692528 -->
+        <Sequence>
+          <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp8}"/>
+          <MoveTo control_points="{cp8}"/>
+        </Sequence>
+        <TakeSample id="sample_tree_13"/>
+        <!-- return_tree_13_wp1: lat=37.26640443485763 lon=-120.42043973511964 (same waypoint as move_to_tree_13_wp1) -->
+        <Sequence>
+          <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp9}"/>
+          <MoveTo control_points="{cp9}"/>
+        </Sequence>
+        <!-- return_to_entrance_7: lat=37.26648825932271 lon=-120.42043967229692 (same waypoint as move_to_entrance_7) -->
+        <Sequence>
+          <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp10}"/>
+          <MoveTo control_points="{cp10}"/>
+        </Sequence>
+      </Sequence>
+    </Sequence>
+  </BehaviorTree>
+</root>

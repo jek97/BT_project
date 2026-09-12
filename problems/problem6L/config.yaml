@@ -1,0 +1,79 @@
+# config.yaml -- problem6L
+#
+# problem6L/M/S (orchard_map_a/b/c) and problem7L/M/S share this SAME
+# config.yaml content -- neither mission uses a tool (both are pure
+# move/sample trees), so this carries over problem5's own baseline
+# (drain rates, discretization steps, noise tables, tolerances,
+# verification resolution) unchanged, minus the tool:/ploughing:
+# sections problem5 needed and this mission doesn't.
+#
+# initial_situation.start_x/start_y is a PLACEHOLDER (0.0/0.0) -- the
+# translated behavior_tree.xml's own mission (see its own header) never
+# specifies the robot's starting position, only where its first leg
+# walks TO, so this needs a real value once the waypoints are picked.
+#
+# sample: section is OMITTED on purpose -- every <TakeSample> in this
+# problem's tree then uses config_to_prolog.py's own defaults:
+# success_probability=0.5, value ~ discretized Normal(mean=5.0,
+# sigma=2.0) over 0..10 (see module/contracts/schema.yaml's own
+# TakeSample entry). Add a sample: section here (mirroring tool:'s own
+# override shape) once real sensor success/value parameters are wanted.
+
+initial_situation:
+  start_x: 0.0   # metres -- PLACEHOLDER, fill in once real waypoints are known
+  start_y: 0.0   # metres -- PLACEHOLDER, fill in once real waypoints are known
+
+robot:
+  radius: 0.20          # metres -- robot_radius/1
+  safety_buffer: 0.10   # metres -- safety_buffer/1 (safety_margin = radius + safety_buffer)
+
+motion:
+  speed: 1.0   # metres per time-unit -- constant-speed spline traversal (speed/1)
+
+position:
+  disc_step_position: 0.5   # metres -- space-discretization merge-grid step
+  lateral:
+    sigma: 0.15   # metres per sqrt(time-unit) -- z/2's scale (sigma/1)
+    discretized_gaussian:
+      - value: -1.0
+        weight: 0.25
+      - value: 0.0
+        weight: 0.5
+      - value: 1.0
+        weight: 0.25
+  tangential:
+    sigma: 0.15   # metres per sqrt(time-unit) -- zt/2's scale (sigma_tangential/1)
+    discretized_gaussian:
+      - value: -1.0
+        weight: 0.25
+      - value: 0.0
+        weight: 0.5
+      - value: 1.0
+        weight: 0.25
+
+battery:
+  enabled: true
+  start: 100                 # percent -- battery_start/1
+  idle_drain_rate: 0.02      # percent/time-unit while not moving
+  moving_drain_rate: 0.5     # percent/time-unit while moving
+  sigma: 0.5   # percent per sqrt(time-unit) -- zbatt/1's scale (sigma_battery/1)
+  disc_step_battery: 10   # percent
+  discretized_gaussian:
+    - value: -1.0
+      weight: 0.25
+    - value: 0.0
+      weight: 0.5
+    - value: 1.0
+      weight: 0.25
+
+tolerances:
+  on_track: 0.5   # metres -- tolerance/1 (on_track/1 drift-reporting diagnostic)
+
+verification:
+  num_samples: 20        # reporting/plotting resolution -- decoupled from
+                          # detection, which is exact (see bracket_samples below)
+  bracket_samples: 60    # collision/obstacle_sighted bracket-scan sample count
+  crossing_eps: 0.01     # bisection refinement tolerance, time-units
+
+grounding:
+  disc_step_time: 20   # seconds

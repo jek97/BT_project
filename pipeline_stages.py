@@ -111,7 +111,8 @@ def run_stage(tee, label, func, timeout_seconds):
         signal.signal(signal.SIGALRM, old_handler)
 
 
-def run_staged_inference(plan_file, tee, phase_timeout=300):
+def run_staged_inference(plan_file, tee, phase_timeout=300,
+                          approximate=False, approximate_convergence=1e-2):
     """
     Runs the ProbLog resolution pipeline against plan_file as FOUR
     separate, logged, individually-timed-out stages (parse / ground /
@@ -129,10 +130,61 @@ def run_staged_inference(plan_file, tee, phase_timeout=300):
     blanket timeout means inflating Parse/Compile/Evaluate's budgets
     right along with it just to give Ground more room.
 
+    approximate=True switches ONLY the Compile+Evaluate stages to
+    ProbLog's own k-best ANYTIME evaluator (problog.kbest.KBestFormula,
+    get_evaluatable(name="kbest")) instead of exact knowledge
+    compilation (SDD/DSharp) -- Parse and Ground are UNCHANGED (kbest
+    still needs the exact same grounded LogicFormula; it does not make
+    grounding itself any cheaper, only the compile+weighted-model-count
+    step that follows it). Instead of building a full exact circuit,
+    kbest incrementally enumerates best (most probable) proofs via an
+    external MaxSAT solver (problog.maxsat, the bundled `maxsatz`
+    binary by default), ANY proof already found tightening a valid
+    lower bound on the query's real probability. lower_only=True is
+    HARD-CODED for approximate mode -- without it, kbest returns a
+    (lower, upper) TUPLE per query instead of a float, which this
+    function's own final float(prob) conversion below would reject
+    outright, and every downstream consumer (main.py's own percentage
+    formatting) already assumes a plain float. approximate_convergence
+    (default 1e-2) is this same evaluator's own convergence parameter,
+    the gap between its own lower and upper bound to stop at.
+
+    HONEST PERFORMANCE NOTE, from actually measuring this against this
+    project's own theory (not just ProbLog's own documentation): on a
+    tiny, hand-written toy program (3 independent probabilistic
+    choices) kbest genuinely is fast and the convergence knob behaves
+    exactly as expected. Tried directly against problem4 (this
+    project's own SMALLEST real problem -- 829 ground nodes, where
+    EXACT knowledge compilation takes 0.04s), kbest's own .evaluate()
+    did not finish within 30-120s even at a very loose convergence
+    (0.3) or a single query -- ruling out "too many simultaneous
+    queries" as the cause. The likely reason: the SAME thing that
+    drives up exact compilation's own cost on this theory (many
+    combinable discretized stochastic choices -- see FUTUREWORK.md)
+    also makes kbest's own proof-by-proof MaxSAT search combinatorially
+    expensive, with no shortcut around it for this theory's own shape.
+    In short: DO NOT ASSUME --approximate is faster here -- it is
+    exposed because it's a real, correctly-wired ProbLog capability and
+    the caller asked for it, safely bounded by the SAME per-stage
+    timeout as exact mode either way (confirmed directly: --evaluate-
+    timeout aborts a stuck kbest Evaluate stage exactly like it would
+    an exact one), but it has not been observed to help on this
+    project's own theory so far. Worth trying on a problem whose EXACT
+    compile stage is the one that's actually stuck (as opposed to
+    Ground) with a bounded --evaluate-timeout, not assuming it will
+    finish.
+
+    RESULT IS A LOWER BOUND, NOT THE EXACT PROBABILITY, whenever it
+    DOES return one -- true probability is somewhere in [reported
+    value, reported value + roughly approximate_convergence]; main.py
+    prints a one-line reminder of this whenever --approximate is used.
+
     Returns (results, timings):
       - results: {str(query_term): float(probability)} -- EXACTLY the
         same shape the old single-call run_problog_api always
-        returned, so nothing downstream needs to change.
+        returned, so nothing downstream needs to change (a LOWER BOUND
+        in place of the exact value when approximate=True, per above,
+        but still always a plain float).
       - timings: {"parse"|"ground"|"compile"|"evaluate": elapsed_seconds}
 
     Raises StageTimeout if any single stage exceeds ITS OWN budget --
@@ -158,14 +210,21 @@ def run_staged_inference(plan_file, tee, phase_timeout=300):
     timings["ground"] = t
     tee(f"    -> {len(lf)} ground node(s)")
 
-    compiled, t = run_stage(tee, "Compile (knowledge compilation)",
-                             lambda: get_evaluatable().create_from(lf),
+    compile_label = ("Compile (k-best anytime lower bound, "
+                      f"convergence={approximate_convergence})" if approximate
+                      else "Compile (knowledge compilation)")
+    evaluatable_name = "kbest" if approximate else None
+    compiled, t = run_stage(tee, compile_label,
+                             lambda: get_evaluatable(name=evaluatable_name).create_from(lf),
                              timeouts["compile"])
     timings["compile"] = t
 
+    evaluate_call = ((lambda: compiled.evaluate(lower_only=True,
+                                                 convergence=approximate_convergence))
+                      if approximate else (lambda: compiled.evaluate()))
     raw_result, t = run_stage(
         tee, "Evaluate (weighted model count against the initial database)",
-        lambda: compiled.evaluate(), timeouts["evaluate"])
+        evaluate_call, timeouts["evaluate"])
     timings["evaluate"] = t
 
     results = {str(term): float(prob) for term, prob in raw_result.items()}

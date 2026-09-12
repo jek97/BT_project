@@ -27,7 +27,7 @@ motion:
   speed: 1.0   # metres per time-unit -- constant-speed spline traversal (speed/1)
 
 position:
-  disc_step_position: 0.5   # metres -- space-discretization merge-grid step
+  disc_step_position: 1.0   # metres -- space-discretization merge-grid step
   lateral:
     sigma: 0.15   # metres per sqrt(time-unit) -- z/2's scale (sigma/1)
     discretized_gaussian:

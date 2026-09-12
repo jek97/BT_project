@@ -402,11 +402,20 @@ actions:
   # basic_action_theory.pl's own do_node(take_sample(...)) note on
   # exactly what "independent" means here -- keyed on the SITUATION,
   # not on the robot's physical state). ONLY on success, a SECOND,
-  # independent random draw produces a VALUE too -- a discretized
-  # Normal(mean,sigma) over the integers 0..10 (sample.value.mean/
-  # sigma, this problem's own config.yaml, defaulting to mean=5.0/
-  # sigma=2.0) -- see SampleValueBelow/SampleValueEqual/SampleValueOver
-  # further down for checking it against a threshold.
+  # independent random draw produces a VALUE too, shaped ONE OF TWO
+  # WAYS by config.yaml: sample.value.discretized -- an EXPLICIT list
+  # of {value, weight} outcomes, this problem's own choice of exactly
+  # how many values are possible and each one's own probability (same
+  # convention position.lateral/tangential's own discretized_gaussian
+  # tables already use) -- if present; otherwise sample.value.mean/
+  # sigma, a discretized Normal over the FIXED integers 0..10
+  # (defaulting to mean=5.0/sigma=2.0 if the whole sample.value section
+  # -- or all of sample: -- is omitted). See config_to_prolog.py's own
+  # note on both, and SampleValueBelow/SampleValueEqual/SampleValueOver
+  # further down for checking the drawn value against a threshold (a
+  # plain numeric comparison either way -- nothing downstream assumes
+  # the 0..10 range or integer-only values, so a sample.value.
+  # discretized list is free to use any values at all).
   # ----------------------------------------------------------------
   - id: TakeSample
     prolog_action: take_sample
@@ -414,8 +423,9 @@ actions:
       An instantaneous action with no target/goal/trigger of its own:
       succeeds or fails via a single fixed-probability coin flip
       (sample.success_probability, this problem's own config.yaml),
-      and on success draws a further VALUE (0..10, sample.value.mean/
-      sigma) recorded under this node's own id. Records the robot's
+      and on success draws a further VALUE (sample.value.discretized's
+      own explicit {value,weight} list if given, else a discretized
+      Normal(mean,sigma) over 0..10) recorded under this node's own id. Records the robot's
       own current position (at/4) at the instant of sampling as part
       of its own Reason -- see this entry's own "reason" comment below
       its ports: list, and

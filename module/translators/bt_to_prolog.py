@@ -898,14 +898,19 @@ def _reason_pattern_for_manual_trigger(token):
         f"_reason_pattern_for_manual_trigger.")
 
 
-def _leaf_condition_term(tag, attrs):
+def _leaf_condition_term(tag, attrs, var_pool=None, reactive_code=None):
     """The BARE Prolog condition term for a <Condition> leaf (e.g.
     "battery_over(70.0)"), WITHOUT the cond(...) wrapper -- shared by
     _translate_leaf (which wraps it in cond(...) for a genuine, one-
     shot cond() leaf) and _reduce_guard_condition below (which wraps
     it in neg(...) instead, or leaves it bare, depending on the
     required guard polarity). attrs must already be validated (see
-    _validate_ports) against tag's own port_specs."""
+    _validate_ports) against tag's own port_specs. var_pool/
+    reactive_code are only consulted by the "distance_cond" branch
+    below, for a blackboard-ref goal -- both call sites already have
+    them in scope, so this is always None,None only if a future caller
+    genuinely doesn't (which would then correctly reject a blackboard
+    goal instead of crashing)."""
     info = _CONDITION_DISPATCH[tag]
     if info["kind"] == "single_float_port":
         value = float(attrs[info["port"]])
@@ -918,8 +923,35 @@ def _leaf_condition_term(tag, attrs):
         gx, gy = _point_xy(attrs["goal"], tag, "goal")
         return f"line_of_sight_clear({obstacle_id},{gx},{gy})"
     if info["kind"] == "distance_cond":
-        gx, gy = _point_xy(attrs["goal"], tag, "goal")
+        goal_attr = attrs["goal"]
         threshold = float(attrs["threshold"])
+        if _is_blackboard_ref(goal_attr):
+            # A Point goal WIRED from another node's own output port
+            # (e.g. PlanWith's own goal, NearestToolOfKind's own
+            # position, a SubTree's own p1/p2 input) -- same "bare
+            # Prolog VARIABLE that port's own producer binds to a
+            # point(GX,GY) term at runtime" treatment PlanWith's own
+            # goal port already gets (see that branch's own note,
+            # above in _translate_leaf's moveto/planWith handling).
+            # Emits a 2-arg distance_below/equal/over(Point,Threshold)
+            # term rather than the literal case's flat 3-arg
+            # (GX,GY,Threshold) -- basic_action_theory.pl's own
+            # holds/2 (and holds_leg/11, for the auto-derived-guard
+            # path) carry a matching point(GX,GY) adapter clause that
+            # unifies against whatever this variable is bound to and
+            # delegates to the existing flat-arg clause, so the
+            # literal case above is completely unchanged.
+            if var_pool is None:
+                raise BTValidationError(
+                    f"<{tag}>'s goal port ('{goal_attr}') is a "
+                    f"blackboard reference, but this condition wasn't "
+                    f"reached in a context that can resolve one.")
+            goal_key = _blackboard_key(goal_attr)
+            var_pool.consumers.add(goal_key)
+            var_pool.note_key_scope(goal_key, reactive_code)
+            goal_term = var_pool.var_for(goal_key)
+            return f"{info['functor']}({goal_term},{threshold})"
+        gx, gy = _point_xy(goal_attr, tag, "goal")
         return f"{info['functor']}({gx},{gy},{threshold})"
     if info["kind"] == "sample_value_cond":
         sample_id = attrs["id"].strip()
@@ -953,7 +985,7 @@ def _leaf_condition_term(tag, attrs):
     raise BTValidationError(f"Unhandled condition kind for <{tag}>.")
 
 
-def _reduce_guard_condition(elem, required_polarity, schema_ports):
+def _reduce_guard_condition(elem, required_polarity, schema_ports, var_pool, reactive_code):
     """A left sibling (under a ReactiveSequence/ReactiveFallback) of
     the branch leading to some reactively-guarded Action, reduced to
     the SINGLE Prolog condition term that must stay TRUE for the guard
@@ -988,11 +1020,11 @@ def _reduce_guard_condition(elem, required_polarity, schema_ports):
             raise BTValidationError(
                 f"<Inverter> must have exactly one child (found "
                 f"{len(children)}).")
-        return _reduce_guard_condition(children[0], not required_polarity, schema_ports)
+        return _reduce_guard_condition(children[0], not required_polarity, schema_ports, var_pool, reactive_code)
     if tag in _NON_CONTINUOUS_CONDITIONS or tag not in _CONDITION_DISPATCH:
         return None
     attrs = _validate_ports(tag, elem, schema_ports[tag])
-    cond_term = _leaf_condition_term(tag, attrs)
+    cond_term = _leaf_condition_term(tag, attrs, var_pool, reactive_code)
     return cond_term if required_polarity else f"neg({cond_term})"
 
 
@@ -1635,7 +1667,7 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
         port_text = ",".join(f"{k}={v}" for k, v in attrs.items() if k != "name")
         var_pool.condition_labels[condition_code] = _with_branch_suffix(
             f"{tag}({port_text})", branch_name)
-        return f"cond({_leaf_condition_term(tag, attrs)},{condition_code})"
+        return f"cond({_leaf_condition_term(tag, attrs, var_pool, reactive_code)},{condition_code})"
 
     raise BTValidationError(f"Unhandled schema entry '{tag}' -- add it to "
                              f"_ACTION_DISPATCH/_CONDITION_DISPATCH.")
@@ -1857,7 +1889,7 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
         for i, child in enumerate(children):
             own_level_guards = []
             for sibling in children[:i]:
-                cond_term = _reduce_guard_condition(sibling, required_polarity, schema_ports)
+                cond_term = _reduce_guard_condition(sibling, required_polarity, schema_ports, var_pool, own_code)
                 if cond_term is not None:
                     own_level_guards.append((cond_term, own_code))
             child_terms.append(_translate_node(

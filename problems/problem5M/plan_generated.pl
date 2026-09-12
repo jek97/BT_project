@@ -32,10 +32,17 @@
 %
 % Condition code legend (see main.py's own printed copy of this):
 %   c1: Hitched(kind=plow) [install_closest_plow]
-%   c2: PloughedBetween(p1=5;-9,p2=25;-9) [plowing]
-%   c3: Hitched(kind=plow) [install_closest_plow]
-%   c4: Deployed() [plowing]
-%   c5: Hitched() [uninstall_plow]
-%   c6: Deployed() [uninstall_plow]
+%   c10: Hitched() [uninstall_plow]
+%   c11: Deployed() [uninstall_plow]
+%   c12: DistanceBelow(goal=8;9,threshold=0.3) [uninstall_plow]
+%   c13: DistanceBelow(goal=9;27,threshold=0.3) [MainTree]
+%   c2: DistanceBelow(goal={powlposition__sub1},threshold=0.3) [install_closest_plow]
+%   c3: DistanceBelow(goal=5;-9,threshold=0.3) [MainTree]
+%   c4: PloughedBetween(p1=5;-9,p2=25;-9) [plowing]
+%   c5: Hitched(kind=plow) [install_closest_plow]
+%   c6: DistanceBelow(goal={powlposition__sub3},threshold=0.3) [install_closest_plow]
+%   c7: Deployed() [plowing]
+%   c8: DistanceBelow(goal=5;-9,threshold=0.3) [plowing]
+%   c9: DistanceBelow(goal=25;-9,threshold=0.3) [plowing]
 
-plan(seq_node([fallback_node([cond(hitched(plow),c1),seq_node([nearest_tool_of_kind_query(plow,POWLID__SUB1,POWLPOSITION__SUB1,a1),planWith(astar,POWLPOSITION__SUB1,CP__SUB1,a2),moveto_leg(CP__SUB1,[collision,battery],a3),install_tool_leg(POWLID__SUB1,[battery],a4)])]),planWith(astar,point(5.0,-9.0),CP1,a5),moveto_leg(CP1,[collision,battery],a6),fallback_node([cond(ploughed_between(5.0,-9.0,25.0,-9.0),c2),seq_node([fallback_node([cond(hitched(plow),c3),seq_node([nearest_tool_of_kind_query(plow,POWLID__SUB3,POWLPOSITION__SUB3,a7),planWith(astar,POWLPOSITION__SUB3,CP__SUB3,a8),moveto_leg(CP__SUB3,[collision,battery],a9),install_tool_leg(POWLID__SUB3,[battery],a10)])]),hitched_id_query(TOOL__SUB2,a11),fallback_node([inverter(cond(deployed,c4)),retract_tool_leg(TOOL__SUB2,[battery],a12)]),planWith(astar,point(5.0,-9.0),CP1__SUB2,a13),moveto_leg(CP1__SUB2,[collision,battery],a14),deploy_tool_leg(TOOL__SUB2,[battery],a15),planWith(astar,point(25.0,-9.0),CP2__SUB2,a16),moveto_leg(CP2__SUB2,[collision,battery],a17),retract_tool_leg(TOOL__SUB2,[battery],a18)])]),fallback_node([inverter(cond(hitched,c5)),seq_node([hitched_id_query(TOOL__SUB4,a19),fallback_node([inverter(cond(deployed,c6)),retract_tool_leg(TOOL__SUB4,[battery],a20)]),planWith(astar,point(8.0,9.0),CP__SUB4,a21),moveto_leg(CP__SUB4,[collision,battery],a22),uninstall_tool_leg(TOOL__SUB4,[battery],a23)])]),planWith(astar,point(9.0,27.0),CP2,a24),moveto_leg(CP2,[collision,battery],a25)])).
+plan(seq_node([fallback_node([cond(hitched(plow),c1),seq_node([nearest_tool_of_kind_query(plow,POWLID__SUB1,POWLPOSITION__SUB1,a1),planWith(astar,POWLPOSITION__SUB1,CP__SUB1,a2),moveto_leg(CP__SUB1,[collision,battery],a3),cond(distance_below(POWLPOSITION__SUB1,0.3),c2),install_tool_leg(POWLID__SUB1,[battery],a4)])]),planWith(astar,point(5.0,-9.0),CP1,a5),moveto_leg(CP1,[collision,battery],a6),cond(distance_below(5.0,-9.0,0.3),c3),fallback_node([cond(ploughed_between(5.0,-9.0,25.0,-9.0),c4),seq_node([fallback_node([cond(hitched(plow),c5),seq_node([nearest_tool_of_kind_query(plow,POWLID__SUB3,POWLPOSITION__SUB3,a7),planWith(astar,POWLPOSITION__SUB3,CP__SUB3,a8),moveto_leg(CP__SUB3,[collision,battery],a9),cond(distance_below(POWLPOSITION__SUB3,0.3),c6),install_tool_leg(POWLID__SUB3,[battery],a10)])]),hitched_id_query(TOOL__SUB2,a11),fallback_node([inverter(cond(deployed,c7)),retract_tool_leg(TOOL__SUB2,[battery],a12)]),planWith(astar,point(5.0,-9.0),CP1__SUB2,a13),moveto_leg(CP1__SUB2,[collision,battery],a14),cond(distance_below(5.0,-9.0,0.3),c8),deploy_tool_leg(TOOL__SUB2,[battery],a15),planWith(astar,point(25.0,-9.0),CP2__SUB2,a16),moveto_leg(CP2__SUB2,[collision,battery],a17),cond(distance_below(25.0,-9.0,0.3),c9),retract_tool_leg(TOOL__SUB2,[battery],a18)])]),fallback_node([inverter(cond(hitched,c10)),seq_node([hitched_id_query(TOOL__SUB4,a19),fallback_node([inverter(cond(deployed,c11)),retract_tool_leg(TOOL__SUB4,[battery],a20)]),planWith(astar,point(8.0,9.0),CP__SUB4,a21),moveto_leg(CP__SUB4,[collision,battery],a22),cond(distance_below(8.0,9.0,0.3),c12),uninstall_tool_leg(TOOL__SUB4,[battery],a23)])]),planWith(astar,point(9.0,27.0),CP2,a24),moveto_leg(CP2,[collision,battery],a25),cond(distance_below(9.0,27.0,0.3),c13)])).

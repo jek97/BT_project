@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+
+
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="MainTree">
+      <!-- move_to_entrance_5: lat=37.266488501443305 lon=-120.42053433807618 -->
+      <Fallback>
+        <DistanceBelow goal="24.0;-4.5" threshold="1.0"/>
+        <Sequence>
+          <PlanWith algorithm="astar" goal="24.0;-4.5" control_points="{cp1}"/>
+          <MoveTo control_points="{cp1}"/>
+          <DistanceBelow goal="24.0;-4.5" threshold="1.0"/>
+        </Sequence>
+      </Fallback>
+      <!-- move_to_tree_11_row_waypoint: lat=37.26640452995226 lon=-120.42053431151196 -->
+      <Fallback>
+        <DistanceBelow goal="32.0;-4.5" threshold="1.0"/>
+        <Sequence>
+          <PlanWith algorithm="astar" goal="32.0;-4.5" control_points="{cp2}"/>
+          <MoveTo control_points="{cp2}"/>
+          <DistanceBelow goal="32.0;-4.5" threshold="1.0"/>
+        </Sequence>
+      </Fallback>
+      <Fallback>
+        <DistanceBelow goal="32.0;-27.0" threshold="1.0"/>
+        <Sequence>
+          <PlanWith algorithm="astar" goal="32.0;-27.0" control_points="{cp3}"/>
+          <MoveTo control_points="{cp3}"/>
+          <DistanceBelow goal="32.0;-27.0" threshold="1.0"/>
+        </Sequence>
+      </Fallback>
+      <Fallback>
+        <DistanceBelow goal="45.5;-31.5" threshold="1.0"/>
+        <Sequence>
+          <PlanWith algorithm="astar" goal="45.5;-31.5" control_points="{cp4}"/>
+          <MoveTo control_points="{cp4}"/>
+          <DistanceBelow goal="45.5;-31.5" threshold="1.0"/>
+        </Sequence>
+      </Fallback>
+    </Sequence>
+  </BehaviorTree>
+</root>

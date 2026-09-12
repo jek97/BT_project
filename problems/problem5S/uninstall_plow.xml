@@ -24,6 +24,7 @@
         </Fallback>
         <PlanWith algorithm="astar" goal="{p1}" control_points="{cp}"/>
         <MoveTo control_points="{cp}"/>
+        <DistanceBelow goal="{p1}" threshold="0.3"/>
         <UninstallTool tool="{tool}"/>
       </Sequence>
     </Fallback>

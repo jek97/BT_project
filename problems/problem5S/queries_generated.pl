@@ -132,6 +132,14 @@ query(any_reason_pattern_by_action(battery_depleted,a9)).
 
 query(any_condition_status(c1,true)).
 query(any_condition_status(c1,false)).
+query(any_condition_status(c10,true)).
+query(any_condition_status(c10,false)).
+query(any_condition_status(c11,true)).
+query(any_condition_status(c11,false)).
+query(any_condition_status(c12,true)).
+query(any_condition_status(c12,false)).
+query(any_condition_status(c13,true)).
+query(any_condition_status(c13,false)).
 query(any_condition_status(c2,true)).
 query(any_condition_status(c2,false)).
 query(any_condition_status(c3,true)).
@@ -142,3 +150,9 @@ query(any_condition_status(c5,true)).
 query(any_condition_status(c5,false)).
 query(any_condition_status(c6,true)).
 query(any_condition_status(c6,false)).
+query(any_condition_status(c7,true)).
+query(any_condition_status(c7,false)).
+query(any_condition_status(c8,true)).
+query(any_condition_status(c8,false)).
+query(any_condition_status(c9,true)).
+query(any_condition_status(c9,false)).

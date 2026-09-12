@@ -19,6 +19,7 @@
         <NearestToolOfKind kind="plow" id="{powlid}" position="{powlposition}"/>
         <PlanWith algorithm="astar" goal="{powlposition}" control_points="{cp}"/>
         <MoveTo control_points="{cp}"/>
+        <DistanceBelow goal="{powlposition}" threshold="0.3"/>
         <InstallTool tool="{powlid}"/>
       </Sequence>
     </Fallback>

@@ -3130,6 +3130,28 @@ holds(distance_equal(GX,GY,Threshold), S) :-
 holds(distance_over(GX,GY,Threshold), S) :-
     now(T, S), at(X,Y,T,S), dist(X,Y,GX,GY,D), D > Threshold.
 
+% point(GX,GY)-term adapters -- lets a <DistanceBelow>/<DistanceEqual>/
+% <DistanceOver>'s own goal port be a BLACKBOARD REFERENCE (e.g.
+% goal="{p1}", wired from a SubTree's own input port, or from
+% NearestToolOfKind's own position output) instead of only a literal
+% "X;Y", the same "either a literal or a blackboard reference bound to
+% point(GX,GY) at runtime" treatment PlanWith's own goal port already
+% gets (see planWith's own do_node(planWith(Algorithm,point(GX,GY),
+% CP,ActionCode),...) clause). module/translators/bt_to_prolog.py's own
+% _leaf_condition_term emits the flat 3-arg form above ONLY for a
+% literal goal; for a blackboard-ref goal it emits this 2-arg form
+% instead, with Point left as the bare Prolog variable that goal's own
+% producer binds to point(GX,GY) -- these three clauses just unify that
+% back apart and delegate to the existing flat-arg clauses above, so
+% those (and every existing caller depending on their own 3-arg shape,
+% e.g. Section 5c's own "close to the tool" reuse) are unchanged.
+holds(distance_below(point(GX,GY),Threshold), S) :-
+    holds(distance_below(GX,GY,Threshold), S).
+holds(distance_equal(point(GX,GY),Threshold), S) :-
+    holds(distance_equal(GX,GY,Threshold), S).
+holds(distance_over(point(GX,GY),Threshold), S) :-
+    holds(distance_over(GX,GY,Threshold), S).
+
 % sample_value_below(SampleId,Threshold) / sample_value_equal(SampleId,
 % Threshold) / sample_value_over(SampleId,Threshold): true iff the
 % VALUE (0..10, see sample_value/3) a SUCCESSFUL take_sample recorded
@@ -3481,6 +3503,19 @@ holds_leg(distance_equal(GX,GY,Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,_Rate,0,T
 holds_leg(distance_over(GX,GY,Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,_Rate,0,T) :-
     walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
     dist(X,Y,GX,GY,D), D > Threshold.
+
+% point(GX,GY)-term adapters, same blackboard-ref-goal treatment (and
+% same reasoning) as holds/2's own three just above -- needed here too
+% since an auto-derived REACTIVE GUARD (a DistanceBelow/Equal/Over left
+% sibling under a ReactiveSequence/ReactiveFallback) is checked
+% CONTINUOUSLY, mid-leg, via holds_leg/11 (exact bracket-scan crossing-
+% time detection), not via holds/2's one-shot check.
+holds_leg(distance_below(point(GX,GY),Threshold), CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T) :-
+    holds_leg(distance_below(GX,GY,Threshold), CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T).
+holds_leg(distance_equal(point(GX,GY),Threshold), CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T) :-
+    holds_leg(distance_equal(GX,GY,Threshold), CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T).
+holds_leg(distance_over(point(GX,GY),Threshold), CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T) :-
+    holds_leg(distance_over(GX,GY,Threshold), CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T).
 
 holds_leg(obstacle_in_bound(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,_Rate,0,T) :-
     walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),

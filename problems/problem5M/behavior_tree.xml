@@ -19,10 +19,12 @@
       <SubTree ID="install_closest_plow"/>
       <PlanWith algorithm="astar" goal="5;-9" control_points="{cp1}"/>
       <MoveTo control_points="{cp1}"/>
+      <DistanceBelow goal="5;-9" threshold="0.3"/>
       <SubTree ID="plowing" p1="5;-9" p2="25;-9"/>
       <SubTree ID="uninstall_plow" p1="8;9"/>
       <PlanWith algorithm="astar" goal="9;27" control_points="{cp2}"/>
       <MoveTo control_points="{cp2}"/>
+      <DistanceBelow goal="9;27" threshold="0.3"/>
     </Sequence>
   </BehaviorTree>
 </root>

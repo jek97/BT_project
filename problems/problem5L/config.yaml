@@ -69,7 +69,7 @@ initial_situation:
   start_y: -15.0   # metres
 
 robot:
-  radius: 0.20          # metres -- robot_radius/1
+  radius: 0.72            # metres -- robot_radius/1
   safety_buffer: 0.10   # metres -- safety_buffer/1 (safety_margin = radius + safety_buffer)
 
 motion:

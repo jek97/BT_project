@@ -18,7 +18,7 @@ moving_drain_rate(0.5).
 disc_step_battery(10).
 tolerance(0.5).
 num_samples(20).
-bracket_samples(60).
+bracket_samples(30).
 crossing_eps(0.01).
 disc_step_time(20).
 
@@ -94,6 +94,6 @@ tool_moving_drain_rate_deployed(plow, 0.5).
 tool_instance(plow1, plow).
 tool_start_position(plow1, 18.5, -13.5).
 
-plough_cell_size(1.0).
+plough_cell_size(2.0).
 
 query(any_battery_depletion).

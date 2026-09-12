@@ -29,19 +29,19 @@
     <Sequence name="MainTree">
       <!-- move_to_entrance_5: lat=37.266488501443305 lon=-120.42053433807618 -->
       <Sequence>
-        <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp1}"/>
+        <PlanWith algorithm="astar" goal="0.5;0.0" control_points="{cp1}"/>
         <MoveTo control_points="{cp1}"/>
       </Sequence>
       <!-- move_to_tree_11_row_waypoint: lat=37.26640452995226 lon=-120.42053431151196 -->
       <Sequence>
-        <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp2}"/>
+        <PlanWith algorithm="astar" goal="29.5;4.5" control_points="{cp2}"/>
         <MoveTo control_points="{cp2}"/>
       </Sequence>
       <RetryUntilSuccessful num_attempts="3">
         <Sequence>
           <!-- approach_tree_11: lat=37.266404577471214 lon=-120.42058159970989 -->
           <Sequence>
-            <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp3}"/>
+            <PlanWith algorithm="astar" goal="17.0;9.0" control_points="{cp3}"/>
             <MoveTo control_points="{cp3}"/>
           </Sequence>
           <TakeSample id="sample_tree_11"/>
@@ -49,24 +49,24 @@
       </RetryUntilSuccessful>
       <!-- exit_to_entrance_5: lat=37.266488501443305 lon=-120.42053433807618 (same waypoint as move_to_entrance_5) -->
       <Sequence>
-        <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp4}"/>
+        <PlanWith algorithm="astar" goal="29.5;13.5" control_points="{cp4}"/>
         <MoveTo control_points="{cp4}"/>
       </Sequence>
       <!-- move_to_entrance_7: lat=37.26648825932271 lon=-120.42043967229692 -->
       <Sequence>
-        <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp5}"/>
+        <PlanWith algorithm="astar" goal="17.0;18.0" control_points="{cp5}"/>
         <MoveTo control_points="{cp5}"/>
       </Sequence>
       <!-- move_to_tree_53_row_waypoint: lat=37.26621051786413 lon=-120.42043988043025 -->
       <Sequence>
-        <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp6}"/>
+        <PlanWith algorithm="astar" goal="29.5;22.5" control_points="{cp6}"/>
         <MoveTo control_points="{cp6}"/>
       </Sequence>
       <RetryUntilSuccessful num_attempts="3">
         <Sequence>
           <!-- approach_tree_53: lat=37.26621083783149 lon=-120.42039269568987 -->
           <Sequence>
-            <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp7}"/>
+            <PlanWith algorithm="astar" goal="17.0;27.0" control_points="{cp7}"/>
             <MoveTo control_points="{cp7}"/>
           </Sequence>
           <TakeSample id="sample_tree_53"/>
@@ -74,7 +74,7 @@
       </RetryUntilSuccessful>
       <!-- exit_to_entrance_7: lat=37.26648825932271 lon=-120.42043967229692 (same waypoint as move_to_entrance_7) -->
       <Sequence>
-        <PlanWith algorithm="astar" goal="TBD;TBD" control_points="{cp8}"/>
+        <PlanWith algorithm="astar" goal="9.0;27.0" control_points="{cp8}"/>
         <MoveTo control_points="{cp8}"/>
       </Sequence>
     </Sequence>

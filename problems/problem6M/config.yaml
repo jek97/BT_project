@@ -20,8 +20,8 @@
 # override shape) once real sensor success/value parameters are wanted.
 
 initial_situation:
-  start_x: 0.0   # metres -- PLACEHOLDER, fill in once real waypoints are known
-  start_y: 0.0   # metres -- PLACEHOLDER, fill in once real waypoints are known
+  start_x: 9.0   # metres -- PLACEHOLDER, fill in once real waypoints are known
+  start_y: 27.0   # metres -- PLACEHOLDER, fill in once real waypoints are known
 
 robot:
   radius: 0.20          # metres -- robot_radius/1

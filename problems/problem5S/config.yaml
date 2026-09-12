@@ -68,7 +68,7 @@ tolerances:
 verification:
   num_samples: 20        # reporting/plotting resolution -- decoupled from
                           # detection, which is exact (see bracket_samples below)
-  bracket_samples: 60    # collision/obstacle_sighted bracket-scan sample count
+  bracket_samples: 30    # collision/obstacle_sighted bracket-scan sample count
   crossing_eps: 0.01     # bisection refinement tolerance, time-units
 
 grounding:
@@ -79,4 +79,4 @@ tool:
     - {id: plow1, kind: plow, x: 18.5, y: -13.5}
 
 ploughing:
-  cell_size: 1.0   # metres -- plough_cell_size/1
+  cell_size: 2.0   # metres -- plough_cell_size/1

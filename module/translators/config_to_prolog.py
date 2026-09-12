@@ -148,6 +148,32 @@ def _binary_result_block(functor, success_probability):
             f"{p_failure}::{functor}(S,ActionCode,false).")
 
 
+def _explicit_discrete_block(functor, entries):
+    """Build a len(entries)-outcome annotated disjunction keyed by
+    (S,ActionCode), one outcome per explicit {value, weight} entry from
+    config.yaml, e.g. for functor="sample_value":
+        0.5::sample_value(S,ActionCode,3) ;
+        0.5::sample_value(S,ActionCode,7).
+    The EXPLICIT-LIST alternative to _discretized_normal_block below --
+    HAND-PICKED weights (this problem's own config.yaml), not an
+    auto-computed CDF, so the caller is responsible for summing to 1.0
+    (see _check_gaussian_weights' own note; that same function is
+    reused here despite its name -- it was already fully generic, just
+    checking a weight sum, nothing gaussian-specific about it). Value
+    itself is NOT restricted to any range or to integers -- every
+    consumer of a block built this way (sample_value_below/equal/over
+    in basic_action_theory.pl) does a plain numeric comparison, with no
+    assumption baked in about which values are possible."""
+    lines = []
+    n = len(entries)
+    for i, entry in enumerate(entries):
+        weight = _format_number(entry["weight"])
+        value = _format_number(entry["value"])
+        terminator = " ;" if i < n - 1 else "."
+        lines.append(f"{weight}::{functor}(S,ActionCode,{value}){terminator}")
+    return "\n".join(lines)
+
+
 def _discretized_normal_block(functor, mean, sigma, lo, hi):
     """Build a (hi-lo+1)-outcome annotated disjunction keyed by
     (S,ActionCode), one outcome per INTEGER v in [lo,hi], weighted by a
@@ -311,26 +337,41 @@ def render_prolog(config):
     sample_success_probability = config.get("sample", {}).get("success_probability", 0.5)
     sample_block = _binary_result_block("sample_result", float(sample_success_probability))
 
-    # sample.value.mean/sigma -- the READING a SUCCESSFUL take_sample
-    # draws (basic_action_theory.pl's own sample_value/3, only ever
-    # consulted from poss(take_sample(...))'s own success clause -- a
-    # failed sample draws no value at all). A genuine discretized
-    # Normal(mean,sigma) over the integers 0..10 (see
-    # _discretized_normal_block's own note on why this is a REAL
-    # binned-CDF distribution, not hand-picked weights), independent of
-    # sample_result/3's own success/failure coin flip -- "did the
-    # sample succeed" and "what did it read" are two SEPARATE random
-    # choices, per this feature's own request. mean defaults to 5.0 (the
-    # centre of the 0..10 scale) and sigma to 2.0 (spread enough to
-    # meaningfully populate the whole range without excessive clipping
-    # at either end) if config.yaml gives no sample.value section at
-    # all -- same "optional feature, sensible default" treatment
-    # success_probability itself already gets above.
+    # sample.value -- the READING a SUCCESSFUL take_sample draws
+    # (basic_action_theory.pl's own sample_value/3, only ever consulted
+    # from poss(take_sample(...))'s own success clause -- a failed
+    # sample draws no value at all), independent of sample_result/3's
+    # own success/failure coin flip -- "did the sample succeed" and
+    # "what did it read" are two SEPARATE random choices, per this
+    # feature's own request. TWO ways to shape this distribution:
+    #   - sample.value.discretized: [{value: v, weight: w}, ...] --
+    #     EXPLICIT outcomes and probabilities, this problem's own
+    #     choice of exactly how many values are possible and each
+    #     one's own weight (same convention position.lateral/
+    #     tangential's own discretized_gaussian tables already use) --
+    #     see _explicit_discrete_block's own note. Takes priority if
+    #     present.
+    #   - sample.value.mean/sigma (default 5.0/2.0 -- the centre of a
+    #     0..10 scale, spread enough to populate it without excessive
+    #     clipping) -- a discretized Normal over the FIXED integers
+    #     0..10 (see _discretized_normal_block's own note on why this
+    #     is a real binned-CDF distribution, not hand-picked weights).
+    #     The ORIGINAL, still-default shape, used whenever sample.value
+    #     .discretized is absent.
+    # Both fall back entirely (mean/sigma's own defaults) if config.yaml
+    # gives no sample.value section, or no sample: section, at all --
+    # same "optional feature, sensible default" treatment success_
+    # probability itself already gets above.
     sample_value_cfg = config.get("sample", {}).get("value", {})
-    sample_value_mean = float(sample_value_cfg.get("mean", 5.0))
-    sample_value_sigma = float(sample_value_cfg.get("sigma", 2.0))
-    sample_value_block = _discretized_normal_block(
-        "sample_value", sample_value_mean, sample_value_sigma, 0, 10)
+    if "discretized" in sample_value_cfg:
+        sample_value_discretized = sample_value_cfg["discretized"]
+        _check_gaussian_weights("sample.value.discretized", sample_value_discretized)
+        sample_value_block = _explicit_discrete_block("sample_value", sample_value_discretized)
+    else:
+        sample_value_mean = float(sample_value_cfg.get("mean", 5.0))
+        sample_value_sigma = float(sample_value_cfg.get("sigma", 2.0))
+        sample_value_block = _discretized_normal_block(
+            "sample_value", sample_value_mean, sample_value_sigma, 0, 10)
 
     # tool.install/tool.uninstall default entirely if the whole `tool:`
     # section is omitted -- same "optional feature" treatment as

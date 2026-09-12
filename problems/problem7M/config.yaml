@@ -12,12 +12,16 @@
 # specifies the robot's starting position, only where its first leg
 # walks TO, so this needs a real value once the waypoints are picked.
 #
-# sample: section is OMITTED on purpose -- every <TakeSample> in this
-# problem's tree then uses config_to_prolog.py's own defaults:
-# success_probability=0.5, value ~ discretized Normal(mean=5.0,
-# sigma=2.0) over 0..10 (see module/contracts/schema.yaml's own
-# TakeSample entry). Add a sample: section here (mirroring tool:'s own
-# override shape) once real sensor success/value parameters are wanted.
+# sample: -- every <TakeSample> in this problem's own tree uses these.
+# success_probability is a plain coin flip; value.discretized is an
+# EXPLICIT list of {value, weight} outcomes (this problem's own choice
+# of exactly how many values are possible and each one's own
+# probability -- see module/contracts/schema.yaml's own TakeSample
+# entry and config_to_prolog.py's own note) rather than the fallback
+# discretized-Normal(mean,sigma) shape. PLACEHOLDER VALUES below --
+# tune to whatever this sensor's real success rate/reading
+# distribution is; weights must sum to 1.0 (config_to_prolog.py warns
+# to stderr if they don't).
 
 initial_situation:
   start_x: 9.0   # metres -- PLACEHOLDER, fill in once real waypoints are known
@@ -77,3 +81,14 @@ verification:
 
 grounding:
   disc_step_time: 20   # seconds
+
+sample:
+  success_probability: 0.7   # PLACEHOLDER -- P(a TakeSample succeeds)
+  value:
+    discretized:              # PLACEHOLDER -- exactly 3 possible readings here;
+      - value: 2               # add/remove entries freely, weights must sum to 1.0
+        weight: 0.2
+      - value: 5
+        weight: 0.5
+      - value: 8
+        weight: 0.3

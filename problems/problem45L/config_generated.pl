@@ -9,13 +9,13 @@ safety_buffer(0.1).
 speed(1.0).
 sigma(0.15).
 sigma_tangential(0.15).
-disc_step_position(1.0).
+disc_step_position(0.5).
 battery_enabled(true).
 sigma_battery(0.5).
 battery_start(100).
-idle_drain_rate(0.05).
-moving_drain_rate(1.0).
-disc_step_battery(20).
+idle_drain_rate(0.02).
+moving_drain_rate(0.5).
+disc_step_battery(10).
 tolerance(0.5).
 num_samples(20).
 bracket_samples(60).
@@ -48,10 +48,10 @@ deploy_tool_duration(cart, 10.0).
 deploy_tool_duration(plow, 10.0).
 retract_tool_duration(cart, 10.0).
 retract_tool_duration(plow, 10.0).
-install_tool_drain_rate(0.05).
-uninstall_tool_drain_rate(0.05).
-deploy_tool_drain_rate(0.05).
-retract_tool_drain_rate(0.05).
+install_tool_drain_rate(0.02).
+uninstall_tool_drain_rate(0.02).
+deploy_tool_drain_rate(0.02).
+retract_tool_drain_rate(0.02).
 install_tool_range(0.82).
 
 0.9::install_tool_result(S,ActionCode,true) ;
@@ -70,16 +70,21 @@ tool_speed(free, 1.0).
 tool_speed(cart, 1.0).
 tool_speed(plow, 1.0).
 
-tool_moving_drain_rate(free, 1.0).
-tool_moving_drain_rate(cart, 1.0).
-tool_moving_drain_rate(plow, 1.0).
+tool_moving_drain_rate(free, 0.5).
+tool_moving_drain_rate(cart, 0.5).
+tool_moving_drain_rate(plow, 0.5).
 
 tool_speed_deployed(free, 1.0).
 tool_speed_deployed(cart, 1.0).
-tool_speed_deployed(plow, 1.0).
+tool_speed_deployed(plow, 0.5).
 
-tool_moving_drain_rate_deployed(free, 1.0).
-tool_moving_drain_rate_deployed(cart, 1.0).
+tool_moving_drain_rate_deployed(free, 0.5).
+tool_moving_drain_rate_deployed(cart, 0.5).
 tool_moving_drain_rate_deployed(plow, 1.0).
+
+tool_instance(plow1, plow).
+tool_start_position(plow1, 0.0, 0.0).
+
+plough_cell_size(1.0).
 
 query(any_battery_depletion).

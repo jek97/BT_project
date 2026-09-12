@@ -1,0 +1,153 @@
+# config.yaml -- problem5L (formerly problem5 -- renamed once problem5M/
+# problem5S, siblings sharing the same behavior_tree.xml on
+# orchard_map_b/orchard_map_c, were added)
+#
+# See problem4/config.yaml for the full field-by-field documentation;
+# this file follows the exact same layout, with these changes:
+#   - initial_situation: on orchard_map_a.pgm (map.yaml), (11.3,-15.0)
+#     -- between the house and the south fence, ~6.7m clear of both
+#     (see this section's own note for how this was picked).
+#   - position.disc_step_position: reduced to 0.5m (was 1.0 in
+#     problem4) -- the space-discretization merge-grid step.
+#   - battery.idle_drain_rate/moving_drain_rate: reduced (were 0.05/5.0
+#     in problem4) -- back down near problem0-3's own original shared
+#     baseline, so a long multi-leg plowing plan doesn't drain the
+#     battery unrealistically fast.
+#   - battery.disc_step_battery and grounding.disc_step_time: KEPT
+#     identical to problem4's own values (10 / 20) -- this problem's
+#     own request was to reduce SPACE discretization only, not time or
+#     battery-level discretization.
+#   - position.lateral/tangential noise tables: KEPT identical to
+#     problem4's own (same 3-point discretized Gaussian, same sigma).
+#   - new tool:/ploughing: sections (problem4 has neither) -- ONE plow
+#     instance, positioned at (0,0). tool.install/uninstall/deploy/
+#     retract sections are all OMITTED, so every one of those
+#     success_probability/duration/drain_rate values defaults (see
+#     config_to_prolog.py's own note on each).
+#   - tool.equipped.plow: added (was omitted before) -- speed/
+#     moving_drain_rate here are the MoveTo parameters while the plow
+#     is hitched but NOT deployed (tool_speed(plow,_)/tool_moving_
+#     drain_rate(plow,_) -- basic_action_theory.pl's own effective_
+#     tool_speed/3 consults these via hitch(plow,S), see that
+#     predicate's own note); deployed_speed/deployed_moving_drain_rate
+#     are the SEPARATE parameters used while ALSO deployed(S) holds
+#     (effective_tool_speed/3's other clause). PLACEHOLDER VALUES below
+#     (slower + more drain while actively plowing, unchanged while just
+#     carrying it) -- tune to whatever the real plow's physics are;
+#     omitting either sub-key falls back to plain motion.speed/
+#     battery.moving_drain_rate, same "no difference" behavior as
+#     before this section existed.
+
+initial_situation:
+  # (11.3,-15.0): between the house (house_1, centered ~(11.5,0.0),
+  # per new_maps/orchard_map_a_dimensions.png) and the south fence
+  # (hfence_s, at y~=-21.9 per that same diagram) -- an EARLIER
+  # version of this start point, (11.3,-7.71), sat only ~0.1m from the
+  # house's own south wall, well inside the robot's own 0.3m safety
+  # margin (robot.radius+safety_buffer below); once obstacles are
+  # inflated by that margin (as they always are -- see
+  # occgrid_to_problog.py's own module docstring), that start CELL
+  # itself fell inside the inflated house boundary, so every planner
+  # call failed with no_path starting from the very first one,
+  # regardless of destination. This point was picked empirically
+  # against the actual occupancy grid (not just the dimensions
+  # diagram, which lists nominal/CAD sizes rather than the inflated,
+  # rasterized boundary planners actually see): ~6.7m clear of the
+  # nearest obstacle in any direction (vs. the house's own south wall
+  # at y~=-7.7 and the south fence at y~=-21.7 -- roughly the midpoint,
+  # and not coincidentally also where clearance peaks scanning either
+  # direction along x=11.3).
+  #
+  # SECOND, DEEPER ISSUE found fixing the first one (NOW FIXED): with
+  # this start point, astar found a path but the subsequent MoveTo
+  # reported crashed(obs1) -- occgrid_to_problog.py's cv2.findContours
+  # (RETR_EXTERNAL,...) had no notion of "thin ring with a hollow
+  # interior", so the outer perimeter fence was extracted as one solid
+  # filled polygon and every collision check treated the WHOLE walkable
+  # orchard interior as inside the obstacle. Fixed by switching
+  # extraction to RETR_CCOMP (emitting each fence's interior as an
+  # obstacle_hole/2 fact) and making collision_geometry.py/planners.py
+  # test containment via combined even-odd ray-casting across an
+  # obstacle's outer boundary AND its holes together.
+  start_x: 11.3    # metres
+  start_y: -15.0   # metres
+
+robot:
+  radius: 0.72            # metres -- robot_radius/1
+  safety_buffer: 0.10   # metres -- safety_buffer/1 (safety_margin = radius + safety_buffer)
+
+motion:
+  speed: 1.0   # metres per time-unit -- constant-speed spline traversal (speed/1)
+
+position:
+  disc_step_position: 0.5   # metres -- reduced from problem4's own 1.0,
+                     # per this problem's own request (space
+                     # discretization only).
+  lateral:
+    sigma: 0.15   # metres per sqrt(time-unit) -- z/2's scale (sigma/1)
+    discretized_gaussian:
+      - value: -1.0
+        weight: 0.25
+      - value: 0.0
+        weight: 0.5
+      - value: 1.0
+        weight: 0.25
+  tangential:
+    sigma: 0.15   # metres per sqrt(time-unit) -- zt/2's scale (sigma_tangential/1)
+    discretized_gaussian:
+      - value: -1.0
+        weight: 0.25
+      - value: 0.0
+        weight: 0.5
+      - value: 1.0
+        weight: 0.25
+
+battery:
+  enabled: true
+  start: 100                 # percent -- battery_start/1
+  idle_drain_rate: 0.02      # percent/time-unit while not moving -- reduced from problem4's own 0.05
+  moving_drain_rate: 0.5     # percent/time-unit while moving -- reduced from problem4's own 5.0,
+                              # back down near problem0-3's own original shared baseline
+  sigma: 0.5   # percent per sqrt(time-unit) -- zbatt/1's scale (sigma_battery/1)
+  disc_step_battery: 10   # percent -- KEPT identical to problem4's own (battery-level discretization unchanged)
+  discretized_gaussian:
+    - value: -1.0
+      weight: 0.25
+    - value: 0.0
+      weight: 0.5
+    - value: 1.0
+      weight: 0.25
+
+tolerances:
+  on_track: 0.5   # metres -- tolerance/1 (on_track/1 drift-reporting diagnostic)
+
+verification:
+  num_samples: 20        # reporting/plotting resolution -- decoupled from
+                          # detection, which is exact (see bracket_samples below)
+  bracket_samples: 60    # collision/obstacle_sighted bracket-scan sample count
+  crossing_eps: 0.01     # bisection refinement tolerance, time-units
+
+grounding:
+  disc_step_time: 20   # seconds -- KEPT identical to problem4's own (time discretization unchanged)
+
+tool:
+  instances:
+    - {id: plow1, kind: plow, x: 0.0, y: 0.0}
+  equipped:
+    plow:
+      speed: 1.0                       # m/time-unit -- PLACEHOLDER, hitched but not deployed (same as base motion.speed for now)
+      moving_drain_rate: 0.5           # percent/time-unit -- PLACEHOLDER, hitched but not deployed (same as base battery.moving_drain_rate for now)
+      deployed_speed: 0.5              # m/time-unit -- PLACEHOLDER, hitched AND deployed (actively plowing: half speed)
+      deployed_moving_drain_rate: 1.0  # percent/time-unit -- PLACEHOLDER, hitched AND deployed (actively plowing: double drain)
+
+ploughing:
+  cell_size: 1.0   # metres -- plough_cell_size/1
+
+sample:
+  success_probability: 0.7
+  value:
+    discretized:
+      - value: 2
+        weight: 0.5
+      - value: 8
+        weight: 0.5

@@ -12,18 +12,20 @@ query(outcome_signature(_)).
 
 query(any_reason_pattern(battery_depleted)).
 query(any_reason_pattern(completed)).
-query(any_reason_pattern(completed(straight,[point(23.0,-36.0),point(0.5,-31.5),point(32.0,-4.5)]))).
-query(any_reason_pattern(completed(straight,[point(24.0,-4.5),point(32.0,-4.5),point(32.0,-27.0),point(45.5,-31.5)]))).
+query(any_reason_pattern(completed(straight,[point(0.5,22.5),point(15.0,27.0),point(45.5,31.5),point(15.0,36.0),point(0.5,40.5)]))).
+query(any_reason_pattern(completed(straight,[point(24.0,-4.5),point(32.0,-4.5),point(32.0,18.0)]))).
+query(any_reason_pattern(completed(straight,[point(32.0,-4.5),point(11.3,-15.0)]))).
 query(any_reason_pattern(crashed(wild))).
-query(any_reason_pattern(no_path(straight,[point(23.0,-36.0),point(0.5,-31.5),point(32.0,-4.5)]))).
-query(any_reason_pattern(no_path(straight,[point(24.0,-4.5),point(32.0,-4.5),point(32.0,-27.0),point(45.5,-31.5)]))).
+query(any_reason_pattern(no_path(straight,[point(0.5,22.5),point(15.0,27.0),point(45.5,31.5),point(15.0,36.0),point(0.5,40.5)]))).
+query(any_reason_pattern(no_path(straight,[point(24.0,-4.5),point(32.0,-4.5),point(32.0,18.0)]))).
+query(any_reason_pattern(no_path(straight,[point(32.0,-4.5),point(11.3,-15.0)]))).
 query(any_reason_pattern(sample_failure(wild,wild,sample_tree_11))).
 query(any_reason_pattern(sample_failure(wild,wild,sample_tree_53))).
 query(any_reason_pattern(sample_success(wild,wild,wild,sample_tree_11))).
 query(any_reason_pattern(sample_success(wild,wild,wild,sample_tree_53))).
 
-query(any_reason_pattern_by_action(completed(straight,[point(24.0,-4.5),point(32.0,-4.5),point(32.0,-27.0),point(45.5,-31.5)]),a1)).
-query(any_reason_pattern_by_action(no_path(straight,[point(24.0,-4.5),point(32.0,-4.5),point(32.0,-27.0),point(45.5,-31.5)]),a1)).
+query(any_reason_pattern_by_action(completed(straight,[point(24.0,-4.5),point(32.0,-4.5),point(32.0,18.0)]),a1)).
+query(any_reason_pattern_by_action(no_path(straight,[point(24.0,-4.5),point(32.0,-4.5),point(32.0,18.0)]),a1)).
 query(any_reason_pattern_by_action(completed,a2)).
 query(any_reason_pattern_by_action(crashed(wild),a2)).
 query(any_reason_pattern_detail_by_action(crashed(_),a2)).
@@ -32,8 +34,8 @@ query(any_reason_pattern_by_action(sample_success(wild,wild,wild,sample_tree_11)
 query(any_reason_pattern_detail_by_action(sample_success(_,_,_,sample_tree_11),a3)).
 query(any_reason_pattern_by_action(sample_failure(wild,wild,sample_tree_11),a3)).
 query(any_reason_pattern_detail_by_action(sample_failure(_,_,sample_tree_11),a3)).
-query(any_reason_pattern_by_action(completed(straight,[point(23.0,-36.0),point(0.5,-31.5),point(32.0,-4.5)]),a4)).
-query(any_reason_pattern_by_action(no_path(straight,[point(23.0,-36.0),point(0.5,-31.5),point(32.0,-4.5)]),a4)).
+query(any_reason_pattern_by_action(completed(straight,[point(0.5,22.5),point(15.0,27.0),point(45.5,31.5),point(15.0,36.0),point(0.5,40.5)]),a4)).
+query(any_reason_pattern_by_action(no_path(straight,[point(0.5,22.5),point(15.0,27.0),point(45.5,31.5),point(15.0,36.0),point(0.5,40.5)]),a4)).
 query(any_reason_pattern_by_action(completed,a5)).
 query(any_reason_pattern_by_action(crashed(wild),a5)).
 query(any_reason_pattern_detail_by_action(crashed(_),a5)).
@@ -42,6 +44,12 @@ query(any_reason_pattern_by_action(sample_success(wild,wild,wild,sample_tree_53)
 query(any_reason_pattern_detail_by_action(sample_success(_,_,_,sample_tree_53),a6)).
 query(any_reason_pattern_by_action(sample_failure(wild,wild,sample_tree_53),a6)).
 query(any_reason_pattern_detail_by_action(sample_failure(_,_,sample_tree_53),a6)).
+query(any_reason_pattern_by_action(completed(straight,[point(32.0,-4.5),point(11.3,-15.0)]),a7)).
+query(any_reason_pattern_by_action(no_path(straight,[point(32.0,-4.5),point(11.3,-15.0)]),a7)).
+query(any_reason_pattern_by_action(completed,a8)).
+query(any_reason_pattern_by_action(crashed(wild),a8)).
+query(any_reason_pattern_detail_by_action(crashed(_),a8)).
+query(any_reason_pattern_by_action(battery_depleted,a8)).
 
 query(any_condition_status(c1,true)).
 query(any_condition_status(c1,false)).
@@ -51,3 +59,7 @@ query(any_condition_status(c3,true)).
 query(any_condition_status(c3,false)).
 query(any_condition_status(c4,true)).
 query(any_condition_status(c4,false)).
+query(any_condition_status(c5,true)).
+query(any_condition_status(c5,false)).
+query(any_condition_status(c6,true)).
+query(any_condition_status(c6,false)).

@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+
+
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="MainTree">
+      <!-- move_to_entrance_5: lat=37.266488501443305 lon=-120.42053433807618 -->
+      <Fallback>
+        <DistanceBelow goal="32.0;18.0" threshold="1.0"/>
+        <Sequence>
+          <PlanWithWaypoints algorithm="straight" waypoints="24.0;-4.5|32.0;-4.5|32.0;18.0" control_points="{cp1}"/>
+          <MoveTo control_points="{cp1}"/>
+          <DistanceBelow goal="32.0;18.0" threshold="1.0"/>
+        </Sequence>
+      </Fallback>
+      <TakeSample id="sample_tree_11"/>
+      <Fallback>
+        <DistanceBelow goal="0.5;40.5" threshold="1.0"/>
+        <Sequence>
+          <PlanWithWaypoints algorithm="straight" waypoints="0.5;22.5|15.0;27.0|45.5;31.5|15.0;36.0|0.5;40.5" control_points="{cp2}"/>
+          <MoveTo control_points="{cp2}"/>
+          <DistanceBelow goal="0.5;40.5" threshold="1.0"/>
+        </Sequence>
+      </Fallback>
+      <TakeSample id="sample_tree_53"/>
+      <Fallback>
+        <DistanceBelow goal="11.3;-15.0" threshold="1.0"/>
+        <Sequence>
+          <PlanWithWaypoints algorithm="straight" waypoints="32.0;-4.5|11.3;-15.0" control_points="{cp2}"/>
+          <MoveTo control_points="{cp2}"/>
+          <DistanceBelow goal="11.3;-15.0" threshold="1.0"/>
+        </Sequence>
+      </Fallback>
+    </Sequence>
+  </BehaviorTree>
+</root>

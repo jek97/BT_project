@@ -8,7 +8,7 @@
       <Fallback>
         <DistanceBelow goal="45.5;-31.5" threshold="1.0"/>
         <Sequence>
-          <PlanWithWaypoints algorithm="astar" waypoints="24.0;-4.5|32.0;-4.5|32.0;-27.0|45.5;-31.5" control_points="{cp1}"/>
+          <PlanWithWaypoints algorithm="straight" waypoints="24.0;-4.5|32.0;-4.5|32.0;-27.0|45.5;-31.5" control_points="{cp1}"/>
           <MoveTo control_points="{cp1}"/>
           <DistanceBelow goal="45.5;-31.5" threshold="1.0"/>
         </Sequence>
@@ -17,7 +17,7 @@
       <Fallback>
         <DistanceBelow goal="32.0;-4.5" threshold="1.0"/>
         <Sequence>
-          <PlanWithWaypoints algorithm="astar" waypoints="23.0;-36.0|0.5;-31.5|32.0;-4.5" control_points="{cp2}"/>
+          <PlanWithWaypoints algorithm="straight" waypoints="23.0;-36.0|0.5;-31.5|32.0;-4.5" control_points="{cp2}"/>
           <MoveTo control_points="{cp2}"/>
           <DistanceBelow goal="32.0;-4.5" threshold="1.0"/>
         </Sequence>

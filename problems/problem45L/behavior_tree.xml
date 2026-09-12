@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<!--
+  behavior_tree.xml (problem5L, formerly problem5; on orchard_map_a.
+  Siblings problem5M (orchard_map_b) and problem5S (orchard_map_c)
+  reuse this SAME tree shape with different coordinates via their own
+  config.yaml/goal_formula.pl.)
+
+  install_closest_plow, then plan+walk to (5,27), plough the swath from
+  (5,27) to (41,27), uninstall the plow (walking to (0,0) first), then
+  plan+walk back to the start position (11.3,-15.0).
+
+  Start position history: an earlier version used (11.3,-7.71), only
+  ~0.1m from the house's own south wall. Once inflated by the robot's
+  own safety margin, that start CELL itself was blocked, so every
+  planner call failed with no_path from the very first leg. See
+  config.yaml's own initial_situation note for how the current point
+  was picked (empirically, against the real occupancy grid): roughly
+  the midpoint between the house and the south fence, ~6.7m clear of
+  either. A second, deeper issue (the perimeter fence being treated as
+  one solid filled polygon rather than a hollow ring) was found and
+  fixed at the occgrid_to_problog.py/collision_geometry.py/planners.py
+  level; see config.yaml's own initial_situation note.
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <include path="install_closest_plow.xml"/>
+  <include path="plowing.xml"/>
+  <include path="uninstall_plow.xml"/>
+  <BehaviorTree ID="MainTree">
+    <Sequence name="MainTree">
+      <SubTree ID="install_closest_plow"/>
+      <PlanWith algorithm="straight" goal="5;27" control_points="{cp1}"/>
+      <MoveTo control_points="{cp1}"/>
+      <SubTree ID="plowing" p1="5;27" p2="41;27"/>
+      <SubTree ID="uninstall_plow" p1="0;0"/>
+      <PlanWith algorithm="straight" goal="11.3;-15.0" control_points="{cp2}"/>
+      <MoveTo control_points="{cp2}"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

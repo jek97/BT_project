@@ -2675,6 +2675,79 @@ plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, CP, completed, true)
 plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, [], no_path, false) :-
     \+ follow_boarder(SX,SY,ObstacleId,Offset, _).
 
+% plan_waypoints_call(+Algorithm,+SX,+SY,+Waypoints,-CP,-Reason,-Status):
+% the MULTI-WAYPOINT generalization of plan_call/8 just above -- SAME
+% "Reason/Status bound together, one clause pair per Algorithm" shape,
+% but for astar/straight ONLY (voronoi/follow_boarder have no multi-
+% waypoint form; see PlanWithWaypoints' own schema.yaml entry for why
+% this is scoped that way "for now"). Waypoints is a Prolog list,
+% [point(G1X,G1Y), point(G2X,G2Y), ...], at least one point -- plans
+% (SX,SY) -> Waypoints[0] -> Waypoints[1] -> ... -> the LAST point,
+% via planners.py's own plan_astar_waypoints/plan_straight_waypoints
+% (which chain the SAME single-goal plan_astar/plan_straight this
+% file already calls above, concatenating each leg's own control
+% points into ONE combined chain -- see that module's own "MULTI-
+% WAYPOINT MERGING" section header for the full rationale and the
+% concatenation arithmetic). FAILS OUTRIGHT (no_path, CP=[]) if ANY
+% single leg between consecutive waypoints has no path -- there is no
+% partial-credit result, exactly like plan_call/8's own astar/straight
+% clauses already fail outright rather than partially.
+plan_waypoints_call(astar, SX,SY, Waypoints, CP, completed, true) :-
+    plan_astar_waypoints(SX,SY, Waypoints, CP).
+plan_waypoints_call(astar, SX,SY, Waypoints, [], no_path, false) :-
+    \+ plan_astar_waypoints(SX,SY, Waypoints, _).
+
+plan_waypoints_call(straight, SX,SY, Waypoints, CP, completed, true) :-
+    plan_straight_waypoints(SX,SY, Waypoints, CP).
+plan_waypoints_call(straight, SX,SY, Waypoints, [], no_path, false) :-
+    \+ plan_straight_waypoints(SX,SY, Waypoints, _).
+
+% -- PLANNING leaf: planWithWaypoints(Algorithm,Waypoints,CP,ActionCode)
+%    -- the multi-waypoint sibling of planWith/4 just below, SAME shape
+%    (quantize current position via disc_step_position/1, dispatch via
+%    a plan_*_call predicate, tag_reason the result), just calling
+%    plan_waypoints_call/7 instead of plan_call/8 and threading
+%    Waypoints straight through as BOTH the call's own third argument
+%    AND the "Goal" slot of the recorded Reason (completed(Algorithm,
+%    Waypoints,ActionCode) / no_path(Algorithm,Waypoints,ActionCode)) --
+%    a list is just another Prolog term as far as tag_reason/3's own
+%    generic =.. reconstruction and halted_with_pattern/3's own
+%    generic match_wild/2 are concerned, so nothing downstream needed
+%    any change for a Reason whose second argument happens to be a
+%    list of points, not a single point/2 term.
+%
+%    THE WHOLE POINT of this action, stated plainly: a plan with N
+%    separate planWith/4 + moveto_leg/2 legs draws N independent z/zt
+%    noise-variable pairs (once per leg -- see basic_action_theory.pl's
+%    top-of-file FUTUREWORK.md reference and planners.py's own "MULTI-
+%    WAYPOINT MERGING" section header), all of which stay simultaneously
+%    "live" through Reiter regression once the plan's own final
+%    situation is reached, driving up the compiled ProbLog formula's
+%    size. Collapsing those SAME N legs into ONE planWithWaypoints +
+%    ONE moveto_leg (see bt_to_prolog.py's own automatic merge pass,
+%    which detects exactly this pattern -- a Sequence of Sequence(
+%    PlanWith,MoveTo) siblings sharing one algorithm -- and rewrites it
+%    this way without the tree author needing to hand-author
+%    PlanWithWaypoints at all) draws exactly ONE z/zt pair for the
+%    WHOLE merged route instead of N, directly shrinking the grounded/
+%    compiled formula. TRADEOFF, stated equally plainly: this is a
+%    genuine change to the probabilistic MODEL, not just an
+%    implementation optimization -- positional noise is no longer
+%    independently reset at each original waypoint (N independent
+%    "restart points" become ONE noise realization governing drift
+%    across the entire merged route). See PlanWithWaypoints' own
+%    schema.yaml entry for this same tradeoff from the BT-author's
+%    side.
+do_node(planWithWaypoints(Algorithm, Waypoints, CP, ActionCode), S,
+        do(planned(Algorithm,Reason), S), Status) :-
+    now(T, S), at(SXExact,SYExact,T,S),
+    disc_step_position(Grid),
+    quantize(SXExact, Grid, SX), quantize(SYExact, Grid, SY),
+    plan_waypoints_call(Algorithm, SX,SY, Waypoints, CP, Reason0, Status),
+    Reason0 =.. [Functor],
+    Reason1 =.. [Functor, Algorithm, Waypoints],
+    tag_reason(Reason1, ActionCode, Reason).
+
 % -- PLANNING leaf: ONE template, planWith(Algorithm,Goal,CP), covering
 %    every planner via plan_call/8's own dispatch on Algorithm --
 %    NOT two (or more) separate hand-written do_node clauses. Called

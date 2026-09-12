@@ -94,8 +94,82 @@ OTHER PORT ENCODINGS (this project's own choice; schema.yaml describes
 port TYPES, not a serialization -- see its own note pointing here):
     Point               "X;Y"                  e.g. goal="11.675;11.525"
     vector<std::string> ";"-separated           e.g. triggers="collision;battery"
+    vector<Point>       "|"-separated "X;Y"s    e.g. waypoints="5;27|41;27"
+                         (PlanWithWaypoints' own waypoints port, the
+                         ONLY vector<Point> INPUT port so far -- "|"
+                         rather than ";" since Point itself already
+                         uses ";" internally, and rather than ","
+                         since vector<std::string> already claims that
+                         shape for a different port type)
     double / string     the attribute's own text, parsed by Python's
                          float()/left as-is respectively
+
+AUTOMATIC PLAN+MOVETO MERGING: before any of the translation above ever
+runs, _merge_plan_moveto_runs walks every <BehaviorTree> definition in
+the file (the main one plus any local siblings -- NOT reaching inside
+an <include>d file's own trees, each of which gets this same treatment
+independently, right after ITS OWN parse, in _collect_tree_registry)
+looking for a specific, narrow pattern: a plain <Sequence>'s direct
+children containing a RUN of two or more <Sequence> elements, each
+itself containing EXACTLY <PlanWith algorithm="..." goal="X;Y"
+control_points="{key}"/> followed by <MoveTo control_points="{key}"/>
+with no other attributes and no explicit triggers on the MoveTo, all
+sharing the SAME literal (non-blackboard) algorithm value astar or
+straight. Each such maximal run is spliced out and replaced by ONE
+synthetic <Sequence><PlanWithWaypoints algorithm="..." waypoints="G1|
+G2|...|Gn" control_points="{merged_key}"/><MoveTo control_points=
+"{merged_key}"/></Sequence> -- a REAL tree, indistinguishable from one
+a human hand-wrote this way, so nothing downstream (var_pool, action
+codes, reason-pattern/query generation, guard derivation) needs any
+special-casing for a merge-produced PlanWithWaypoints versus a hand-
+written one.
+
+WHY narrow this way, deliberately, rather than a more general rewrite:
+  - Only <Sequence> parents are scanned, never <Fallback>/
+    <ReactiveSequence>/<ReactiveFallback> -- a Fallback's own children
+    are ALTERNATIVES (only one runs), not a chain to concatenate, so
+    merging across one would change what the tree MEANS, not just how
+    it's compiled. (Their own children are still recursed into
+    looking for a NESTED plain <Sequence> with its own mergeable run,
+    same as everywhere else.)
+  - Only the "wrapped per-leg" shape -- a <Sequence> whose own two
+    children are PlanWith then MoveTo -- is detected, matching exactly
+    what this project's own translated-from-GPS-mission trees produce
+    (see problems/problem6*/behavior_tree.xml's own header). A BARE
+    PlanWith/MoveTo pair sitting directly among OTHER siblings (e.g.
+    plowing.xml's own DeployTool-separated legs) is NOT auto-merged --
+    wrap a run of bare pairs in their own <Sequence> first if merging
+    them is wanted.
+  - A leg whose PlanWith goal is blackboard-wired (not a literal "X;Y")
+    breaks the run at that point -- there is no concrete waypoint text
+    to splice into the merged node's own waypoints="..." attribute.
+  - A leg whose MoveTo has an explicit triggers="..." of its own breaks
+    the run -- a trigger firing partway through a MERGED multi-
+    waypoint walk would halt it at some arbitrary point along the
+    concatenated spline, not meaningfully "at waypoint k", so a leg
+    that genuinely needs its own early-halt condition cannot safely be
+    silently absorbed into a longer walk.
+  - voronoi/follow_boarder legs are never merged (PlanWithWaypoints
+    doesn't support them -- see schema.yaml's own note).
+A run of length exactly 1 (no adjacent mergeable sibling) is left
+completely alone -- merging a single leg into a one-waypoint
+PlanWithWaypoints would be a purely cosmetic rewrite, not worth doing.
+
+THE POINT of all this (repeated from PlanWithWaypoints' own schema.yaml
+entry and do_node(planWithWaypoints(...))'s own note, since it's worth
+seeing from all three angles): N separate PlanWith+MoveTo legs draw N
+independent z/zt position-noise pairs, all simultaneously "live" once
+the plan's own final situation is regressed -- see this project's own
+FUTUREWORK.md for why that drives up the compiled ProbLog formula's
+size on a many-leg tree. Collapsing a run of N such legs into ONE
+PlanWithWaypoints+MoveTo pair draws exactly ONE noise pair for the
+whole merged route instead, directly shrinking that formula -- at the
+cost of a real, stated change to the probabilistic model: positional
+noise is no longer independently reset at each original waypoint (see
+PlanWithWaypoints' own schema.yaml entry for that tradeoff in full).
+This pass runs UNCONDITIONALLY, on every tree translated -- there is
+no flag to disable it; give a leg a blackboard-wired goal (see above)
+to keep it out of a specific run.
 
 CONTROL-FLOW GUARD DERIVATION: a MoveTo's (or InstallTool's/
 UninstallTool's) own Triggers list is no longer entirely hand-typed.
@@ -157,6 +231,7 @@ tunable value, so there is nothing sensible to warn-and-continue with
 requirements, as opposed to its two non-fatal numeric warnings).
 """
 import copy
+import itertools
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -183,6 +258,17 @@ _ACTION_DISPATCH = {
     # per schema entry -- see _PLAN_ALGORITHMS below and the "planWith"
     # kind's own branch in _translate_leaf.
     "PlanWith": {"kind": "planWith"},
+    # planWithWaypoints(Algorithm,Waypoints,CP,ActionCode) -- the multi-
+    # waypoint sibling of PlanWith, astar/straight only (see schema.
+    # yaml's own PlanWithWaypoints entry, and _PLAN_WAYPOINTS_ALGORITHMS
+    # below). A tree author can write this directly, but it's also
+    # produced AUTOMATICALLY by _merge_plan_moveto_runs's own rewrite
+    # pass (see this module's own "AUTOMATIC PLAN+MOVETO MERGING"
+    # section header) -- by the time _translate_node ever sees one,
+    # there is no way to tell "hand-written" from "merge-produced"
+    # apart, nor any need to: both go through the exact same "kind"
+    # branch in _translate_leaf below.
+    "PlanWithWaypoints": {"kind": "planWithWaypoints"},
     # take_sample(SampleId,ActionCode) -- INSTANTANEOUS (see schema.
     # yaml's own TakeSample entry): its own Reason universe doesn't
     # depend on Triggers/algorithm the way MoveTo/PlanWith's do, but it
@@ -280,6 +366,10 @@ _ACTION_DISPATCH = {
 # COMPOUND term follow_boarder(ObstacleId,Offset) plan_call/8's own
 # follow_boarder clauses dispatch on (see basic_action_theory.pl).
 _PLAN_ALGORITHMS = {"astar", "straight", "voronoi", "follow_boarder"}
+# PlanWithWaypoints' own algorithm port only supports these two -- see
+# schema.yaml's own entry for why (voronoi has no natural per-leg
+# chaining, follow_boarder has no goal point at all).
+_PLAN_WAYPOINTS_ALGORITHMS = {"astar", "straight"}
 # "single_float_port": the shared shape of every cond(Functor(Value))
 # condition whose one port is a plain float -- ObstacleInBound and
 # BatteryBelow/Equal/Over all reduce to this, just with different
@@ -642,6 +732,25 @@ def _point_xy(text, tag, port_name):
         raise BTValidationError(
             f"<{tag}>'s '{port_name}' port ('{text}') has non-numeric "
             f"X/Y -- expected \"X;Y\" with two floats.")
+
+
+def _point_list_literal(text, tag, port_name):
+    """PlanWithWaypoints' own waypoints port encoding: "|"-separated
+    "X;Y" points (e.g. "5;27|41;27|0;0") -- "|" because Point itself
+    already uses ";" internally (see this module's own docstring's
+    encoding list). Returns (prolog_list_text, [(x,y), ...]) -- the
+    raw float pairs are ALSO returned since the caller needs them both
+    for the real Prolog term (a point(X,Y) list) and this occurrence's
+    own human-readable action label."""
+    segments = [s for s in text.split("|") if s != ""]
+    if not segments:
+        raise BTValidationError(
+            f"<{tag}>'s '{port_name}' port ('{text}') is empty -- "
+            f"expected at least one \"X;Y\" waypoint, \"|\"-separated "
+            f"for more than one.")
+    pairs = [_point_xy(seg, tag, port_name) for seg in segments]
+    prolog_list = "[" + ",".join(f"point({x},{y})" for x, y in pairs) + "]"
+    return prolog_list, pairs
 
 
 def _is_battery_trigger(token):
@@ -1113,6 +1222,47 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
             var_pool.action_labels[action_code] = _with_branch_suffix(plan_label, branch_name)
 
             return f"planWith({algorithm_term},{goal_term},{cp_var},{action_code})"
+
+        if info["kind"] == "planWithWaypoints":
+            algorithm = attrs["algorithm"].strip()
+            if algorithm not in _PLAN_WAYPOINTS_ALGORITHMS:
+                raise BTValidationError(
+                    f"<{tag}>'s algorithm port ('{algorithm}') is not one "
+                    f"of {sorted(_PLAN_WAYPOINTS_ALGORITHMS)} -- "
+                    f"PlanWithWaypoints only supports astar/straight for "
+                    f"now (see schema.yaml's own note); use PlanWith "
+                    f"directly for voronoi/follow_boarder.")
+
+            cp_value = attrs["control_points"]
+            if not _is_blackboard_ref(cp_value):
+                raise BTValidationError(
+                    f"<{tag}>'s control_points port ('{cp_value}') must be "
+                    f"a blackboard reference like \"{{cp}}\" -- it is this "
+                    f"node's own OUTPUT, never a literal.")
+            key = _blackboard_key(cp_value)
+            var_pool.producers.add(key)
+            var_pool.note_key_scope(key, reactive_code)
+            cp_var = var_pool.var_for(key)
+
+            waypoints_term, waypoint_pairs = _point_list_literal(
+                attrs["waypoints"], tag, "waypoints")
+
+            action_code = var_pool.next_action_code()
+            # Waypoints is always fully concrete here (this port has no
+            # blackboard-ref form -- see schema.yaml's own note), so
+            # reason_goal_text is the literal list term itself, the
+            # same "no wild needed, always known at translation time"
+            # treatment PlanWith's own literal-goal branch gets above.
+            reason_goal_text = waypoints_term
+            var_pool.reason_patterns_by_action[action_code] = [
+                f"completed({algorithm},{reason_goal_text})",
+                f"no_path({algorithm},{reason_goal_text})",
+            ]
+            waypoints_label = ",".join(f"({x},{y})" for x, y in waypoint_pairs)
+            plan_label = f"PlanWithWaypoints({algorithm}, waypoints=[{waypoints_label}])"
+            var_pool.action_labels[action_code] = _with_branch_suffix(plan_label, branch_name)
+
+            return f"planWithWaypoints({algorithm},{waypoints_term},{cp_var},{action_code})"
 
         if info["kind"] == "take_sample":
             # id is the ONE port (schema.yaml's own TakeSample entry) --
@@ -1741,6 +1891,123 @@ def _single_child(bt_elem, label):
     return children[0]
 
 
+def _is_mergeable_leg(elem):
+    """True (returning (algorithm, goal_text)) iff elem is a
+    <Sequence> with EXACTLY two children -- <PlanWith algorithm=
+    "astar"|"straight" goal="X;Y" control_points="{key}"/> then
+    <MoveTo control_points="{key}"/>, no other attributes on either,
+    no explicit triggers on the MoveTo -- the exact shape
+    _merge_plan_moveto_runs looks for (see this module's own
+    "AUTOMATIC PLAN+MOVETO MERGING" docstring section). Returns None
+    for anything else -- a translation-time SKIP, never an error;
+    plenty of legitimate trees have other shapes here, and full port
+    validation still happens normally, later, on whatever this pass
+    leaves behind (merged or not)."""
+    if elem.tag != "Sequence":
+        return None
+    children = list(elem)
+    if len(children) != 2:
+        return None
+    plan_elem, move_elem = children
+    if plan_elem.tag != "PlanWith" or move_elem.tag != "MoveTo":
+        return None
+    algorithm = plan_elem.attrib.get("algorithm", "").strip()
+    if algorithm not in _PLAN_WAYPOINTS_ALGORITHMS:
+        return None
+    goal = plan_elem.attrib.get("goal")
+    if goal is None or _is_blackboard_ref(goal):
+        return None
+    plan_cp = plan_elem.attrib.get("control_points")
+    move_cp = move_elem.attrib.get("control_points")
+    if not plan_cp or not move_cp or plan_cp != move_cp or not _is_blackboard_ref(plan_cp):
+        return None
+    if "triggers" in move_elem.attrib:
+        return None
+    if set(plan_elem.attrib) - _ALWAYS_ALLOWED_ATTRS - {"algorithm", "goal", "control_points"}:
+        return None
+    if set(move_elem.attrib) - _ALWAYS_ALLOWED_ATTRS - {"control_points"}:
+        return None
+    return algorithm, goal.strip()
+
+
+def _build_merged_leg(algorithm, goals, merge_counter):
+    """One synthetic <Sequence><PlanWithWaypoints .../><MoveTo .../>
+    </Sequence>, replacing a whole matched run -- a REAL tree fragment,
+    indistinguishable from one a human hand-wrote (see this module's
+    own "AUTOMATIC PLAN+MOVETO MERGING" section for why that matters).
+    merge_counter is a single itertools.count shared across the WHOLE
+    translation unit (every <BehaviorTree> in the main file AND every
+    <include>d file's own -- see translate_tree's/_collect_tree_
+    registry's own threading of it), so two merges anywhere in the
+    same translation can never invent the same synthetic control_
+    points key even if they happen to live in different files spliced
+    together via <SubTree>. The leading double underscore signals
+    "generated" -- vanishingly unlikely to collide with a human-chosen
+    blackboard key either way."""
+    cp_key = f"{{__merged_cp_{next(merge_counter)}}}"
+    wrapper = ET.Element("Sequence")
+    plan_elem = ET.SubElement(wrapper, "PlanWithWaypoints")
+    plan_elem.set("algorithm", algorithm)
+    plan_elem.set("waypoints", "|".join(goals))
+    plan_elem.set("control_points", cp_key)
+    move_elem = ET.SubElement(wrapper, "MoveTo")
+    move_elem.set("control_points", cp_key)
+    return wrapper
+
+
+def _merge_children_of(seq_elem, merge_counter):
+    """Rewrites seq_elem's OWN direct children in place, collapsing
+    every maximal run of >= 2 consecutive _is_mergeable_leg matches
+    that share one algorithm into one synthetic merged leg (see
+    _build_merged_leg). Non-matching children, and a run of exactly 1
+    (nothing to merge with), pass through completely unchanged."""
+    children = list(seq_elem)
+    new_children = []
+    i, n = 0, len(children)
+    while i < n:
+        match = _is_mergeable_leg(children[i])
+        if match is None:
+            new_children.append(children[i])
+            i += 1
+            continue
+        algorithm, goal = match
+        goals = [goal]
+        j = i + 1
+        while j < n:
+            next_match = _is_mergeable_leg(children[j])
+            if next_match is None or next_match[0] != algorithm:
+                break
+            goals.append(next_match[1])
+            j += 1
+        if len(goals) >= 2:
+            new_children.append(_build_merged_leg(algorithm, goals, merge_counter))
+        else:
+            new_children.append(children[i])
+        i = j
+    seq_elem[:] = new_children
+
+
+def _merge_plan_moveto_runs(xml_root, merge_counter):
+    """Entry point -- see this module's own "AUTOMATIC PLAN+MOVETO
+    MERGING" docstring section for the full rationale/scope. Mutates
+    every <BehaviorTree> found DIRECTLY under xml_root IN PLACE (NOT
+    reaching inside any <include>d file -- translate_tree/_collect_
+    tree_registry call this separately, with the SAME merge_counter,
+    on each included file's own root right after parsing it, so every
+    file gets this treatment exactly once, on its own un-merged body).
+
+    Snapshots every <Sequence> element first (list(), not a live
+    iterator) since _merge_children_of mutates children lists as it
+    goes; this is safe regardless of visiting order or whether a
+    later-visited element is still reachable from xml_root by the time
+    it's processed (each call only ever reads/replaces ITS OWN
+    element's direct children, never depending on the element's own
+    position in the wider tree)."""
+    for bt in xml_root.findall("BehaviorTree"):
+        for seq in list(bt.iter("Sequence")):
+            _merge_children_of(seq, merge_counter)
+
+
 def _find_tree_root(xml_root):
     bt_elems = xml_root.findall("BehaviorTree")
     if not bt_elems:
@@ -1765,7 +2032,7 @@ def _find_tree_root(xml_root):
     return _single_child(chosen, f"<BehaviorTree ID=\"{chosen.attrib.get('ID')}\">")
 
 
-def _collect_tree_registry(xml_root, file_dir, visited_files, registry, source_label):
+def _collect_tree_registry(xml_root, file_dir, visited_files, registry, source_label, merge_counter):
     """Populates registry ({tree_id: <BehaviorTree> element}) with
     every ID'd <BehaviorTree> found in xml_root PLUS every <include
     path="..."/> it references (real BT.cpp v4 tree-composition syntax
@@ -1774,6 +2041,15 @@ def _collect_tree_registry(xml_root, file_dir, visited_files, registry, source_l
     way, so a chain of includes (A includes B, B includes C) all merge
     into ONE flat registry <SubTree ID="..."> can look up regardless of
     which file actually defines it.
+
+    Also runs _merge_plan_moveto_runs on EACH included file's own root,
+    right after parsing it and before recursing further -- xml_root
+    itself is NOT merged here (translate_tree already did that for the
+    main file before this function's own first call), only files
+    reached via <include>. merge_counter is threaded through
+    UNCHANGED, all the way down, so a synthetic control_points key
+    invented while merging one file can never collide with one from
+    another -- see _build_merged_leg's own note.
 
     path must be a BARE FILENAME -- no '/', no '..' -- resolved in the
     SAME DIRECTORY as the file it appears in (file_dir): this project
@@ -1831,8 +2107,9 @@ def _collect_tree_registry(xml_root, file_dir, visited_files, registry, source_l
             inc_root = ET.parse(inc_path).getroot()
         except ET.ParseError as e:
             raise BTValidationError(f"Malformed XML in {inc_path}: {e}")
+        _merge_plan_moveto_runs(inc_root, merge_counter)
         _collect_tree_registry(inc_root, os.path.dirname(inc_path), visited_files,
-                                registry, inc_path)
+                                registry, inc_path, merge_counter)
 
 
 def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
@@ -1871,6 +2148,18 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
     except ET.ParseError as e:
         raise BTValidationError(f"Malformed XML in {xml_path}: {e}")
 
+    # See this module's own "AUTOMATIC PLAN+MOVETO MERGING" docstring
+    # section. merge_counter is shared for the REST of this call too
+    # (threaded through _collect_tree_registry into every <include>d
+    # file's own merge pass below), so a synthetic control_points key
+    # invented anywhere in this whole translation unit is always
+    # globally unique. Runs BEFORE _find_tree_root/_collect_tree_
+    # registry so every downstream step (SubTree registry, translation
+    # itself) only ever sees the ALREADY-merged tree, never the
+    # original per-leg one.
+    merge_counter = itertools.count(1)
+    _merge_plan_moveto_runs(xml_root, merge_counter)
+
     tree_root_elem = _find_tree_root(xml_root)
     var_pool = _VarPool()
     # <SubTree ID="..."> lookup registry -- every ID'd <BehaviorTree> in
@@ -1886,7 +2175,7 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
     # other repeated <include> below.
     visited_files = {os.path.realpath(xml_path)}
     _collect_tree_registry(xml_root, os.path.dirname(os.path.abspath(xml_path)),
-                            visited_files, var_pool.tree_defs, xml_path)
+                            visited_files, var_pool.tree_defs, xml_path, merge_counter)
     node_text = _translate_node(tree_root_elem, schema_ports, var_pool, battery_enabled, None, [])
 
     # A MoveTo whose control_points key has no PlanWith

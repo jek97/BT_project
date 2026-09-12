@@ -389,6 +389,116 @@ actions:
         description: "true iff reason is completed(...)."
 
   # ----------------------------------------------------------------
+  # PlanWithWaypoints -- corresponds to planWithWaypoints(Algorithm,
+  # Waypoints,CP,ActionCode) in basic_action_theory.pl. The MULTI-
+  # WAYPOINT generalization of PlanWith above, for astar/straight ONLY
+  # (voronoi has no natural per-leg chaining and follow_boarder has no
+  # goal point at all, so neither gets a multi-waypoint form "for now"
+  # -- use PlanWith directly for those). Plans a route from the CURRENT
+  # position THROUGH every waypoint in order, concatenating each leg's
+  # own chained-Bezier control points into ONE combined chain (see
+  # planners.py's own "MULTI-WAYPOINT MERGING" section header for the
+  # concatenation arithmetic) -- the SAME "length 3k+1" shape PlanWith's
+  # own control_points already has, just spanning every waypoint's own
+  # leg. Fails OUTRIGHT (no_path, empty control_points) if ANY single
+  # leg between consecutive waypoints has no path; there is no partial-
+  # credit result.
+  #
+  # WHY THIS NODE EXISTS, stated plainly: N separate PlanWith+MoveTo
+  # legs each draw their OWN independent z/zt position-noise pair (see
+  # this project's own FUTUREWORK.md), and all N stay simultaneously
+  # "live" once the plan's final situation is reached, which is what
+  # drives up the compiled ProbLog formula's size on a many-leg tree.
+  # A single PlanWithWaypoints+MoveTo pair spanning the SAME N
+  # waypoints draws exactly ONE z/zt pair for the whole route instead,
+  # directly shrinking that compiled formula. Nothing here needs to be
+  # hand-written to get this benefit: bt_to_prolog.py's own translator
+  # AUTOMATICALLY detects a Sequence whose direct children are
+  # THEMSELVES a run of Sequence(PlanWith,MoveTo) pairs -- sharing one
+  # algorithm (astar or straight), each PlanWith's own goal a literal
+  # (not blackboard-wired), each MoveTo with no explicit triggers of
+  # its own -- and rewrites that whole run into ONE PlanWithWaypoints+
+  # MoveTo pair, with no XML change required from the tree author (see
+  # that module's own "AUTOMATIC PLAN+MOVETO MERGING" section header
+  # for the exact detection rule and its scope). A tree author can
+  # also write <PlanWithWaypoints> directly, e.g. as part of a subtree
+  # meant to always be merged, or simply because the route is already
+  # known to be one continuous multi-point walk.
+  #
+  # TRADEOFF, stated equally plainly (repeated from do_node(
+  # planWithWaypoints(...))'s own note, since a BT AUTHOR should see it
+  # here too, not just a theory maintainer): this is a genuine change
+  # to the PROBABILISTIC MODEL, not just an implementation-level
+  # optimization. N separate legs each independently "reset" position
+  # noise at their own waypoint; ONE merged leg does not -- a single
+  # noise realization now governs drift across the ENTIRE merged
+  # route. Automatic merging (see above) is applied unconditionally
+  # wherever the pattern matches -- there is no opt-out attribute; if
+  # independently-reset noise at every original waypoint is part of
+  # what a tree is meant to model, give the PlanWith a blackboard-
+  # wired goal instead of a literal one (the merge pass only ever
+  # collapses a run of LITERAL goals -- see bt_to_prolog.py's own
+  # detection rule) to keep that leg unmerged.
+  - id: PlanWithWaypoints
+    prolog_action: planWithWaypoints
+    ports:
+      - name: algorithm
+        direction: input
+        type: std::string
+        required: true
+        description: >
+          One of: astar, straight -- ONLY these two (see this entry's
+          own header for why). An unsupported value here is a
+          translation-time (bt_to_prolog.py) BTValidationError, not a
+          silent runtime failure.
+      - name: waypoints
+        direction: input
+        type: std::vector<Point>
+        required: true
+        description: >
+          Ordered list of "X;Y" points to visit IN ORDER, "|"-separated
+          -- e.g. waypoints="5;27|41;27|0;0" plans (current position)
+          -> (5,27) -> (41,27) -> (0,0). "|" (not ";", already used
+          inside each "X;Y" pair, and not "," which this schema's own
+          std::vector<std::string> ports already use for a different
+          port type) is this schema's own encoding for a std::vector
+          <Point> INPUT port -- see bt_to_prolog.py's own module
+          docstring for the full "X;Y"/vector<std::string>/{blackboard_
+          key} encoding list this joins. At least one point is
+          required; a single-point list is equivalent to plain
+          PlanWith's own behavior (one leg, nothing to chain), just
+          via this node's own Reason shape instead. Every point here
+          must be a LITERAL "X;Y" -- unlike PlanWith's own goal port,
+          a blackboard-wired waypoint is not supported (there is
+          nothing here to write, since no existing node outputs a
+          std::vector<Point> a tree author would wire in).
+      - name: control_points
+        direction: output
+        type: std::vector<Point>
+        description: >
+          The FULL merged path, chained cubic Bezier control points,
+          length 3k+1 -- same shape/consumer (a following MoveTo) as
+          PlanWith's own control_points, just spanning every
+          waypoint's own leg concatenated into one chain.
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note):
+      #   direction: output
+      #   type: std::string
+      #   description: >
+      #     completed(Algorithm,Waypoints,ActionCode) or
+      #     no_path(Algorithm,Waypoints,ActionCode) -- Waypoints is
+      #     the SAME [point(X,Y),...] list this node's own waypoints
+      #     port parsed into, echoed back whole (not one point at a
+      #     time) -- see do_node(planWithWaypoints(...))'s own note in
+      #     basic_action_theory.pl for why a list here needed no
+      #     change to tag_reason/3 or halted_with_pattern/3's own
+      #     generic machinery.
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is completed(...)."
+
+  # ----------------------------------------------------------------
   # TakeSample -- corresponds to take_sample(SampleId,ActionCode) in
   # basic_action_theory.pl. INSTANTANEOUS, like PlanWith above (does
   # not advance now/2, no Duration/Triggers, no continuous trajectory)

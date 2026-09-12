@@ -22,6 +22,8 @@ same underlying A*/spline computation and neither should reimplement it:
          plan_straight(+SX,+SY,+GX,+GY, -ControlPoints)
          plan_voronoi(+SX,+SY,+GX,+GY, -ControlPoints)
          follow_boarder(+SX,+SY,+ObstacleId,+Offset, -ControlPoints)
+         plan_astar_waypoints(+SX,+SY,+Waypoints, -ControlPoints)
+         plan_straight_waypoints(+SX,+SY,+Waypoints, -ControlPoints)
      ControlPoints = [point(X0,Y0), ...] ProbLog terms, length 3k+1, in
      EXACTLY the format basic_action_theory.pl's spline_point/4 expects.
      plan_voronoi is a generalized-Voronoi-diagram planner, SAME
@@ -992,6 +994,85 @@ def plan_straight_points(sx, sy, gx, gy):
     return _straight_control_points(float(sx), float(sy), float(gx), float(gy))
 
 
+# =====================================================================
+# MULTI-WAYPOINT MERGING -- for astar/straight ONLY (voronoi/
+# follow_boarder have no multi-waypoint form; see schema.yaml's own
+# PlanWithWaypoints entry for why). Plans (sx,sy) -> waypoints[0] ->
+# waypoints[1] -> ... -> waypoints[-1] as N independent per-leg calls
+# to the SAME single-goal planner already above, then CONCATENATES
+# each leg's own chained-Bezier control_points into ONE combined
+# chain spanning the whole route.
+#
+# WHY this exists: this project's own FUTUREWORK.md documents that the
+# compiled ProbLog formula's size is driven by how many stochastic
+# noise variables (z/2, zt/2 -- one fresh pair PER MoveTo leg) stay
+# simultaneously "live" through Reiter regression across the whole,
+# never-forgotten action history. A tree with N independent PlanWith/
+# MoveTo legs draws N independent (z,zt) pairs; collapsing those same
+# N legs into ONE PlanWithWaypoints+MoveTo pair (see bt_to_prolog.py's
+# own automatic merge pass) draws exactly ONE (z,zt) pair for the
+# whole route instead -- directly shrinking the grounded/compiled
+# formula's size by removing (N-1) noise-variable pairs, at the cost
+# of a real, deliberate change to the probabilistic model: positional
+# noise is no longer independently reset at each original waypoint,
+# since there is now only ONE walk, not N. See PlanWithWaypoints'
+# own schema.yaml entry for that tradeoff stated in full.
+#
+# CONCATENATION: each leg's own control_points is a chained-cubic-
+# Bezier list, length 3k+1 for that leg's own k -- and leg i+1 always
+# STARTS exactly where leg i ENDED (by construction: leg i+1's own
+# start point is leg i's own goal point). So concatenating N such
+# lists into ONE combined chain is just "append every list, but drop
+# each list's own FIRST point except the very first list's" -- that
+# first point is otherwise an exact duplicate of the previous list's
+# own last point, and dropping exactly one point per seam (N-1 seams
+# for N legs) preserves the "length 3k+1" invariant for the combined
+# chain's own k = sum of every leg's own k (verified directly: sum(3*
+# k_i + 1) - (N-1) = 3*sum(k_i) + 1).
+#
+# FAILS OUTRIGHT (returns None) if ANY single leg has no path -- there
+# is no partial-credit result; this matches PlanWithWaypoints' own
+# "reaches the last one, or doesn't complete at all" contract.
+# =====================================================================
+def _chain_multi_leg_control_points(sx, sy, waypoints, leg_planner):
+    """Shared core for plan_astar_waypoints_points/plan_straight_
+    waypoints_points below -- leg_planner is _astar_control_points or
+    _straight_control_points (same (sx,sy,gx,gy)->control_points|None
+    shape as the single-goal planners already above). waypoints is
+    [(x,y), ...], at least one point. Returns the combined chain, or
+    None if ANY leg fails (see this section's own header)."""
+    points = [(float(sx), float(sy))] + [(float(x), float(y)) for x, y in waypoints]
+    combined = None
+    for (ax, ay), (bx, by) in zip(points, points[1:]):
+        leg_cp = leg_planner(ax, ay, bx, by)
+        if leg_cp is None:
+            return None
+        if combined is None:
+            combined = list(leg_cp)
+        else:
+            combined.extend(leg_cp[1:])
+    return combined
+
+
+def plan_astar_waypoints_points(sx, sy, waypoints):
+    """Plain-Python multi-waypoint A* planner -- see this section's
+    own header. Returns None if waypoints is empty or if ANY leg
+    between consecutive points (including the very first, from
+    (sx,sy) to waypoints[0]) has no path."""
+    if not waypoints:
+        return None
+    return _chain_multi_leg_control_points(sx, sy, waypoints, _astar_control_points)
+
+
+def plan_straight_waypoints_points(sx, sy, waypoints):
+    """Plain-Python multi-waypoint straight-line planner -- see this
+    section's own header. Returns None only if waypoints is empty
+    (straight legs themselves never fail)."""
+    if not waypoints:
+        return None
+    return _chain_multi_leg_control_points(sx, sy, waypoints, _straight_control_points)
+
+
 def plan_voronoi_points(sx, sy, gx, gy):
     """Plain-Python generalized-Voronoi-diagram planner. Returns
     [(x,y), ...] control points routed along the free-space Voronoi
@@ -1073,6 +1154,38 @@ if _HAVE_PROBLOG:
         """Black-box straight-line planner (ProbLog predicate) -- no map
         lookup at all, always succeeds for any finite (sx,sy),(gx,gy)."""
         control_points = _straight_control_points(sx, sy, gx, gy)
+        return [_control_points_to_terms(control_points)]
+
+    def _term_list_to_points(waypoints):
+        """[point(X,Y), ...] ProbLog Term objects -> [(x,y), ...] plain
+        floats -- the "+list" input type spec (problog.extern's own
+        term2list) only unwraps the OUTER Prolog list, leaving each
+        element as a raw point(X,Y) Term still needing this."""
+        return [(float(w.args[0]), float(w.args[1])) for w in waypoints]
+
+    @problog_export_nondet("+float", "+float", "+list", "-list")
+    def plan_astar_waypoints(sx, sy, waypoints):
+        """Black-box multi-waypoint A* planner (ProbLog predicate) --
+        see plan_astar_waypoints_points above for the actual
+        computation. waypoints arrives as a Prolog list of point(X,Y)
+        terms (basic_action_theory.pl's own planWithWaypoints/4 own
+        Waypoints argument, unchanged from how bt_to_prolog.py's merge
+        pass -- or a hand-written PlanWithWaypoints -- wrote it).
+        Fails (returns []) if waypoints is empty, or if ANY leg has no
+        path -- no partial-credit result."""
+        control_points = plan_astar_waypoints_points(sx, sy, _term_list_to_points(waypoints))
+        if control_points is None:
+            return []
+        return [_control_points_to_terms(control_points)]
+
+    @problog_export_nondet("+float", "+float", "+list", "-list")
+    def plan_straight_waypoints(sx, sy, waypoints):
+        """Black-box multi-waypoint straight-line planner (ProbLog
+        predicate) -- see plan_straight_waypoints_points above. Fails
+        (returns []) only if waypoints is empty."""
+        control_points = plan_straight_waypoints_points(sx, sy, _term_list_to_points(waypoints))
+        if control_points is None:
+            return []
         return [_control_points_to_terms(control_points)]
 
     @problog_export_nondet("+float", "+float", "+float", "+float", "-list")

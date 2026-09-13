@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+
+
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RetryUntilSuccessful num_attempts="3">
+      <Sequence>
+      <Fallback>
+        <DistanceBelow goal="32.0;-27.0" threshold="1.0"/>
+        <Sequence>
+          <PlanWith algorithm="straight" goal="32.0;-27.0" control_points="{cp2}"/>
+          <MoveTo control_points="{cp2}"/>
+          <DistanceBelow goal="32.0;-27.0" threshold="1.0"/>
+        </Sequence>
+      </Fallback>
+      <TakeSample id="sample_tree_11"/>
+      </Sequence>
+    </RetryUntilSuccessful>
+  </BehaviorTree>
+</root>

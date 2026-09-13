@@ -3,7 +3,7 @@
 % instead and regenerate (main.py does this automatically before
 % every run).
 
-start(9.0,27.0).
+start(0.0,-13.5).
 robot_radius(0.72).
 safety_buffer(0.1).
 speed(1.0).
@@ -83,7 +83,7 @@ tool_moving_drain_rate_deployed(cart, 0.5).
 tool_moving_drain_rate_deployed(plow, 1.0).
 
 tool_instance(plow1, plow).
-tool_start_position(plow1, 0.5, -4.5).
+tool_start_position(plow1, 0.0, 0.0).
 
 plough_cell_size(1.0).
 

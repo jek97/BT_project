@@ -139,6 +139,40 @@ tool:
       moving_drain_rate: 0.7           # percent/time-unit -- PLACEHOLDER, hitched but not deployed (same as base battery.moving_drain_rate for now)
       deployed_speed: 0.5              # m/time-unit -- PLACEHOLDER, hitched AND deployed (actively plowing: half speed)
       deployed_moving_drain_rate: 1.0  # percent/time-unit -- PLACEHOLDER, hitched AND deployed (actively plowing: double drain)
+  # install/uninstall/deploy/retract: this tree actually uses ALL FOUR
+  # (InstallTool/UninstallTool/DeployTool/RetractTool), so their own
+  # success_probability/duration_seconds/drain_rate were silently
+  # defaulting (see config_to_prolog.py's own _DEFAULT_TOOL_SUCCESS_
+  # PROBABILITY/_DEFAULT_TOOL_DURATION_S/battery.idle_drain_rate
+  # fallback notes) -- made EXPLICIT here, at those SAME default
+  # values, so the actual numbers driving this problem are visible
+  # rather than hidden in the generator's own code. install.range
+  # likewise defaults to robot.radius+robot.safety_buffer.
+  install:
+    success_probability: 0.9
+    duration_seconds:
+      plow: 10.0
+      cart: 10.0
+    drain_rate: 0.02
+    range: 0.82
+  uninstall:
+    success_probability: 0.9
+    duration_seconds:
+      plow: 10.0
+      cart: 10.0
+    drain_rate: 0.02
+  deploy:
+    success_probability: 0.9
+    duration_seconds:
+      plow: 10.0
+      cart: 10.0
+    drain_rate: 0.02
+  retract:
+    success_probability: 0.9
+    duration_seconds:
+      plow: 10.0
+      cart: 10.0
+    drain_rate: 0.02
 
 ploughing:
   cell_size: 1.0   # metres -- plough_cell_size/1

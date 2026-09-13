@@ -882,6 +882,33 @@ leg_start_battery(T0, SPrev, B0) :-
     disc_step_battery(Grid),
     quantize_down(B0Exact, Grid, B0).
 
+% moving_phase_deviation(+Zb,+SigmaB,+Elapsed,+Duration,-Deviation):
+% the shared "Duration-normalized battery-noise deviation" formula
+% EVERY fixed-Duration battery-draining action's own MOVING/ACTIVE-
+% phase battery/3 clause below uses (MoveTo, InstallTool,
+% UninstallTool, DeployTool, RetractTool -- and battery_at_leg/7's own
+% by-hand-synced copy of MoveTo's), factored into one place rather
+% than six copies of the same arithmetic. Duration=<0.0 is a genuine,
+% valid case (a zero-length/zero-Duration leg -- every planner in
+% planners.py returns a degenerate, zero-arc-length control_points
+% list for an "already at the goal" leg, see e.g. _dastar_control_
+% points' own start_rc==goal_rc special case, and walk_duration/3
+% computes Duration=Length/Speed=0.0 for it; install/uninstall/deploy/
+% retract can likewise have a config-set Duration of 0), not something
+% to reject: Elapsed is ALWAYS 0.0 too whenever Duration=<0.0 (every
+% caller below clamps it to max(0.0,min(Elapsed0,Duration)) first), so
+% Deviation=0.0 is the correct, well-defined limit -- zero elapsed
+% time means no opportunity for drift to accumulate, exactly the "no
+% noise" reading this formula would give anyway if 0.0/sqrt(Duration)
+% were merely undefined rather than a hard ZeroDivisionError. TWO
+% mutually exclusive clauses, same "no if-then-else" convention every
+% other multi-case predicate in this file already uses.
+moving_phase_deviation(_Zb, _SigmaB, _Elapsed, Duration, 0.0) :-
+    Duration =< 0.0.
+moving_phase_deviation(Zb, SigmaB, Elapsed, Duration, Deviation) :-
+    Duration > 0.0,
+    Deviation is Zb * SigmaB * Elapsed / sqrt(Duration).
+
 % MOVING phase keeps the Duration-normalized scaling (Elapsed/sqrt(D),
 % not sqrt(Elapsed)) -- a walk DOES have a genuine, known, fixed
 % Duration, and that normalization is what keeps Level EXACTLY LINEAR
@@ -906,7 +933,7 @@ battery(Level, T, do(startMoveto(CP,_Triggers,_ActionCode,T0), S)) :-
     effective_tool_moving_drain_rate(Tool, S, MovingRate),
     sigma_battery(SigmaB),
     zbatt(Zb),
-    Deviation is Zb * SigmaB * Elapsed / sqrt(Duration),
+    moving_phase_deviation(Zb, SigmaB, Elapsed, Duration, Deviation),
     NominalDrain is MovingRate*Elapsed,
     noisy_drain(NominalDrain, Deviation, TotalDrain),
     Level is max(0, min(100, B0 - TotalDrain)).
@@ -984,7 +1011,7 @@ battery(Level, T, do(start_install_tool(Id,_Triggers,_ActionCode,T0), S)) :-
     Elapsed is max(0.0, min(Elapsed0, Duration)),
     sigma_battery(SigmaB),
     zbatt(Zb),
-    Deviation is Zb * SigmaB * Elapsed / sqrt(Duration),
+    moving_phase_deviation(Zb, SigmaB, Elapsed, Duration, Deviation),
     NominalDrain is Rate*Elapsed,
     noisy_drain(NominalDrain, Deviation, TotalDrain),
     Level is max(0, min(100, B0 - TotalDrain)).
@@ -1013,7 +1040,7 @@ battery(Level, T, do(start_uninstall_tool(Id,_Triggers,_ActionCode,T0), S)) :-
     Elapsed is max(0.0, min(Elapsed0, Duration)),
     sigma_battery(SigmaB),
     zbatt(Zb),
-    Deviation is Zb * SigmaB * Elapsed / sqrt(Duration),
+    moving_phase_deviation(Zb, SigmaB, Elapsed, Duration, Deviation),
     NominalDrain is Rate*Elapsed,
     noisy_drain(NominalDrain, Deviation, TotalDrain),
     Level is max(0, min(100, B0 - TotalDrain)).
@@ -1052,7 +1079,7 @@ battery(Level, T, do(start_deploy_tool(Id,_Triggers,_ActionCode,T0), S)) :-
     Elapsed is max(0.0, min(Elapsed0, Duration)),
     sigma_battery(SigmaB),
     zbatt(Zb),
-    Deviation is Zb * SigmaB * Elapsed / sqrt(Duration),
+    moving_phase_deviation(Zb, SigmaB, Elapsed, Duration, Deviation),
     NominalDrain is Rate*Elapsed,
     noisy_drain(NominalDrain, Deviation, TotalDrain),
     Level is max(0, min(100, B0 - TotalDrain)).
@@ -1081,7 +1108,7 @@ battery(Level, T, do(start_retract_tool(Id,_Triggers,_ActionCode,T0), S)) :-
     Elapsed is max(0.0, min(Elapsed0, Duration)),
     sigma_battery(SigmaB),
     zbatt(Zb),
-    Deviation is Zb * SigmaB * Elapsed / sqrt(Duration),
+    moving_phase_deviation(Zb, SigmaB, Elapsed, Duration, Deviation),
     NominalDrain is Rate*Elapsed,
     noisy_drain(NominalDrain, Deviation, TotalDrain),
     Level is max(0, min(100, B0 - TotalDrain)).
@@ -1115,6 +1142,24 @@ battery(Level, T, do(A,S)) :-
     A \= start_retract_tool(_,_,_,_), A \= halt_retract_tool(_,_,_),
     battery(Level, T, S).
 
+% moving_phase_effective_rate(+Rate,+Zb,+SigmaB,+Duration,-EffectiveRate):
+% the shared "Duration-normalized effective drain rate" formula EVERY
+% closed-form battery-crossing predicate below uses (first_battery_
+% depletion_time/first_battery_below_time/first_battery_equal_time),
+% factored into one place rather than three copies of the same
+% arithmetic. Duration=<0.0 (a zero-length/zero-Duration leg -- see
+% moving_phase_deviation/5's own note just above for why this is a
+% genuine, valid case) makes this predicate simply FAIL rather than
+% divide by sqrt(0.0) -- correct BY CONSTRUCTION, not a special case
+% bolted on: a walk with zero elapsed time available can never
+% experience ANY threshold crossing DURING it, so "no solution" is
+% exactly the right answer, the same "FAILS = no crossing in this
+% walk" convention every caller below already documents for its OTHER
+% failure case (non-positive effective rate).
+moving_phase_effective_rate(Rate, Zb, SigmaB, Duration, EffectiveRate) :-
+    Duration > 0.0,
+    EffectiveRate is Rate - Zb*SigmaB/sqrt(Duration).
+
 % first_battery_depletion_time(+CP,+T0,+Duration,+B0,+Zb,+Tool,-Tcross):
 % CLOSED-FORM (not bracket/bisect) -- battery is exactly LINEAR in
 % elapsed time within one walk (fixed Zb => fixed EffectiveRate), so
@@ -1130,7 +1175,7 @@ battery(Level, T, do(A,S)) :-
 % clause makes) -- see earliest_halt/12's own note.
 first_battery_depletion_time(CP,T0,Duration,B0,Zb,Rate,Tcross) :-
     sigma_battery(SigmaB),
-    EffectiveRate is Rate - Zb*SigmaB/sqrt(Duration),
+    moving_phase_effective_rate(Rate, Zb, SigmaB, Duration, EffectiveRate),
     EffectiveRate > 0,
     Tcross0 is T0 + B0/EffectiveRate,
     Tcross0 =< T0 + Duration,
@@ -1156,7 +1201,7 @@ first_battery_below_time(CP,T0,Duration,B0,Zb,_Rate,Threshold,T0) :-
 first_battery_below_time(CP,T0,Duration,B0,Zb,Rate,Threshold,Tcross) :-
     B0 > Threshold,
     sigma_battery(SigmaB),
-    EffectiveRate is Rate - Zb*SigmaB/sqrt(Duration),
+    moving_phase_effective_rate(Rate, Zb, SigmaB, Duration, EffectiveRate),
     EffectiveRate > 0,
     Tcross0 is T0 + (B0-Threshold)/EffectiveRate,
     Tcross0 =< T0 + Duration,
@@ -1181,7 +1226,7 @@ first_battery_equal_time(CP,T0,Duration,B0,Zb,_Rate,Threshold,T0) :-
 first_battery_equal_time(CP,T0,Duration,B0,Zb,Rate,Threshold,Tcross) :-
     B0 > Threshold,
     sigma_battery(SigmaB),
-    EffectiveRate is Rate - Zb*SigmaB/sqrt(Duration),
+    moving_phase_effective_rate(Rate, Zb, SigmaB, Duration, EffectiveRate),
     EffectiveRate > 0,
     Tcross0 is T0 + (B0-Threshold)/EffectiveRate,
     Tcross0 =< T0 + Duration,
@@ -1238,7 +1283,7 @@ battery_at_leg(T0,Duration,Zb,B0,Rate,T,Level) :-
     Elapsed0 is T - T0,
     Elapsed is max(0.0, min(Elapsed0, Duration)),
     sigma_battery(SigmaB),
-    Deviation is Zb * SigmaB * Elapsed / sqrt(Duration),
+    moving_phase_deviation(Zb, SigmaB, Elapsed, Duration, Deviation),
     NominalDrain is Rate*Elapsed,
     noisy_drain(NominalDrain, Deviation, TotalDrain),
     Level is max(0, min(100, B0 - TotalDrain)).
@@ -3922,11 +3967,29 @@ sample_time(I, S, T) :-
 % against nominal_at/4, which is parametrized the same way) --
 % distinct from sample_frac/2, which is a fraction of however much
 % of the plan actually got executed (0..(TEnd-T0)) if interrupted.
+% Duration=0.0 is a genuine, valid case here too (see collision_
+% geometry.py's own _walk_noisy_point note on why -- a zero-length
+% "already at the goal" leg), not something to reject: TWO mutually
+% exclusive clauses on Duration=<0.0 vs >0.0, same "no if-then-else"
+% convention every other multi-case predicate in this file already
+% uses (ProbLog's own Prolog dialect doesn't support '->'/2). A leg
+% that never actually progresses anywhere has WalkFrac=0.0 throughout
+% -- the same well-defined limit collision_geometry.py's own frac
+% picks for the identical reason.
 sample_walk_frac(I, S, WalkFrac) :-
     plan_time_span(S, T0, TEnd),
     current_walk(S, CP, T0, SPrev),
     hitch(Tool, SPrev),
     walk_duration(CP, Tool, SPrev, Duration),
+    Duration =< 0.0,
+    sample_frac(I, _Frac),
+    WalkFrac is 0.0.
+sample_walk_frac(I, S, WalkFrac) :-
+    plan_time_span(S, T0, TEnd),
+    current_walk(S, CP, T0, SPrev),
+    hitch(Tool, SPrev),
+    walk_duration(CP, Tool, SPrev, Duration),
+    Duration > 0.0,
     sample_frac(I, Frac),
     T is T0 + (TEnd-T0)*Frac,
     WalkFrac is (T - T0) / Duration.
@@ -4454,7 +4517,16 @@ any_battery_depletion :- final_situation(S), battery_depleted_in(S).
 
 % -- sample_index_for_time(+T,+T0,+Duration,-I): bucket an exact time
 %    into the nearest reporting sample, for continuity with plotting.
+%    Duration=0.0 is a genuine, valid case (a zero-length "already at
+%    the goal" leg -- see collision_geometry.py's own _walk_noisy_
+%    point note); such a leg's own single instant always buckets to
+%    sample 0, the same well-defined choice sample_walk_frac/3 above
+%    makes for the identical reason. TWO mutually exclusive clauses,
+%    same "no if-then-else" convention as everywhere else in this file.
+sample_index_for_time(T,T0,Duration,0) :-
+    Duration =< 0.0.
 sample_index_for_time(T,T0,Duration,I) :-
+    Duration > 0.0,
     num_samples(N),
     FracRaw is (T-T0)/Duration,
     IReal is FracRaw*N,

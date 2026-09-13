@@ -324,7 +324,24 @@ def _walk_noisy_point(control_points, t0, duration, z, zt, t):
     on sqrt(Duration))."""
     elapsed0 = t - t0
     elapsed = max(0.0, min(elapsed0, duration))
-    frac = elapsed / duration
+    # duration<=0.0 is a genuine, valid case -- every planner in
+    # planners.py returns a degenerate 4-identical-point Bezier (zero
+    # arc length) for an "already at the goal" leg (see e.g.
+    # _astar_control_points'/_dastar_control_points' own start_rc==
+    # goal_rc special case), and walk_duration/3 in basic_action_
+    # theory.pl then computes Duration=Length/Speed=0.0 for it -- NOT
+    # a malformed input to reject. elapsed is already forced to 0.0
+    # above whenever duration<=0.0 (min(elapsed0,duration)<=0, then
+    # max(0.0,...)=0.0), so frac=0.0 is the correct, well-defined
+    # limit: the spline is evaluated at its own t=0 point, which for a
+    # degenerate (all-control-points-identical) Bezier is ALSO its own
+    # t=1 point -- i.e. the single fixed position this zero-length leg
+    # never actually leaves. sqrt(duration) below is already 0.0 in
+    # this case too, so the noise deviation terms come out zero
+    # regardless of frac's exact value; only the position lookup
+    # itself needs this guard to avoid a literal 0.0/0.0
+    # ZeroDivisionError.
+    frac = 0.0 if duration <= 0.0 else elapsed / duration
     nx, ny = _spline_point(control_points, frac)
     dx, dy = _spline_tangent(control_points, frac)
     norm = math.sqrt(dx*dx + dy*dy)

@@ -24,6 +24,7 @@ same underlying A*/spline computation and neither should reimplement it:
          follow_boarder(+SX,+SY,+ObstacleId,+Offset, -ControlPoints)
          plan_astar_waypoints(+SX,+SY,+Waypoints, -ControlPoints)
          plan_straight_waypoints(+SX,+SY,+Waypoints, -ControlPoints)
+         plan_dastar(+SX,+SY,+GX,+GY,+Step, -ControlPoints)
      ControlPoints = [point(X0,Y0), ...] ProbLog terms, length 3k+1, in
      EXACTLY the format basic_action_theory.pl's spline_point/4 expects.
      plan_voronoi is a generalized-Voronoi-diagram planner, SAME
@@ -1073,6 +1074,103 @@ def plan_straight_waypoints_points(sx, sy, waypoints):
     return _chain_multi_leg_control_points(sx, sy, waypoints, _straight_control_points)
 
 
+
+# =====================================================================
+# DASTAR -- "discretized A*": plans the SAME raw A* grid path
+# _astar_control_points itself searches (before that function's own
+# spline-fit step), but instead of fitting one smooth curve through
+# every raw grid cell, first DISCRETIZES that raw path -- one waypoint
+# every `step` metres of ARC LENGTH walked along it
+# (_resample_path_every_step below) -- then reuses PlanWithWaypoints'
+# own multi-leg STRAIGHT-LINE chaining (_chain_multi_leg_control_points,
+# above) to connect those waypoints, exactly mirroring
+# plan_straight_waypoints_points' own contract except the waypoints
+# are CHOSEN by A* itself (following the free-space corridor it found)
+# rather than supplied by the caller. Same "add one more plan_astar-
+# style function plus one more plan_call/8 clause pair" recipe every
+# other planner in this file already follows -- see basic_action_
+# theory.pl's own plan_call(dastar(Step), ...) clause pair.
+# =====================================================================
+def _resample_path_every_step(path_xy, step_m):
+    """Resample a polyline path_xy=[(x,y), ...] BY ARC LENGTH, taking
+    one point every step_m metres walked along it, plus ALWAYS the
+    final point (the goal) even if it doesn't land on an exact
+    multiple of step_m -- same "reaches the last one" contract as
+    PlanWithWaypoints. Returns waypoints EXCLUDING path_xy[0] (the
+    start point) -- i.e. a list directly usable as the `waypoints`
+    argument of _chain_multi_leg_control_points above. path_xy must
+    have at least 2 points; a degenerate (zero-length) path returns
+    just its own last point."""
+    cumulative = [0.0]
+    for (ax, ay), (bx, by) in zip(path_xy[:-1], path_xy[1:]):
+        cumulative.append(cumulative[-1] + math.hypot(bx - ax, by - ay))
+    total = cumulative[-1]
+    if total <= 1.0e-9:
+        return [path_xy[-1]]
+
+    def point_at(dist):
+        for i in range(1, len(cumulative)):
+            if cumulative[i] >= dist - 1.0e-9:
+                seg_len = cumulative[i] - cumulative[i - 1]
+                if seg_len <= 1.0e-12:
+                    return path_xy[i]
+                frac = (dist - cumulative[i - 1]) / seg_len
+                ax, ay = path_xy[i - 1]
+                bx, by = path_xy[i]
+                return (ax + (bx - ax) * frac, ay + (by - ay) * frac)
+        return path_xy[-1]
+
+    waypoints = []
+    dist = step_m
+    while dist < total:
+        waypoints.append(point_at(dist))
+        dist += step_m
+    waypoints.append(path_xy[-1])
+    return waypoints
+
+
+def _dastar_control_points(sx, sy, gx, gy, step_m):
+    """Core computation -- see this section's own header. Returns
+    None under exactly the same conditions _astar_control_points
+    itself would (map not loaded, start/goal out of bounds or on an
+    obstacle cell, or A* finds no path at all); a degenerate same-
+    cell start/goal returns the same 4-identical-point Bezier
+    _astar_control_points itself returns for that case."""
+    if _PLANNING_MAP is None:
+        return None
+
+    start_rc = _PLANNING_MAP.world_to_grid(sx, sy)
+    goal_rc = _PLANNING_MAP.world_to_grid(gx, gy)
+
+    if not _PLANNING_MAP.in_bounds(*start_rc) or not _PLANNING_MAP.in_bounds(*goal_rc):
+        return None
+
+    if start_rc == goal_rc:
+        return [(sx, sy)] * 4
+
+    path_rc = astar(_PLANNING_MAP, start_rc, goal_rc,
+                     occ_thresh=OCC_THRESH, connectivity=CONNECTIVITY,
+                     unknown_is_occupied=True)
+    if path_rc is None:
+        return None  # no path found
+
+    path_xy = [_PLANNING_MAP.grid_to_world(r, c) for r, c in path_rc]
+    if len(path_xy) < 2:
+        return [(sx, sy)] * 4
+
+    waypoints = _resample_path_every_step(path_xy, step_m)
+    return _chain_multi_leg_control_points(sx, sy, waypoints, _straight_control_points)
+
+
+def plan_dastar_points(sx, sy, gx, gy, step=2.0):
+    """Plain-Python dastar planner -- see _dastar_control_points
+    above. step is the arc-length spacing (metres) between
+    discretized waypoints along A*'s own raw grid path; defaults to
+    2.0m. Returns None under the same conditions plan_astar_points
+    itself would."""
+    return _dastar_control_points(float(sx), float(sy), float(gx), float(gy), float(step))
+
+
 def plan_voronoi_points(sx, sy, gx, gy):
     """Plain-Python generalized-Voronoi-diagram planner. Returns
     [(x,y), ...] control points routed along the free-space Voronoi
@@ -1154,6 +1252,17 @@ if _HAVE_PROBLOG:
         """Black-box straight-line planner (ProbLog predicate) -- no map
         lookup at all, always succeeds for any finite (sx,sy),(gx,gy)."""
         control_points = _straight_control_points(sx, sy, gx, gy)
+        return [_control_points_to_terms(control_points)]
+
+    @problog_export_nondet("+float", "+float", "+float", "+float", "+float", "-list")
+    def plan_dastar(sx, sy, gx, gy, step):
+        """Black-box discretized-A* planner (ProbLog predicate) -- see
+        _dastar_control_points above for the actual computation. Fails
+        (returns []) under exactly the same conditions plan_astar
+        itself would."""
+        control_points = _dastar_control_points(sx, sy, gx, gy, step)
+        if control_points is None:
+            return []
         return [_control_points_to_terms(control_points)]
 
     def _term_list_to_points(waypoints):

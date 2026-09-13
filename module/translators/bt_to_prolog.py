@@ -365,7 +365,15 @@ _ACTION_DISPATCH = {
 # follow_boarder takes `obstacle_id`/`offset` instead and becomes the
 # COMPOUND term follow_boarder(ObstacleId,Offset) plan_call/8's own
 # follow_boarder clauses dispatch on (see basic_action_theory.pl).
-_PLAN_ALGORITHMS = {"astar", "straight", "voronoi", "follow_boarder"}
+# dastar ALSO takes a `goal` port (like astar/straight/voronoi) but
+# ADDITIONALLY an optional `step` port, becoming the COMPOUND term
+# dastar(Step) -- same "extra parameter riding along inside Algorithm"
+# shape as follow_boarder, just alongside a real goal instead of in
+# place of one.
+_PLAN_ALGORITHMS = {"astar", "straight", "voronoi", "follow_boarder", "dastar"}
+# dastar's own `step` port default (metres) when omitted -- matches
+# schema.yaml's own documented default for that port.
+_DASTAR_DEFAULT_STEP = 2.0
 # PlanWithWaypoints' own algorithm port only supports these two -- see
 # schema.yaml's own entry for why (voronoi has no natural per-leg
 # chaining, follow_boarder has no goal point at all).
@@ -1198,11 +1206,28 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
                         f"<{tag}> has algorithm=\"{algorithm}\", which takes "
                         f"no obstacle_id/offset port -- unexpected "
                         f"{sorted(extraneous)}.")
+                if algorithm == "dastar":
+                    # Step is dastar's own ADDITIONAL parameter, carried
+                    # INSIDE Algorithm as a compound term (dastar(Step)),
+                    # same "extra parameter riding along in Algorithm
+                    # itself" shape as follow_boarder(ObstacleId,Offset)
+                    # above -- see basic_action_theory.pl's own
+                    # plan_call(dastar(Step),...) clause pair and
+                    # schema.yaml's own step port note. Optional, default
+                    # 2.0 (schema.yaml's own documented default).
+                    step = float(attrs["step"]) if "step" in attrs else _DASTAR_DEFAULT_STEP
+                    algorithm_term = f"dastar({step})"
+                else:
+                    if "step" in attrs:
+                        raise BTValidationError(
+                            f"<{tag}> has algorithm=\"{algorithm}\", which "
+                            f"takes no step port -- unexpected step "
+                            f"(step is only valid for algorithm=\"dastar\").")
+                    algorithm_term = algorithm
                 if "goal" not in attrs:
                     raise BTValidationError(
                         f"<{tag}> has algorithm=\"{algorithm}\", which "
                         f"requires a goal port.")
-                algorithm_term = algorithm
                 goal_attr = attrs["goal"]
                 if _is_blackboard_ref(goal_attr):
                     # A Point goal WIRED from another node's own output

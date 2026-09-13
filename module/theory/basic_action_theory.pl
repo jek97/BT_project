@@ -128,7 +128,8 @@ obstacle_hole(no_obstacle_holes_placeholder, []) :- fail.
 % this file follows.
 
 % planners.py provides plan_astar/5, plan_straight/5, plan_voronoi/5,
-% and follow_boarder/5 as BLACK-BOX (Python-implemented) predicates --
+% plan_dastar/6, and follow_boarder/5 as BLACK-BOX (Python-implemented)
+% predicates --
 % see that file's own header for the full explanation. ProbLog imports
 % and executes it directly the moment this directive loads
 % (problog.clausedb's load_external_module), registering both
@@ -2637,6 +2638,30 @@ plan_call(voronoi, SX,SY,GX,GY, CP, completed, true) :-
     plan_voronoi(SX,SY,GX,GY, CP).
 plan_call(voronoi, SX,SY,GX,GY, [], no_path, false) :-
     \+ plan_voronoi(SX,SY,GX,GY, _).
+
+% dastar(Step) -- a FIFTH planner: plans the SAME A* raster path
+% plan_astar/plan_call(astar,...) itself would (planners.py's own
+% _astar_control_points core, before that function's own spline-fit
+% step), but instead of fitting one smooth curve through the raw grid
+% path, DISCRETIZES it first -- one waypoint every Step metres of arc
+% length walked along that raw path (planners.py's own
+% _resample_path_every_step) -- then reuses PlanWithWaypoints' own
+% multi-leg STRAIGHT-LINE chaining (_chain_multi_leg_control_points)
+% to connect those waypoints, exactly like plan_straight_waypoints'
+% own contract except the waypoints are CHOSEN by A* itself rather
+% than supplied by the tree author. Algorithm here is a COMPOUND term
+% (dastar(Step)), same reason as follow_boarder(ObstacleId,Offset)
+% above: Step is a planner-specific extra parameter carried INSIDE
+% Algorithm, so planWith/do_node/planned_with need no interface
+% change. UNLIKE follow_boarder, dastar(Step) DOES have a real Goal
+% point (GX,GY) -- it falls through to do_node(planWith(Algorithm,
+% point(GX,GY),...))'s own second clause below (guarded by Algorithm
+% \= follow_boarder(_,_), which dastar(Step) satisfies), no third
+% do_node clause needed.
+plan_call(dastar(Step), SX,SY,GX,GY, CP, completed, true) :-
+    plan_dastar(SX,SY,GX,GY,Step, CP).
+plan_call(dastar(Step), SX,SY,GX,GY, [], no_path, false) :-
+    \+ plan_dastar(SX,SY,GX,GY,Step, _).
 
 % follow_boarder(ObstacleId,Offset) -- a FOURTH planner, exactly the
 % "add one more plan_astar-style function plus one more pair of

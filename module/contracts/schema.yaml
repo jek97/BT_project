@@ -254,15 +254,28 @@ actions:
       failing with no_path are always distinguishable, the same way
       two MoveTo legs crashing are.
 
-      Four `algorithm` values are supported, each with its own ports
-      actually used (goal for astar/straight/voronoi; obstacle_id +
-      offset for follow_boarder -- see each port's own description for
-      which):
+      Five `algorithm` values are supported, each with its own ports
+      actually used (goal for astar/straight/voronoi/dastar; obstacle_id +
+      offset for follow_boarder; step ADDITIONALLY for dastar -- see
+      each port's own description for which):
         astar    -- black-box A* (planners.py's plan_astar/5).
         straight -- direct straight-line planner (planners.py's
           plan_straight/5), no map lookup, a single degenerate
           (collinear-control-point) Bezier segment; only fails
           (no_path) for degenerate/non-finite input.
+        dastar   -- "discretized A*" (planners.py's plan_dastar/6):
+          runs the SAME raw A* grid search as astar above, but instead
+          of fitting one smooth spline through the whole raw path,
+          first resamples it BY ARC LENGTH -- one waypoint every `step`
+          metres walked along it, always including the goal itself --
+          then connects those waypoints with STRAIGHT-LINE segments
+          chained together (the same multi-leg chaining
+          PlanWithWaypoints uses internally), rather than one smooth
+          curve. Useful when a piecewise-linear path following A*'s own
+          free-space corridor is preferred to a smoothed spline (e.g.
+          sharper, more predictable corners near obstacles). Fails
+          (no_path) under exactly the same conditions astar itself
+          would.
         voronoi  -- generalized-Voronoi-diagram roadmap planner
           (planners.py's plan_voronoi/5): builds a roadmap from
           scipy's Voronoi diagram of points sampled along every
@@ -306,12 +319,13 @@ actions:
         type: std::string
         required: true
         description: >
-          One of: astar, straight, voronoi, follow_boarder -- written
-          VERBATIM as Prolog text (a bare atom for the first three;
-          for follow_boarder, this port names the ALGORITHM, its own
-          obstacle_id/offset ports below carry the rest). Picks both
-          which ports below are actually required (goal for the first
-          three; obstacle_id+offset for follow_boarder) and which
+          One of: astar, straight, voronoi, follow_boarder, dastar --
+          written VERBATIM as Prolog text (a bare atom for astar/
+          straight/voronoi/dastar; for follow_boarder, this port names
+          the ALGORITHM, its own obstacle_id/offset ports below carry
+          the rest). Picks both which ports below are actually required
+          (goal for astar/straight/voronoi/dastar; obstacle_id+offset
+          for follow_boarder; step ADDITIONALLY for dastar) and which
           plan_call/8 clause runs.
       - name: goal
         direction: input
@@ -319,8 +333,8 @@ actions:
         required: false
         description: >
           Target position for this planning call -- REQUIRED when
-          algorithm is astar/straight/voronoi, and must be OMITTED
-          when algorithm is follow_boarder (which has no goal point at
+          algorithm is astar/straight/voronoi/dastar, and must be
+          OMITTED when algorithm is follow_boarder (which has no goal point at
           all -- see its own note above). Maps directly to planWith's
           own point(GX,GY) argument in basic_action_theory.pl --
           per-call, not shared across other planning calls in the same
@@ -358,6 +372,21 @@ actions:
           planner does not separately add robot radius/safety_buffer,
           so pass a Threshold that already accounts for them if that's
           the intent, same as every other Threshold in this schema).
+      - name: step
+        direction: input
+        type: double
+        required: false
+        default: 2.0
+        description: >
+          Arc-length spacing (metres) between discretized waypoints
+          along A*'s own raw grid path -- ONLY meaningful when
+          algorithm is dastar, and must be OMITTED for every other
+          algorithm (a translation-time BTValidationError otherwise,
+          same treatment as obstacle_id/offset given for a non-
+          follow_boarder algorithm). Defaults to 2.0 when omitted with
+          algorithm=dastar. Smaller values track A*'s own path more
+          closely (more, shorter straight segments); larger values
+          give a coarser, straighter-cornered path.
       - name: control_points
         direction: output
         type: std::vector<Point>
@@ -377,8 +406,9 @@ actions:
       #     no_path(Algorithm,Goal,ActionCode) -- Algorithm is this
       #     node's own `algorithm` value (follow_boarder(ObstacleId,
       #     Offset) as a compound term when algorithm=follow_boarder,
-      #     matching plan_call/8's own dispatch shape; a bare atom
-      #     otherwise), Goal is the point(GX,GY) this call was working
+      #     dastar(Step) likewise when algorithm=dastar, matching
+      #     plan_call/8's own dispatch shape; a bare atom for astar/
+      #     straight/voronoi), Goal is the point(GX,GY) this call was working
       #     toward (the atom `none` for follow_boarder, which has none),
       #     and ActionCode identifies WHICH PlanWith occurrence in the
       #     tree this is (same per-occurrence code MoveTo's own reason

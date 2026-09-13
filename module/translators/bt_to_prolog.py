@@ -460,7 +460,13 @@ _REACTIVE_CONTROL_FLOW = {"ReactiveSequence": "reactivesequence", "ReactiveFallb
 # it came from "the same node ticked again" or "a separate unrolled
 # copy", and all REAL state (position, battery, time) is threaded
 # through the situation term, not the node -- so n copies and "the
-# same node retried n times" produce IDENTICAL Prolog terms.
+# same node retried n times" produce IDENTICAL Prolog terms. The ONE
+# thing that does NOT come for free from action/condition codes alone:
+# each copy's own BLACKBOARD keys (control_points="{cp}", a goal
+# wired from another node's output, ...) -- see _translate_node's own
+# "RetryUntilSuccessful"/"Repeat" branch for why those get the SAME
+# "{key}__subN" per-copy isolation a SubTree instantiation's own
+# private ports already get, and what breaks without it.
 #
 # num_attempts/num_cycles MUST be a literal, non-negative integer known
 # at translation time -- unrolling happens ONCE, statically, before any
@@ -1838,10 +1844,48 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
         # scope, reactive_code/guard_stack pass through unchanged (see
         # _RETRY_DECORATORS's own note above for why n unrolled copies
         # are a sound match for real retry/repeat semantics here).
+        #
+        # EACH COPY GETS ITS OWN BLACKBOARD-KEY SCOPE -- the SAME "{key}
+        # __subN" isolation _apply_subtree_remap already gives every
+        # SubTree instantiation (see that function's own note: "two
+        # instantiations of the SAME subtree... never collide into ONE
+        # shared Prolog variable... identical reasoning, just across
+        # subtree instances rather than fallback_node branches"). This
+        # was the ONE place that reasoning didn't already apply: without
+        # it, count copies of a child using control_points="{cp}" (or
+        # any other local key) would all resolve "{cp}" to the SAME
+        # var_pool entry, i.e. ONE shared Prolog variable across every
+        # unrolled attempt -- exactly the do_node(planWith(...))'s own
+        # documented "give EACH branch its OWN CP variable" gotcha, just
+        # triggered by RetryUntilSuccessful's own automatic unrolling
+        # instead of a hand-written fallback_node. Concretely: attempt
+        # 1's own planWith binds CP to attempt 1's own control points;
+        # if attempt 1 fails and fallback_node tries attempt 2 (from
+        # wherever attempt 1 actually left the robot), attempt 2's own
+        # planWith call tries to unify that SAME CP against a NEW control
+        # -points list computed from a DIFFERENT current position --
+        # unification fails outright (not a modeled false/no_path/
+        # crashed Reason, a genuine Prolog dead end), and since this
+        # happens on EVERY branch of the grounded search that reaches a
+        # second attempt, it can make the WHOLE plan's own do_node/4
+        # have literally NO solution at all (verified directly: a tree
+        # using this pattern inside RetryUntilSuccessful had 0% on every
+        # single query, including plan_outcome's own four categories,
+        # which should always sum to 100%). remap={} (empty) because a
+        # retry copy has no caller-supplied ports to preserve the way a
+        # SubTree instance's own remap dict does -- EVERY key here is
+        # "private, un-remapped" in _apply_subtree_remap's own sense, so
+        # every one of them gets a fresh per-copy suffix, deliberately
+        # including keys that also appear OUTSIDE this <RetryUntilSuccessful>
+        # (an attempt's own control_points, condition goals, etc. were
+        # never meant to be shared past its own subtree either way).
         own_branch_name = elem.attrib.get("name", branch_name)
-        child_terms = [_translate_node(children[0], schema_ports, var_pool, battery_enabled,
-                                        reactive_code, guard_stack, own_branch_name)
-                       for _ in range(count)]
+        child_terms = []
+        for _ in range(count):
+            clone = copy.deepcopy(children[0])
+            _apply_subtree_remap(clone, {}, var_pool.next_subtree_suffix())
+            child_terms.append(_translate_node(clone, schema_ports, var_pool, battery_enabled,
+                                                reactive_code, guard_stack, own_branch_name))
         return f"{info['functor']}([{','.join(child_terms)}])"
 
     if tag in _CONTROL_FLOW:

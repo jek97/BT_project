@@ -20,8 +20,9 @@
         <Fallback>
           <DistanceBelow goal="{powlposition}" threshold="1.0"/>
           <Sequence>
-            <PlanWith algorithm="straight" goal="{powlposition}" control_points="{cp}"/>
+            <PlanWith algorithm="dastar" goal="{powlposition}" control_points="{cp}"/>
             <MoveTo control_points="{cp}"/>
+            <DistanceBelow goal="{powlposition}" threshold="1.0"/>
           </Sequence>
         </Fallback>
         <InstallTool tool="{powlid}"/>

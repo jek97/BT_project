@@ -9,7 +9,7 @@ safety_buffer(0.1).
 speed(1.0).
 sigma(0.15).
 sigma_tangential(0.15).
-disc_step_position(0.5).
+disc_step_position(1.0).
 battery_enabled(true).
 sigma_battery(0.5).
 battery_start(100).
@@ -68,11 +68,11 @@ install_tool_range(0.82).
 
 tool_speed(free, 1.0).
 tool_speed(cart, 1.0).
-tool_speed(plow, 1.0).
+tool_speed(plow, 0.7).
 
 tool_moving_drain_rate(free, 0.5).
 tool_moving_drain_rate(cart, 0.5).
-tool_moving_drain_rate(plow, 0.5).
+tool_moving_drain_rate(plow, 0.7).
 
 tool_speed_deployed(free, 1.0).
 tool_speed_deployed(cart, 1.0).

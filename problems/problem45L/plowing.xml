@@ -37,8 +37,9 @@
         <Fallback>
           <DistanceBelow goal="{p1}" threshold="1.0"/>
           <Sequence>
-            <PlanWith algorithm="straight" goal="{p1}" control_points="{cp1}"/>
+            <PlanWith algorithm="dastar" goal="{p1}" control_points="{cp1}"/>
             <MoveTo control_points="{cp1}"/>
+            <DistanceBelow goal="{p1}" threshold="1.0"/>
           </Sequence>
         </Fallback>
         <DeployTool tool="{tool}"/>
@@ -47,6 +48,7 @@
           <Sequence>
             <PlanWith algorithm="straight" goal="{p2}" control_points="{cp2}"/>
             <MoveTo control_points="{cp2}"/>
+            <DistanceBelow goal="{p2}" threshold="1.0"/>
           </Sequence>
         </Fallback>
         <RetractTool tool="{tool}"/>

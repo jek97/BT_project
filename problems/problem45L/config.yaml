@@ -80,7 +80,7 @@ motion:
   speed: 1.0   # metres per time-unit -- constant-speed spline traversal (speed/1)
 
 position:
-  disc_step_position: 0.5   # metres -- reduced from problem4's own 1.0,
+  disc_step_position: 1.0   # metres -- reduced from problem4's own 1.0,
                      # per this problem's own request (space
                      # discretization only).
   lateral:
@@ -135,8 +135,8 @@ tool:
     - {id: plow1, kind: plow, x: 0.0, y: 0.0}
   equipped:
     plow:
-      speed: 1.0                       # m/time-unit -- PLACEHOLDER, hitched but not deployed (same as base motion.speed for now)
-      moving_drain_rate: 0.5           # percent/time-unit -- PLACEHOLDER, hitched but not deployed (same as base battery.moving_drain_rate for now)
+      speed: 0.7                       # m/time-unit -- PLACEHOLDER, hitched but not deployed (same as base motion.speed for now)
+      moving_drain_rate: 0.7           # percent/time-unit -- PLACEHOLDER, hitched but not deployed (same as base battery.moving_drain_rate for now)
       deployed_speed: 0.5              # m/time-unit -- PLACEHOLDER, hitched AND deployed (actively plowing: half speed)
       deployed_moving_drain_rate: 1.0  # percent/time-unit -- PLACEHOLDER, hitched AND deployed (actively plowing: double drain)
 

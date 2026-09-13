@@ -12,11 +12,11 @@ query(outcome_signature(_)).
 
 query(any_reason_pattern(battery_depleted)).
 query(any_reason_pattern(completed)).
-query(any_reason_pattern(completed(dastar(2.0),point(0.0,0.0)))).
-query(any_reason_pattern(completed(dastar(2.0),point(11.3,-15.0)))).
-query(any_reason_pattern(completed(dastar(2.0),point(5.0,27.0)))).
+query(any_reason_pattern(completed(dastar(2.0),point(0.5,-4.5)))).
+query(any_reason_pattern(completed(dastar(2.0),point(5.0,-18.0)))).
+query(any_reason_pattern(completed(dastar(2.0),point(9.0,27.0)))).
 query(any_reason_pattern(completed(dastar(2.0),wild))).
-query(any_reason_pattern(completed(straight,point(41.0,27.0)))).
+query(any_reason_pattern(completed(straight,point(25.0,-18.0)))).
 query(any_reason_pattern(crashed(wild))).
 query(any_reason_pattern(deploy_tool_failure(wild))).
 query(any_reason_pattern(deploy_tool_success(wild))).
@@ -25,11 +25,11 @@ query(any_reason_pattern(hitched_id_unavailable)).
 query(any_reason_pattern(install_tool_failure(wild))).
 query(any_reason_pattern(install_tool_success(wild))).
 query(any_reason_pattern(nearest_tool_found(plow,wild))).
-query(any_reason_pattern(no_path(dastar(2.0),point(0.0,0.0)))).
-query(any_reason_pattern(no_path(dastar(2.0),point(11.3,-15.0)))).
-query(any_reason_pattern(no_path(dastar(2.0),point(5.0,27.0)))).
+query(any_reason_pattern(no_path(dastar(2.0),point(0.5,-4.5)))).
+query(any_reason_pattern(no_path(dastar(2.0),point(5.0,-18.0)))).
+query(any_reason_pattern(no_path(dastar(2.0),point(9.0,27.0)))).
 query(any_reason_pattern(no_path(dastar(2.0),wild))).
-query(any_reason_pattern(no_path(straight,point(41.0,27.0)))).
+query(any_reason_pattern(no_path(straight,point(25.0,-18.0)))).
 query(any_reason_pattern(no_tool_of_kind(plow))).
 query(any_reason_pattern(retract_tool_failure(wild))).
 query(any_reason_pattern(retract_tool_success(wild))).
@@ -44,8 +44,8 @@ query(any_reason_pattern_detail_by_action(retract_tool_success(_),a10)).
 query(any_reason_pattern_by_action(retract_tool_failure(wild),a10)).
 query(any_reason_pattern_detail_by_action(retract_tool_failure(_),a10)).
 query(any_reason_pattern_by_action(battery_depleted,a10)).
-query(any_reason_pattern_by_action(completed(dastar(2.0),point(5.0,27.0)),a11)).
-query(any_reason_pattern_by_action(no_path(dastar(2.0),point(5.0,27.0)),a11)).
+query(any_reason_pattern_by_action(completed(dastar(2.0),point(5.0,-18.0)),a11)).
+query(any_reason_pattern_by_action(no_path(dastar(2.0),point(5.0,-18.0)),a11)).
 query(any_reason_pattern_by_action(completed,a12)).
 query(any_reason_pattern_by_action(crashed(wild),a12)).
 query(any_reason_pattern_detail_by_action(crashed(_),a12)).
@@ -55,8 +55,8 @@ query(any_reason_pattern_detail_by_action(deploy_tool_success(_),a13)).
 query(any_reason_pattern_by_action(deploy_tool_failure(wild),a13)).
 query(any_reason_pattern_detail_by_action(deploy_tool_failure(_),a13)).
 query(any_reason_pattern_by_action(battery_depleted,a13)).
-query(any_reason_pattern_by_action(completed(straight,point(41.0,27.0)),a14)).
-query(any_reason_pattern_by_action(no_path(straight,point(41.0,27.0)),a14)).
+query(any_reason_pattern_by_action(completed(straight,point(25.0,-18.0)),a14)).
+query(any_reason_pattern_by_action(no_path(straight,point(25.0,-18.0)),a14)).
 query(any_reason_pattern_by_action(completed,a15)).
 query(any_reason_pattern_by_action(crashed(wild),a15)).
 query(any_reason_pattern_detail_by_action(crashed(_),a15)).
@@ -74,8 +74,8 @@ query(any_reason_pattern_detail_by_action(retract_tool_success(_),a18)).
 query(any_reason_pattern_by_action(retract_tool_failure(wild),a18)).
 query(any_reason_pattern_detail_by_action(retract_tool_failure(_),a18)).
 query(any_reason_pattern_by_action(battery_depleted,a18)).
-query(any_reason_pattern_by_action(completed(dastar(2.0),point(0.0,0.0)),a19)).
-query(any_reason_pattern_by_action(no_path(dastar(2.0),point(0.0,0.0)),a19)).
+query(any_reason_pattern_by_action(completed(dastar(2.0),point(0.5,-4.5)),a19)).
+query(any_reason_pattern_by_action(no_path(dastar(2.0),point(0.5,-4.5)),a19)).
 query(any_reason_pattern_by_action(completed(dastar(2.0),wild),a2)).
 query(any_reason_pattern_detail_by_action(completed(dastar(2.0),_),a2)).
 query(any_reason_pattern_by_action(no_path(dastar(2.0),wild),a2)).
@@ -89,8 +89,8 @@ query(any_reason_pattern_detail_by_action(uninstall_tool_success(_),a21)).
 query(any_reason_pattern_by_action(uninstall_tool_failure(wild),a21)).
 query(any_reason_pattern_detail_by_action(uninstall_tool_failure(_),a21)).
 query(any_reason_pattern_by_action(battery_depleted,a21)).
-query(any_reason_pattern_by_action(completed(dastar(2.0),point(11.3,-15.0)),a22)).
-query(any_reason_pattern_by_action(no_path(dastar(2.0),point(11.3,-15.0)),a22)).
+query(any_reason_pattern_by_action(completed(dastar(2.0),point(9.0,27.0)),a22)).
+query(any_reason_pattern_by_action(no_path(dastar(2.0),point(9.0,27.0)),a22)).
 query(any_reason_pattern_by_action(completed,a23)).
 query(any_reason_pattern_by_action(crashed(wild),a23)).
 query(any_reason_pattern_detail_by_action(crashed(_),a23)).

@@ -69,8 +69,8 @@ initial_situation:
   # obstacle_hole/2 fact) and making collision_geometry.py/planners.py
   # test containment via combined even-odd ray-casting across an
   # obstacle's outer boundary AND its holes together.
-  start_x: 11.3    # metres
-  start_y: -15.0   # metres
+  start_x: 9.0    # metres
+  start_y: 27.0   # metres
 
 robot:
   radius: 0.72            # metres -- robot_radius/1
@@ -80,7 +80,7 @@ motion:
   speed: 1.0   # metres per time-unit -- constant-speed spline traversal (speed/1)
 
 position:
-  disc_step_position: 0.5   # metres -- reduced from problem4's own 1.0,
+  disc_step_position: 1.0   # metres -- reduced from problem4's own 1.0,
                      # per this problem's own request (space
                      # discretization only).
   lateral:
@@ -132,7 +132,7 @@ grounding:
 
 tool:
   instances:
-    - {id: plow1, kind: plow, x: 0.0, y: 0.0}
+    - {id: plow1, kind: plow, x: 0.5, y: -4.5}
   equipped:
     plow:
       speed: 0.7                       # m/time-unit -- PLACEHOLDER, hitched but not deployed (same as base motion.speed for now)

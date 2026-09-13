@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<!--
+  uninstall_plow.xml
+
+  If nothing is currently hitched at all, does nothing. Otherwise:
+  makes sure it isn't left deployed (retracts first if it is), walks
+  to p1, then uninstalls whatever is hitched.
+
+  Port (remap at the SubTree(ID=uninstall_plow, p1=...) call site):
+    p1 (input, Point): where to go before uninstalling.
+
+  tool is looked up via HitchedId, same reasoning as plowing.xml's
+  own: this tree never receives an id as an input, only p1.
+-->
+<root BTCPP_format="4">
+  <BehaviorTree ID="uninstall_plow">
+    <Fallback name="uninstall_plow">
+      <Inverter><Hitched/></Inverter>
+      <Sequence>
+        <HitchedId id="{tool}"/>
+        <Fallback>
+          <Inverter><Deployed/></Inverter>
+          <RetractTool tool="{tool}"/>
+        </Fallback>
+        <Fallback>
+          <DistanceBelow goal="{p1}" threshold="1.0"/>
+          <Sequence>
+            <PlanWith algorithm="dastar" goal="{p1}" control_points="{cp}"/>
+            <MoveTo control_points="{cp}"/>
+            <DistanceBelow goal="{p1}" threshold="1.0"/>
+          </Sequence>
+        </Fallback>
+        <UninstallTool tool="{tool}"/>
+      </Sequence>
+    </Fallback>
+  </BehaviorTree>
+
+  <TreeNodesModel>
+    <SubTree ID="uninstall_plow">
+      <input_port name="p1" type="Point">Where to go before uninstalling.</input_port>
+    </SubTree>
+  </TreeNodesModel>
+</root>

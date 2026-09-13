@@ -28,14 +28,14 @@
   <BehaviorTree ID="MainTree">
     <Sequence name="MainTree">
       <SubTree ID="install_closest_plow"/>
-      <SubTree ID="plowing" p1="5;27" p2="41;27"/>
-      <SubTree ID="uninstall_plow" p1="0;0"/>
+      <SubTree ID="plowing" p1="5;13.5" p2="14;13.5"/>
+      <SubTree ID="uninstall_plow" p1="0.0;0.0"/>
       <Fallback>
-        <DistanceBelow goal="11.3;-15.0" threshold="1.0"/>
+        <DistanceBelow goal="0.0;0.0" threshold="1.0"/>
         <Sequence>
-          <PlanWith algorithm="dastar" goal="11.3;-15.0" control_points="{cp2}"/>
+          <PlanWith algorithm="dastar" goal="0.0;0.0" control_points="{cp2}"/>
           <MoveTo control_points="{cp2}"/>
-          <DistanceBelow goal="11.3;-15.0" threshold="1.0"/>
+          <DistanceBelow goal="0.0;0.0" threshold="1.0"/>
         </Sequence>
       </Fallback>
     </Sequence>

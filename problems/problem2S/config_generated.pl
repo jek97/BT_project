@@ -9,7 +9,7 @@ safety_buffer(0.1).
 speed(1.0).
 sigma(0.15).
 sigma_tangential(0.15).
-disc_step_position(0.5).
+disc_step_position(1.0).
 battery_enabled(true).
 sigma_battery(0.5).
 battery_start(100).

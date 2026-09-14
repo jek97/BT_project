@@ -24,7 +24,7 @@
 goal_formula(S) :-
     halted_with(sample_success(_,_,_,sample_tree_11,_), S),
     (
-        (sample_value_over(sample_tree_11, 5, S), visited(point(999.0,1.0), 0.3, S))
+        (sample_value_over(sample_tree_11, 5, S), visited(point(0.5,-36.0), 1.0, S))
         ;
-        (sample_value_below(sample_tree_11, 5, S), visited(point(999.0,2.0), 0.3, S))
+        (sample_value_below(sample_tree_11, 5, S), visited(point(11.3,-15.0), 1.0, S))
     ).

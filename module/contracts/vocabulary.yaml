@@ -437,3 +437,79 @@ predicates:
       goal information lives only in this file (goal_formula.pl); a
       formula that needs a specific coordinate should use the literal
       value, or the goal point named in a planWith(...) leg.
+
+  # ----------------------------------------------------------------
+  # Plain Prolog arithmetic comparison operators -- NOT fluents, but
+  # whitelisted here for the same reason start/2 above is: a goal
+  # formula needs to be able to compare a fluent's own OUTPUT value
+  # (e.g. battery/3's Level, sample_value's own drawn number) against a
+  # threshold, e.g. this file's own header comment's example, "now(T,S),
+  # battery(B,T,S), B > 50" -- situation_arg: null because they take
+  # already-bound numbers, never a situation term of their own, so they
+  # never affect the whole formula's own uniformity check. is/2
+  # included too, for a derived quantity a formula needs to compute
+  # before comparing (e.g. "Diff is B1-B2, Diff > 10").
+  #
+  # NAME IS QUOTED ON PURPOSE: ProbLog's own Prolog parser represents
+  # every one of these operators' own functor as a STRING THAT INCLUDES
+  # its own surrounding single quotes (verified directly against
+  # problog.program.PrologString -- parsing "X > 50" gives a Term whose
+  # .functor is the 3-character Python string "'>'", not ">"; even the
+  # WORD atom "is" comes back as "'is'"), so the lookup key here has to
+  # match that exactly, not the bare operator text.
+  # ----------------------------------------------------------------
+  - name: "'>'"
+    arity: 2
+    situation_arg: null
+    args:
+      - {position: 1, name: X, type: float, description: "Left-hand value."}
+      - {position: 2, name: Y, type: float, description: "Right-hand value."}
+    description: "Arithmetic greater-than."
+
+  - name: "'<'"
+    arity: 2
+    situation_arg: null
+    args:
+      - {position: 1, name: X, type: float, description: "Left-hand value."}
+      - {position: 2, name: Y, type: float, description: "Right-hand value."}
+    description: "Arithmetic less-than."
+
+  - name: "'>='"
+    arity: 2
+    situation_arg: null
+    args:
+      - {position: 1, name: X, type: float, description: "Left-hand value."}
+      - {position: 2, name: Y, type: float, description: "Right-hand value."}
+    description: "Arithmetic greater-than-or-equal."
+
+  - name: "'=<'"
+    arity: 2
+    situation_arg: null
+    args:
+      - {position: 1, name: X, type: float, description: "Left-hand value."}
+      - {position: 2, name: Y, type: float, description: "Right-hand value."}
+    description: "Arithmetic less-than-or-equal (Prolog's own '=<', not '<=')."
+
+  - name: "'=:='"
+    arity: 2
+    situation_arg: null
+    args:
+      - {position: 1, name: X, type: float, description: "Left-hand value."}
+      - {position: 2, name: Y, type: float, description: "Right-hand value."}
+    description: "Arithmetic equality (evaluates both sides; use this, not '=', to compare numbers)."
+
+  - name: "'=\\='"
+    arity: 2
+    situation_arg: null
+    args:
+      - {position: 1, name: X, type: float, description: "Left-hand value."}
+      - {position: 2, name: Y, type: float, description: "Right-hand value."}
+    description: "Arithmetic inequality."
+
+  - name: "'is'"
+    arity: 2
+    situation_arg: null
+    args:
+      - {position: 1, name: X, type: term, description: "Variable (or value) to bind the result to."}
+      - {position: 2, name: Expr, type: term, description: "Arithmetic expression to evaluate."}
+    description: "Plain Prolog arithmetic evaluation, for a derived quantity a formula needs before comparing it."

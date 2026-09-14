@@ -17,8 +17,14 @@
       <Hitched kind="plow"/>
       <Sequence>
         <NearestToolOfKind kind="plow" id="{powlid}" position="{powlposition}"/>
-        <PlanWith algorithm="astar" goal="{powlposition}" control_points="{cp}"/>
-        <MoveTo control_points="{cp}"/>
+        <Fallback>
+          <DistanceBelow goal="{powlposition}" threshold="1.0"/>
+          <Sequence>
+            <PlanWith algorithm="dastar" goal="{powlposition}" control_points="{cp}"/>
+            <MoveTo control_points="{cp}"/>
+            <DistanceBelow goal="{powlposition}" threshold="1.0"/>
+          </Sequence>
+        </Fallback>
         <InstallTool tool="{powlid}"/>
       </Sequence>
     </Fallback>

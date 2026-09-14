@@ -34,11 +34,23 @@
           <Inverter><Deployed/></Inverter>
           <RetractTool tool="{tool}"/>
         </Fallback>
-        <PlanWith algorithm="astar" goal="{p1}" control_points="{cp1}"/>
-        <MoveTo control_points="{cp1}"/>
+        <Fallback>
+          <DistanceBelow goal="{p1}" threshold="1.0"/>
+          <Sequence>
+            <PlanWith algorithm="dastar" goal="{p1}" control_points="{cp1}"/>
+            <MoveTo control_points="{cp1}"/>
+            <DistanceBelow goal="{p1}" threshold="1.0"/>
+          </Sequence>
+        </Fallback>
         <DeployTool tool="{tool}"/>
-        <PlanWith algorithm="astar" goal="{p2}" control_points="{cp2}"/>
-        <MoveTo control_points="{cp2}"/>
+        <Fallback>
+          <DistanceBelow goal="{p2}" threshold="1.0"/>
+          <Sequence>
+            <PlanWith algorithm="dastar" goal="{p2}" control_points="{cp2}"/>
+            <MoveTo control_points="{cp2}"/>
+            <DistanceBelow goal="{p2}" threshold="1.0"/>
+          </Sequence>
+        </Fallback>
         <RetractTool tool="{tool}"/>
       </Sequence>
     </Fallback>

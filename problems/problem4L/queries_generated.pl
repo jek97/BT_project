@@ -14,12 +14,12 @@ query(any_reason_pattern(battery_depleted)).
 query(any_reason_pattern(completed)).
 query(any_reason_pattern(completed(straight,[point(22.0,-15.0),point(22.0,-3.3),point(32.0,-3.3)]))).
 query(any_reason_pattern(completed(straight,[point(22.0,-3.3),point(22.0,-15.0),point(11.3,-15.0)]))).
-query(any_reason_pattern(completed(straight,[point(32.0,-27.0),point(45.5,-27.0),point(45.5,-36.0),point(23.0,-36.0),point(0.5,-36.0)]))).
+query(any_reason_pattern(completed(straight,[point(32.0,-27.0),point(45.5,-27.0),point(45.5,-36.0)]))).
 query(any_reason_pattern(completed(voronoi,point(11.3,-15.0)))).
 query(any_reason_pattern(crashed(wild))).
 query(any_reason_pattern(no_path(straight,[point(22.0,-15.0),point(22.0,-3.3),point(32.0,-3.3)]))).
 query(any_reason_pattern(no_path(straight,[point(22.0,-3.3),point(22.0,-15.0),point(11.3,-15.0)]))).
-query(any_reason_pattern(no_path(straight,[point(32.0,-27.0),point(45.5,-27.0),point(45.5,-36.0),point(23.0,-36.0),point(0.5,-36.0)]))).
+query(any_reason_pattern(no_path(straight,[point(32.0,-27.0),point(45.5,-27.0),point(45.5,-36.0)]))).
 query(any_reason_pattern(no_path(voronoi,point(11.3,-15.0)))).
 query(any_reason_pattern(sample_failure(wild,wild,sample_tree_11))).
 query(any_reason_pattern(sample_success(wild,wild,wild,sample_tree_11))).
@@ -40,8 +40,8 @@ query(any_reason_pattern_by_action(sample_success(wild,wild,wild,sample_tree_11)
 query(any_reason_pattern_detail_by_action(sample_success(_,_,_,sample_tree_11),a5)).
 query(any_reason_pattern_by_action(sample_failure(wild,wild,sample_tree_11),a5)).
 query(any_reason_pattern_detail_by_action(sample_failure(_,_,sample_tree_11),a5)).
-query(any_reason_pattern_by_action(completed(straight,[point(32.0,-27.0),point(45.5,-27.0),point(45.5,-36.0),point(23.0,-36.0),point(0.5,-36.0)]),a6)).
-query(any_reason_pattern_by_action(no_path(straight,[point(32.0,-27.0),point(45.5,-27.0),point(45.5,-36.0),point(23.0,-36.0),point(0.5,-36.0)]),a6)).
+query(any_reason_pattern_by_action(completed(straight,[point(32.0,-27.0),point(45.5,-27.0),point(45.5,-36.0)]),a6)).
+query(any_reason_pattern_by_action(no_path(straight,[point(32.0,-27.0),point(45.5,-27.0),point(45.5,-36.0)]),a6)).
 query(any_reason_pattern_by_action(completed,a7)).
 query(any_reason_pattern_by_action(crashed(wild),a7)).
 query(any_reason_pattern_detail_by_action(crashed(_),a7)).

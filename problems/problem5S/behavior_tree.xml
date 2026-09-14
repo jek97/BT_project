@@ -19,7 +19,15 @@
   <BehaviorTree ID="MainTree">
     <Sequence name="MainTree">
       <SubTree ID="install_closest_cart"/>
-      <SubTree ID="uninstall_cart" p1="18.5;-13.5"/>
+      <Fallback>
+        <DistanceBelow goal="0.5;0.0" threshold="1.0"/>
+        <Sequence>
+          <PlanWithWaypoints algorithm="straight" waypoints="18.5;-6.0|0.5;-6.0|0.5;0.0" control_points="{cp1}"/>
+          <MoveTo control_points="{cp1}"/>
+          <DistanceBelow goal="0.5;0.0" threshold="1.0"/>
+        </Sequence>
+      </Fallback>
+      <SubTree ID="uninstall_cart" p1="0.5;6.0"/>
     </Sequence>
   </BehaviorTree>
 </root>

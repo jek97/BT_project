@@ -9,7 +9,7 @@
 %   a3: PlanWithWaypoints(straight, waypoints=[(22.0,-15.0),(22.0,-3.3),(32.0,-3.3)]) [MainTree]
 %   a4: MoveTo(CP2) [MainTree]
 %   a5: TakeSample(sample_tree_11) [MainTree]
-%   a6: PlanWithWaypoints(straight, waypoints=[(32.0,-27.0),(45.5,-27.0),(45.5,-36.0),(23.0,-36.0),(0.5,-36.0)]) [MainTree]
+%   a6: PlanWithWaypoints(straight, waypoints=[(32.0,-27.0),(45.5,-27.0),(45.5,-36.0)]) [MainTree]
 %   a7: MoveTo(CP3) [MainTree]
 %   a8: PlanWithWaypoints(straight, waypoints=[(22.0,-3.3),(22.0,-15.0),(11.3,-15.0)]) [MainTree]
 %   a9: MoveTo(CP4) [MainTree]
@@ -22,8 +22,8 @@
 %   c4: DistanceBelow(goal=32.0;-3.3,threshold=1.0) [MainTree]
 %   c5: DistanceBelow(goal=32.0;-3.3,threshold=1.0) [MainTree]
 %   c6: SampleValueOver(id=sample_tree_11,threshold=5.0) [MainTree]
-%   c7: DistanceBelow(goal=0.5;-36.0,threshold=1.0) [MainTree]
-%   c8: DistanceBelow(goal=0.5;-36.0,threshold=1.0) [MainTree]
+%   c7: DistanceBelow(goal=45.5;-36.0,threshold=1.0) [MainTree]
+%   c8: DistanceBelow(goal=45.5;-36.0,threshold=1.0) [MainTree]
 %   c9: DistanceBelow(goal=11.3;-15.0,threshold=1.0) [MainTree]
 
 plan(reactivefallback(rc1)).
@@ -35,4 +35,4 @@ plan(reactivefallback(rc1)).
 % theory.pl's own CONTROL-FLOW REDESCEND TARGETS note for why
 % these live as SEPARATE facts rather than being inlined.
 
-reactive_children(rc1, [seq_node([cond(battery_below(50.0),c1),fallback_node([cond(distance_below(11.3,-15.0,1.0),c2),seq_node([planWith(voronoi,point(11.3,-15.0),CP1,a1),moveto_leg(CP1,[collision,battery],a2),cond(distance_below(11.3,-15.0,1.0),c3)])])]),seq_node([fallback_node([cond(distance_below(32.0,-3.3,1.0),c4),seq_node([planWithWaypoints(straight,[point(22.0,-15.0),point(22.0,-3.3),point(32.0,-3.3)],CP2,a3),moveto_leg(CP2,[collision,battery],a4),cond(distance_below(32.0,-3.3,1.0),c5)])]),take_sample(sample_tree_11,a5),fallback_node([seq_node([cond(sample_value_over(sample_tree_11,5.0),c6),fallback_node([cond(distance_below(0.5,-36.0,1.0),c7),seq_node([planWithWaypoints(straight,[point(32.0,-27.0),point(45.5,-27.0),point(45.5,-36.0),point(23.0,-36.0),point(0.5,-36.0)],CP3,a6),moveto_leg(CP3,[collision,battery],a7),cond(distance_below(0.5,-36.0,1.0),c8)])])]),fallback_node([cond(distance_below(11.3,-15.0,1.0),c9),seq_node([planWithWaypoints(straight,[point(22.0,-3.3),point(22.0,-15.0),point(11.3,-15.0)],CP4,a8),moveto_leg(CP4,[collision,battery],a9),cond(distance_below(11.3,-15.0,1.0),c10)])])])])]).
+reactive_children(rc1, [seq_node([cond(battery_below(50.0),c1),fallback_node([cond(distance_below(11.3,-15.0,1.0),c2),seq_node([planWith(voronoi,point(11.3,-15.0),CP1,a1),moveto_leg(CP1,[collision,battery],a2),cond(distance_below(11.3,-15.0,1.0),c3)])])]),seq_node([fallback_node([cond(distance_below(32.0,-3.3,1.0),c4),seq_node([planWithWaypoints(straight,[point(22.0,-15.0),point(22.0,-3.3),point(32.0,-3.3)],CP2,a3),moveto_leg(CP2,[collision,battery],a4),cond(distance_below(32.0,-3.3,1.0),c5)])]),take_sample(sample_tree_11,a5),fallback_node([seq_node([cond(sample_value_over(sample_tree_11,5.0),c6),fallback_node([cond(distance_below(45.5,-36.0,1.0),c7),seq_node([planWithWaypoints(straight,[point(32.0,-27.0),point(45.5,-27.0),point(45.5,-36.0)],CP3,a6),moveto_leg(CP3,[collision,battery],a7),cond(distance_below(45.5,-36.0,1.0),c8)])])]),fallback_node([cond(distance_below(11.3,-15.0,1.0),c9),seq_node([planWithWaypoints(straight,[point(22.0,-3.3),point(22.0,-15.0),point(11.3,-15.0)],CP4,a8),moveto_leg(CP4,[collision,battery],a9),cond(distance_below(11.3,-15.0,1.0),c10)])])])])]).

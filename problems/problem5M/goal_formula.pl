@@ -10,4 +10,5 @@
 % own hitch/2 entry documents ("goal_formula(S) :- hitch(plow,S)." for
 % "the plow is attached by the end") -- this is its inverse.
 goal_formula(S) :-
+    visited(point(29.5,0.0), 1.0, S),
     hitch(free, S).

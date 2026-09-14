@@ -18,11 +18,11 @@
         <Sequence>
         <SampleValueOver  id="sample_tree_11" threshold="5.0"/>
         <Fallback>
-          <DistanceBelow goal="18.5;13.5" threshold="1.0"/>
+          <DistanceBelow goal="9.5;6.0" threshold="1.0"/>
           <Sequence>
-            <PlanWithWaypoints algorithm="straight" waypoints="0.5;0.0|0.5;6.0|9.5;6.0|18.5;6.0|18.5;13.5" control_points="{cp2}"/>
+            <PlanWithWaypoints algorithm="straight" waypoints="0.5;0.0|0.5;6.0|9.5;6.0" control_points="{cp2}"/>
             <MoveTo control_points="{cp2}"/>
-            <DistanceBelow goal="18.5;13.5" threshold="1.0"/>
+            <DistanceBelow goal="9.5;6.0" threshold="1.0"/>
           </Sequence>
         </Fallback>
         </Sequence>

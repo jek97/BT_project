@@ -30,11 +30,11 @@
           <Sequence>
           <SampleValueOver  id="sample_tree_11" threshold="5.0"/>
           <Fallback>
-            <DistanceBelow goal="0.5;-27.0" threshold="1.0"/>
+            <DistanceBelow goal="15.0;-18.0" threshold="1.0"/>
             <Sequence>
-              <PlanWithWaypoints algorithm="straight" waypoints="29.5;-9.0|29.5;-18.0|15.0;-18.0|0.5;-18.0|0.5;-27.0" control_points="{cp3}"/>
+              <PlanWithWaypoints algorithm="straight" waypoints="29.5;-9.0|29.5;-18.0|15.0;-18.0" control_points="{cp3}"/>
               <MoveTo control_points="{cp3}"/>
-              <DistanceBelow goal="0.5;-27.0" threshold="1.0"/>
+              <DistanceBelow goal="15.0;-18.0" threshold="1.0"/>
             </Sequence>
           </Fallback>
           </Sequence>

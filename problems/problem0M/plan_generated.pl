@@ -4,21 +4,17 @@
 % automatically before every run).
 %
 % Action code legend (see main.py's own printed copy of this):
-%   a1: PlanWithWaypoints(straight, waypoints=[(0.5,27.0),(0.5,0.0),(15.0,0.0)]) [MainTree]
+%   a1: PlanWithWaypoints(straight, waypoints=[(0.5,27.0),(0.5,0.0),(29.5,0.0),(29.5,9.0),(21.0,9.0)]) [MainTree]
 %   a2: MoveTo(CP1) [MainTree]
 %   a3: TakeSample(sample_tree_11) [MainTree]
-%   a4: PlanWithWaypoints(straight, waypoints=[(29.5,0.0),(29.5,9.0),(29.5,27.0),(21.0,27.0)]) [MainTree]
+%   a4: PlanWithWaypoints(straight, waypoints=[(29.5,9.0),(29.5,18.0),(21.0,18.0)]) [MainTree]
 %   a5: MoveTo(CP2) [MainTree]
 %   a6: TakeSample(sample_tree_53) [MainTree]
-%   a7: PlanWith(straight, goal=point(29.5,27.0)) [MainTree]
-%   a8: MoveTo(CP3) [MainTree]
 %
 % Condition code legend (see main.py's own printed copy of this):
-%   c1: DistanceBelow(goal=15.0;0.0,threshold=1.0) [MainTree]
-%   c2: DistanceBelow(goal=15.0;0.0,threshold=1.0) [MainTree]
-%   c3: DistanceBelow(goal=21.0;27.0,threshold=1.0) [MainTree]
-%   c4: DistanceBelow(goal=21.0;27.0,threshold=1.0) [MainTree]
-%   c5: DistanceBelow(goal=29.5;27.0,threshold=1.0) [MainTree]
-%   c6: DistanceBelow(goal=29.5;27.0,threshold=1.0) [MainTree]
+%   c1: DistanceBelow(goal=21.0;9.0,threshold=1.0) [MainTree]
+%   c2: DistanceBelow(goal=21.0;9.0,threshold=1.0) [MainTree]
+%   c3: DistanceBelow(goal=21.0;18.0,threshold=1.0) [MainTree]
+%   c4: DistanceBelow(goal=21.0;18.0,threshold=1.0) [MainTree]
 
-plan(seq_node([fallback_node([cond(distance_below(15.0,0.0,1.0),c1),seq_node([planWithWaypoints(straight,[point(0.5,27.0),point(0.5,0.0),point(15.0,0.0)],CP1,a1),moveto_leg(CP1,[collision,battery],a2),cond(distance_below(15.0,0.0,1.0),c2)])]),take_sample(sample_tree_11,a3),fallback_node([cond(distance_below(21.0,27.0,1.0),c3),seq_node([planWithWaypoints(straight,[point(29.5,0.0),point(29.5,9.0),point(29.5,27.0),point(21.0,27.0)],CP2,a4),moveto_leg(CP2,[collision,battery],a5),cond(distance_below(21.0,27.0,1.0),c4)])]),take_sample(sample_tree_53,a6),fallback_node([cond(distance_below(29.5,27.0,1.0),c5),seq_node([planWith(straight,point(29.5,27.0),CP3,a7),moveto_leg(CP3,[collision,battery],a8),cond(distance_below(29.5,27.0,1.0),c6)])])])).
+plan(seq_node([fallback_node([cond(distance_below(21.0,9.0,1.0),c1),seq_node([planWithWaypoints(straight,[point(0.5,27.0),point(0.5,0.0),point(29.5,0.0),point(29.5,9.0),point(21.0,9.0)],CP1,a1),moveto_leg(CP1,[collision,battery],a2),cond(distance_below(21.0,9.0,1.0),c2)])]),take_sample(sample_tree_11,a3),fallback_node([cond(distance_below(21.0,18.0,1.0),c3),seq_node([planWithWaypoints(straight,[point(29.5,9.0),point(29.5,18.0),point(21.0,18.0)],CP2,a4),moveto_leg(CP2,[collision,battery],a5),cond(distance_below(21.0,18.0,1.0),c4)])]),take_sample(sample_tree_53,a6)])).

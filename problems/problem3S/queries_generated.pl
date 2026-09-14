@@ -12,11 +12,11 @@ query(outcome_signature(_)).
 
 query(any_reason_pattern(battery_depleted)).
 query(any_reason_pattern(completed)).
-query(any_reason_pattern(completed(straight,[point(0.5,0.0),point(0.5,6.0),point(9.5,6.0),point(18.5,6.0),point(18.5,13.5)]))).
+query(any_reason_pattern(completed(straight,[point(0.5,0.0),point(0.5,6.0),point(9.5,6.0)]))).
 query(any_reason_pattern(completed(straight,[point(18.5,-13.5),point(18.5,0.0),point(9.5,0.0)]))).
 query(any_reason_pattern(completed(straight,[point(18.5,0.0),point(18.5,-13.5),point(0.0,-13.5)]))).
 query(any_reason_pattern(crashed(wild))).
-query(any_reason_pattern(no_path(straight,[point(0.5,0.0),point(0.5,6.0),point(9.5,6.0),point(18.5,6.0),point(18.5,13.5)]))).
+query(any_reason_pattern(no_path(straight,[point(0.5,0.0),point(0.5,6.0),point(9.5,6.0)]))).
 query(any_reason_pattern(no_path(straight,[point(18.5,-13.5),point(18.5,0.0),point(9.5,0.0)]))).
 query(any_reason_pattern(no_path(straight,[point(18.5,0.0),point(18.5,-13.5),point(0.0,-13.5)]))).
 query(any_reason_pattern(sample_failure(wild,wild,sample_tree_11))).
@@ -32,8 +32,8 @@ query(any_reason_pattern_by_action(sample_success(wild,wild,wild,sample_tree_11)
 query(any_reason_pattern_detail_by_action(sample_success(_,_,_,sample_tree_11),a3)).
 query(any_reason_pattern_by_action(sample_failure(wild,wild,sample_tree_11),a3)).
 query(any_reason_pattern_detail_by_action(sample_failure(_,_,sample_tree_11),a3)).
-query(any_reason_pattern_by_action(completed(straight,[point(0.5,0.0),point(0.5,6.0),point(9.5,6.0),point(18.5,6.0),point(18.5,13.5)]),a4)).
-query(any_reason_pattern_by_action(no_path(straight,[point(0.5,0.0),point(0.5,6.0),point(9.5,6.0),point(18.5,6.0),point(18.5,13.5)]),a4)).
+query(any_reason_pattern_by_action(completed(straight,[point(0.5,0.0),point(0.5,6.0),point(9.5,6.0)]),a4)).
+query(any_reason_pattern_by_action(no_path(straight,[point(0.5,0.0),point(0.5,6.0),point(9.5,6.0)]),a4)).
 query(any_reason_pattern_by_action(completed,a5)).
 query(any_reason_pattern_by_action(crashed(wild),a5)).
 query(any_reason_pattern_detail_by_action(crashed(_),a5)).

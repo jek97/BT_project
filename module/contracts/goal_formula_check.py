@@ -56,7 +56,7 @@ import re
 import sys
 
 import yaml
-from problog.logic import And, Not, Var
+from problog.logic import And, Not, Or, Var
 from problog.program import PrologString
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -82,16 +82,23 @@ def load_vocabulary(vocab_path=DEFAULT_VOCAB_PATH):
 
 
 def _iter_conjuncts(body):
-    """Flatten a right-associative And(...) tree into a flat list of
-    leaf subgoals to VALIDATE, in source order. Negation (\\+/1) is
-    transparent here -- \\+ crashed_in(S) is still perfectly uniform
-    (the situation argument inside is still just S), \\+ itself is a
-    logical connective, not a vocabulary predicate, so it's unwrapped
-    and its own argument is recursed into rather than looked up.
-    Disjunction (';'/2) is NOT handled yet -- goal_formula.pl is
-    expected to be a plain conjunction (possibly negated), see this
-    module's own header on what's NOT supported."""
-    if isinstance(body, And):
+    """Flatten a right-associative And(...)/Or(...) tree into a flat
+    list of leaf subgoals to VALIDATE, in source order. Negation
+    (\\+/1) is transparent here -- \\+ crashed_in(S) is still perfectly
+    uniform (the situation argument inside is still just S), \\+
+    itself is a logical connective, not a vocabulary predicate, so
+    it's unwrapped and its own argument is recursed into rather than
+    looked up. Or(...) (';'/2, right-associative, same shape as And --
+    verified directly against problog.logic.Or) gets the SAME
+    treatment as And: both checks below (known-vocabulary, uniform
+    situation argument) apply to every leaf regardless of which
+    connective sits above it, since OR doesn't relax uniformity at
+    all -- every leaf still has to share the ONE head situation
+    variable, it just lets the formula say "this OR that" instead of
+    "this AND that" at the top. Despite the name (kept for now to
+    avoid a wider rename), this also flattens disjuncts -- a plain,
+    possibly-negated tree of And/Or is exactly what's supported."""
+    if isinstance(body, (And, Or)):
         left, right = body.args
         return _iter_conjuncts(left) + _iter_conjuncts(right)
     if isinstance(body, Not):

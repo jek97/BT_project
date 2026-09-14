@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<!--
+  behavior_tree.xml (problem5M; on orchard_map_b, mirroring problem2M's
+  own map/start position. Sibling of problem5L (orchard_map_a) and
+  problem5S (orchard_map_c), reusing this SAME tree shape with
+  different coordinates via their own config.yaml.)
+
+  A minimal cart round trip, exercising install_closest_cart.xml/
+  uninstall_cart.xml exactly (no plowing at all, unlike problem2's own
+  tree): install_closest_cart walks to the nearest free cart and
+  installs it, then uninstall_cart walks BACK to that SAME point
+  (config.yaml's own tool.instances position, (9.0,9.0) here) and
+  uninstalls it there; see config.yaml's own note on why p1 below is
+  identical to the cart's own starting position.
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <include path="install_closest_cart.xml"/>
+  <include path="uninstall_cart.xml"/>
+  <BehaviorTree ID="MainTree">
+    <Sequence name="MainTree">
+      <SubTree ID="install_closest_cart"/>
+      <SubTree ID="uninstall_cart" p1="9.0;9.0"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

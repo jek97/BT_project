@@ -1,0 +1,122 @@
+# config.yaml -- problem5L (mirrors problem2L's own config.yaml -- same
+# map/start/robot/motion/position/battery/tolerances/verification/
+# grounding sections, byte-for-byte -- see that file's own header for
+# the full field-by-field documentation and history. Differs ONLY in
+# the tool: section (a CART instance, in place of problem2L's own plow
+# instance, at the SAME position) and has no ploughing: section at all
+# (this problem's own tree never installs a plow, so plough_cell_size
+# would never be read -- see config_to_prolog.py's own "OPTIONAL: a
+# problem whose tree never installs a plow needs no ploughing: section
+# at all" note).
+#   - tool.instances: ONE cart instance, positioned at THIS problem's
+#     own problem2L-derived plow position (22.0,-15.0) -- reused verbatim
+#     as BOTH the cart's own starting position AND uninstall_cart's own
+#     p1 target in behavior_tree.xml (see that file's own note): this
+#     problem is a minimal round trip, walk to the cart, install it,
+#     walk straight back to that SAME point, uninstall it there.
+#   - tool.equipped.cart: speed/moving_drain_rate only (no
+#     deployed_speed/deployed_moving_drain_rate) -- DeployTool/
+#     RetractTool are restricted to the plow only (schema.yaml's own
+#     DeployTool entry), so a cart can never be deployed and those two
+#     keys would never be read; SAME PLACEHOLDER VALUES problem2L's own
+#     plow uses for its own non-deployed speed/moving_drain_rate
+#     (hitched but not deployed).
+
+initial_situation:
+  # (11.3,-15.0): between the house (house_1, centered ~(11.5,0.0),
+  # per new_maps/orchard_map_a_dimensions.png) and the south fence
+  # (hfence_s, at y~=-21.9 per that same diagram) -- an EARLIER
+  # version of this start point, (11.3,-7.71), sat only ~0.1m from the
+  # house's own south wall, well inside the robot's own 0.3m safety
+  # margin (robot.radius+safety_buffer below); once obstacles are
+  # inflated by that margin (as they always are -- see
+  # occgrid_to_problog.py's own module docstring), that start CELL
+  # itself fell inside the inflated house boundary, so every planner
+  # call failed with no_path starting from the very first one,
+  # regardless of destination. This point was picked empirically
+  # against the actual occupancy grid (not just the dimensions
+  # diagram, which lists nominal/CAD sizes rather than the inflated,
+  # rasterized boundary planners actually see): ~6.7m clear of the
+  # nearest obstacle in any direction (vs. the house's own south wall
+  # at y~=-7.7 and the south fence at y~=-21.7 -- roughly the midpoint,
+  # and not coincidentally also where clearance peaks scanning either
+  # direction along x=11.3).
+  #
+  # SECOND, DEEPER ISSUE found fixing the first one (NOW FIXED): with
+  # this start point, astar found a path but the subsequent MoveTo
+  # reported crashed(obs1) -- occgrid_to_problog.py's cv2.findContours
+  # (RETR_EXTERNAL,...) had no notion of "thin ring with a hollow
+  # interior", so the outer perimeter fence was extracted as one solid
+  # filled polygon and every collision check treated the WHOLE walkable
+  # orchard interior as inside the obstacle. Fixed by switching
+  # extraction to RETR_CCOMP (emitting each fence's interior as an
+  # obstacle_hole/2 fact) and making collision_geometry.py/planners.py
+  # test containment via combined even-odd ray-casting across an
+  # obstacle's outer boundary AND its holes together.
+  start_x: 11.3    # metres
+  start_y: -15.0   # metres
+
+robot:
+  radius: 0.72            # metres -- robot_radius/1
+  safety_buffer: 0.10   # metres -- safety_buffer/1 (safety_margin = radius + safety_buffer)
+
+motion:
+  speed: 1.0   # metres per time-unit -- constant-speed spline traversal (speed/1)
+
+position:
+  disc_step_position: 1.0   # metres -- back to the project-wide standard
+                     # (was temporarily 0.5m for this problem only).
+  lateral:
+    sigma: 0.15   # metres per sqrt(time-unit) -- z/2's scale (sigma/1)
+    discretized_gaussian:
+      - value: -1.0
+        weight: 0.25
+      - value: 0.0
+        weight: 0.5
+      - value: 1.0
+        weight: 0.25
+  tangential:
+    sigma: 0.15   # metres per sqrt(time-unit) -- zt/2's scale (sigma_tangential/1)
+    discretized_gaussian:
+      - value: -1.0
+        weight: 0.25
+      - value: 0.0
+        weight: 0.5
+      - value: 1.0
+        weight: 0.25
+
+battery:
+  enabled: true
+  start: 100                 # percent -- battery_start/1
+  idle_drain_rate: 0.02      # percent/time-unit while not moving -- reduced from problem4's own 0.05
+  moving_drain_rate: 0.5     # percent/time-unit while moving -- reduced from problem4's own 5.0,
+                              # back down near problem0-3's own original shared baseline
+  sigma: 0.5   # percent per sqrt(time-unit) -- zbatt/1's scale (sigma_battery/1)
+  disc_step_battery: 10   # percent -- KEPT identical to problem4's own (battery-level discretization unchanged)
+  discretized_gaussian:
+    - value: -1.0
+      weight: 0.25
+    - value: 0.0
+      weight: 0.5
+    - value: 1.0
+      weight: 0.25
+
+tolerances:
+  on_track: 0.5   # metres -- tolerance/1 (on_track/1 drift-reporting diagnostic)
+
+verification:
+  num_samples: 20        # reporting/plotting resolution -- decoupled from
+                          # detection, which is exact (see bracket_samples below)
+  bracket_samples: 60    # collision/obstacle_sighted bracket-scan sample count
+  crossing_eps: 0.01     # bisection refinement tolerance, time-units
+
+grounding:
+  disc_step_time: 20   # seconds -- KEPT identical to problem4's own (time discretization unchanged)
+
+tool:
+  instances:
+    - {id: cart1, kind: cart, x: 22.0, y: -15.0}
+  equipped:
+    cart:
+      speed: 1.0              # m/time-unit -- PLACEHOLDER, hitched (cart can never be deployed) -- same value problem2L's own plow uses non-deployed
+      moving_drain_rate: 0.5  # percent/time-unit -- PLACEHOLDER, hitched -- same value problem2L's own plow uses non-deployed

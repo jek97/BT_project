@@ -9,43 +9,29 @@
         <Fallback>
           <DistanceBelow goal="11.3;-15.0" threshold="1.0"/>
           <Sequence>
-            <PlanWith algorithm="voronoi" goal="11.3;-15.0" control_points="{cp1}"/>
+            <PlanWith algorithm="dastar" goal="11.3;-15.0" control_points="{cp1}"/>
             <MoveTo control_points="{cp1}"/>
             <DistanceBelow goal="11.3;-15.0" threshold="1.0"/>
           </Sequence>
         </Fallback>
       </Sequence>
       <Sequence>
-        <!-- move_to_entrance_5: lat=37.266488501443305 lon=-120.42053433807618 -->
         <Fallback>
           <DistanceBelow goal="32.0;-3.3" threshold="1.0"/>
           <Sequence>
-            <PlanWithWaypoints algorithm="straight" waypoints="22.0;-15.0|22.0;-3.3|32.0;-3.3" control_points="{cp2}"/>
-            <MoveTo control_points="{cp2}"/>
+            <PlanWithWaypoints algorithm="straight" waypoints="22.0;-15.0|22.0;-3.3|32.0;-3.3" control_points="{cp1}"/>
+            <MoveTo control_points="{cp1}"/>
             <DistanceBelow goal="32.0;-3.3" threshold="1.0"/>
           </Sequence>
         </Fallback>
         <TakeSample id="sample_tree_11"/>
         <Fallback>
+          <DistanceBelow goal="45.5;-36.0" threshold="1.0"/>
           <Sequence>
-          <SampleValueOver  id="sample_tree_11" threshold="5.0"/>
-          <Fallback>
+            <PlanWithWaypoints algorithm="straight" waypoints="32.0;-27.0|45.5;-27.0|45.5;-36.0" control_points="{cp2}"/>
+            <MoveTo control_points="{cp2}"/>
             <DistanceBelow goal="45.5;-36.0" threshold="1.0"/>
-            <Sequence>
-              <PlanWithWaypoints algorithm="straight" waypoints="32.0;-27.0|45.5;-27.0|45.5;-36.0" control_points="{cp3}"/>
-              <MoveTo control_points="{cp3}"/>
-              <DistanceBelow goal="45.5;-36.0" threshold="1.0"/>
-            </Sequence>
-          </Fallback>
           </Sequence>
-          <Fallback>
-            <DistanceBelow goal="11.3;-15.0" threshold="1.0"/>
-            <Sequence>
-              <PlanWithWaypoints algorithm="straight" waypoints="22.0;-3.3|22.0;-15.0|11.3;-15.0" control_points="{cp4}"/>
-              <MoveTo control_points="{cp4}"/>
-              <DistanceBelow goal="11.3;-15.0" threshold="1.0"/>
-            </Sequence>
-          </Fallback>
         </Fallback>
       </Sequence>
     </ReactiveFallback>

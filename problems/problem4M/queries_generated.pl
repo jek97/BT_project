@@ -12,20 +12,18 @@ query(outcome_signature(_)).
 
 query(any_reason_pattern(battery_depleted)).
 query(any_reason_pattern(completed)).
-query(any_reason_pattern(completed(straight,[point(0.5,-9.0),point(0.5,27.0),point(9.0,27.0)]))).
+query(any_reason_pattern(completed(dastar(2.0),point(9.0,27.0)))).
 query(any_reason_pattern(completed(straight,[point(0.5,27.0),point(0.5,-9.0),point(15.0,-9.0)]))).
 query(any_reason_pattern(completed(straight,[point(29.5,-9.0),point(29.5,-18.0),point(15.0,-18.0)]))).
-query(any_reason_pattern(completed(voronoi,point(9.0,27.0)))).
 query(any_reason_pattern(crashed(wild))).
-query(any_reason_pattern(no_path(straight,[point(0.5,-9.0),point(0.5,27.0),point(9.0,27.0)]))).
+query(any_reason_pattern(no_path(dastar(2.0),point(9.0,27.0)))).
 query(any_reason_pattern(no_path(straight,[point(0.5,27.0),point(0.5,-9.0),point(15.0,-9.0)]))).
 query(any_reason_pattern(no_path(straight,[point(29.5,-9.0),point(29.5,-18.0),point(15.0,-18.0)]))).
-query(any_reason_pattern(no_path(voronoi,point(9.0,27.0)))).
 query(any_reason_pattern(sample_failure(wild,wild,sample_tree_11))).
 query(any_reason_pattern(sample_success(wild,wild,wild,sample_tree_11))).
 
-query(any_reason_pattern_by_action(completed(voronoi,point(9.0,27.0)),a1)).
-query(any_reason_pattern_by_action(no_path(voronoi,point(9.0,27.0)),a1)).
+query(any_reason_pattern_by_action(completed(dastar(2.0),point(9.0,27.0)),a1)).
+query(any_reason_pattern_by_action(no_path(dastar(2.0),point(9.0,27.0)),a1)).
 query(any_reason_pattern_by_action(completed,a2)).
 query(any_reason_pattern_by_action(crashed(wild),a2)).
 query(any_reason_pattern_detail_by_action(crashed(_),a2)).
@@ -46,17 +44,9 @@ query(any_reason_pattern_by_action(completed,a7)).
 query(any_reason_pattern_by_action(crashed(wild),a7)).
 query(any_reason_pattern_detail_by_action(crashed(_),a7)).
 query(any_reason_pattern_by_action(battery_depleted,a7)).
-query(any_reason_pattern_by_action(completed(straight,[point(0.5,-9.0),point(0.5,27.0),point(9.0,27.0)]),a8)).
-query(any_reason_pattern_by_action(no_path(straight,[point(0.5,-9.0),point(0.5,27.0),point(9.0,27.0)]),a8)).
-query(any_reason_pattern_by_action(completed,a9)).
-query(any_reason_pattern_by_action(crashed(wild),a9)).
-query(any_reason_pattern_detail_by_action(crashed(_),a9)).
-query(any_reason_pattern_by_action(battery_depleted,a9)).
 
 query(any_condition_status(c1,true)).
 query(any_condition_status(c1,false)).
-query(any_condition_status(c10,true)).
-query(any_condition_status(c10,false)).
 query(any_condition_status(c2,true)).
 query(any_condition_status(c2,false)).
 query(any_condition_status(c3,true)).
@@ -69,7 +59,3 @@ query(any_condition_status(c6,true)).
 query(any_condition_status(c6,false)).
 query(any_condition_status(c7,true)).
 query(any_condition_status(c7,false)).
-query(any_condition_status(c8,true)).
-query(any_condition_status(c8,false)).
-query(any_condition_status(c9,true)).
-query(any_condition_status(c9,false)).

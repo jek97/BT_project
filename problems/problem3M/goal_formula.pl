@@ -23,8 +23,4 @@
 % fix making goal_formula_check.py's validator walk into it.
 goal_formula(S) :-
     halted_with(sample_success(_,_,_,sample_tree_11,_), S),
-    (
-        (sample_value_over(sample_tree_11, 5, S), visited(point(15.0,-18.0), 1.0, S))
-        ;
-        (sample_value_below(sample_tree_11, 5, S), visited(point(11.3,-15.0), 1.0, S))
-    ).
+    visited(point(15.0,-18.0), 1.0, S).

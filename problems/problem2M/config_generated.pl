@@ -13,9 +13,9 @@ disc_step_position(1.0).
 battery_enabled(true).
 sigma_battery(0.5).
 battery_start(100).
-idle_drain_rate(0.02).
-moving_drain_rate(0.5).
-disc_step_battery(10).
+idle_drain_rate(0.05).
+moving_drain_rate(1.0).
+disc_step_battery(20).
 tolerance(0.5).
 num_samples(20).
 bracket_samples(60).
@@ -34,20 +34,11 @@ disc_step_time(20).
 0.5::zbatt(0.0) ;
 0.25::zbatt(1.0).
 
-0.5::sample_result(S,ActionCode,true) ;
-0.5::sample_result(S,ActionCode,false).
+0.7::sample_result(S,ActionCode,true) ;
+0.30000000000000004::sample_result(S,ActionCode,false).
 
-0.012224472655044727::sample_value(S,ActionCode,0) ;
-0.027834684208772387::sample_value(S,ActionCode,1) ;
-0.06559061680303818::sample_value(S,ActionCode,2) ;
-0.12097757871001291::sample_value(S,ActionCode,3) ;
-0.1746663219402081::sample_value(S,ActionCode,4) ;
-0.1974126513658474::sample_value(S,ActionCode,5) ;
-0.17466632194020804::sample_value(S,ActionCode,6) ;
-0.12097757871001291::sample_value(S,ActionCode,7) ;
-0.06559061680303824::sample_value(S,ActionCode,8) ;
-0.027834684208772442::sample_value(S,ActionCode,9) ;
-0.012224472655044671::sample_value(S,ActionCode,10).
+0.5::sample_value(S,ActionCode,2) ;
+0.5::sample_value(S,ActionCode,8).
 
 install_tool_duration(cart, 10.0).
 install_tool_duration(plow, 10.0).
@@ -57,10 +48,10 @@ deploy_tool_duration(cart, 10.0).
 deploy_tool_duration(plow, 10.0).
 retract_tool_duration(cart, 10.0).
 retract_tool_duration(plow, 10.0).
-install_tool_drain_rate(0.02).
-uninstall_tool_drain_rate(0.02).
-deploy_tool_drain_rate(0.02).
-retract_tool_drain_rate(0.02).
+install_tool_drain_rate(0.05).
+uninstall_tool_drain_rate(0.05).
+deploy_tool_drain_rate(0.05).
+retract_tool_drain_rate(0.05).
 install_tool_range(0.82).
 
 0.9::install_tool_result(S,ActionCode,true) ;
@@ -79,21 +70,16 @@ tool_speed(free, 1.0).
 tool_speed(cart, 1.0).
 tool_speed(plow, 1.0).
 
-tool_moving_drain_rate(free, 0.5).
-tool_moving_drain_rate(cart, 0.5).
-tool_moving_drain_rate(plow, 0.5).
+tool_moving_drain_rate(free, 1.0).
+tool_moving_drain_rate(cart, 1.0).
+tool_moving_drain_rate(plow, 1.0).
 
 tool_speed_deployed(free, 1.0).
 tool_speed_deployed(cart, 1.0).
-tool_speed_deployed(plow, 0.5).
+tool_speed_deployed(plow, 1.0).
 
-tool_moving_drain_rate_deployed(free, 0.5).
-tool_moving_drain_rate_deployed(cart, 0.5).
+tool_moving_drain_rate_deployed(free, 1.0).
+tool_moving_drain_rate_deployed(cart, 1.0).
 tool_moving_drain_rate_deployed(plow, 1.0).
-
-tool_instance(plow1, plow).
-tool_start_position(plow1, 9.0, 9.0).
-
-plough_cell_size(1.0).
 
 query(any_battery_depletion).

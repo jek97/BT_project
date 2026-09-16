@@ -14,11 +14,9 @@ query(any_reason_pattern(battery_depleted)).
 query(any_reason_pattern(completed)).
 query(any_reason_pattern(completed(straight,[point(0.5,0.0),point(0.5,6.0),point(9.5,6.0),point(18.5,6.0),point(18.5,13.5)]))).
 query(any_reason_pattern(completed(straight,[point(18.5,-13.5),point(18.5,0.0),point(9.5,0.0)]))).
-query(any_reason_pattern(completed(straight,[point(18.5,0.0),point(18.5,-13.5),point(0.0,-13.5)]))).
 query(any_reason_pattern(crashed(wild))).
 query(any_reason_pattern(no_path(straight,[point(0.5,0.0),point(0.5,6.0),point(9.5,6.0),point(18.5,6.0),point(18.5,13.5)]))).
 query(any_reason_pattern(no_path(straight,[point(18.5,-13.5),point(18.5,0.0),point(9.5,0.0)]))).
-query(any_reason_pattern(no_path(straight,[point(18.5,0.0),point(18.5,-13.5),point(0.0,-13.5)]))).
 query(any_reason_pattern(sample_failure(wild,wild,sample_tree_11))).
 query(any_reason_pattern(sample_success(wild,wild,wild,sample_tree_11))).
 
@@ -38,12 +36,6 @@ query(any_reason_pattern_by_action(completed,a5)).
 query(any_reason_pattern_by_action(crashed(wild),a5)).
 query(any_reason_pattern_detail_by_action(crashed(_),a5)).
 query(any_reason_pattern_by_action(battery_depleted,a5)).
-query(any_reason_pattern_by_action(completed(straight,[point(18.5,0.0),point(18.5,-13.5),point(0.0,-13.5)]),a6)).
-query(any_reason_pattern_by_action(no_path(straight,[point(18.5,0.0),point(18.5,-13.5),point(0.0,-13.5)]),a6)).
-query(any_reason_pattern_by_action(completed,a7)).
-query(any_reason_pattern_by_action(crashed(wild),a7)).
-query(any_reason_pattern_detail_by_action(crashed(_),a7)).
-query(any_reason_pattern_by_action(battery_depleted,a7)).
 
 query(any_condition_status(c1,true)).
 query(any_condition_status(c1,false)).
@@ -53,9 +45,3 @@ query(any_condition_status(c3,true)).
 query(any_condition_status(c3,false)).
 query(any_condition_status(c4,true)).
 query(any_condition_status(c4,false)).
-query(any_condition_status(c5,true)).
-query(any_condition_status(c5,false)).
-query(any_condition_status(c6,true)).
-query(any_condition_status(c6,false)).
-query(any_condition_status(c7,true)).
-query(any_condition_status(c7,false)).

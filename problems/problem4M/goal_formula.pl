@@ -25,7 +25,7 @@ goal_formula(S) :-
     halted_with(sample_success(_,_,_,sample_tree_11,_), S),
     now(T, S), battery(B, T, S), B > 0,
     (
-        (sample_value_over(sample_tree_11, 5, S), visited(point(15.0,-18.0), 1.0, S))
+        (battery_under_in(S), visited(point(9.0,27.0), 1.0, S))
         ;
-        (sample_value_below(sample_tree_11, 5, S), visited(point(9.0,27.0), 1.0, S))
+        (\+ battery_under_in(S), visited(point(15.0,-18.0), 1.0, S))
     ).

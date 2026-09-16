@@ -22,17 +22,17 @@ bracket_samples(60).
 crossing_eps(0.01).
 disc_step_time(20).
 
-0.25::z(do(startMoveto(CP,Triggers,ActionCode,T0),S), -1.0) ;
-0.5::z(do(startMoveto(CP,Triggers,ActionCode,T0),S), 0.0) ;
-0.25::z(do(startMoveto(CP,Triggers,ActionCode,T0),S), 1.0).
+0.166667::z(do(startMoveto(CP,Triggers,ActionCode,T0),S), -1.732) ;
+0.666666::z(do(startMoveto(CP,Triggers,ActionCode,T0),S), 0.0) ;
+0.166667::z(do(startMoveto(CP,Triggers,ActionCode,T0),S), 1.732).
 
-0.25::zt(do(startMoveto(CP,Triggers,ActionCode,T0),S), -1.0) ;
-0.5::zt(do(startMoveto(CP,Triggers,ActionCode,T0),S), 0.0) ;
-0.25::zt(do(startMoveto(CP,Triggers,ActionCode,T0),S), 1.0).
+0.166667::zt(do(startMoveto(CP,Triggers,ActionCode,T0),S), -1.732) ;
+0.666666::zt(do(startMoveto(CP,Triggers,ActionCode,T0),S), 0.0) ;
+0.166667::zt(do(startMoveto(CP,Triggers,ActionCode,T0),S), 1.732).
 
-0.25::zbatt(-1.0) ;
-0.5::zbatt(0.0) ;
-0.25::zbatt(1.0).
+0.166667::zbatt(-1.732) ;
+0.666666::zbatt(0.0) ;
+0.166667::zbatt(1.732).
 
 0.7::sample_result(S,ActionCode,true) ;
 0.30000000000000004::sample_result(S,ActionCode,false).

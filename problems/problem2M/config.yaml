@@ -125,12 +125,12 @@ position:
   lateral:
     sigma: 0.15   # metres per sqrt(time-unit) -- z/2's scale (sigma/1)
     discretized_gaussian:
-      - value: -1.0
-        weight: 0.25
+      - value: -1.732
+        weight: 0.166667
       - value: 0.0
-        weight: 0.5
-      - value: 1.0
-        weight: 0.25
+        weight: 0.666666
+      - value: 1.732
+        weight: 0.166667
   tangential:
     # Applied along the spline's own tangent direction at each point
     # (a straight metric push, same Brownian-bridge growth law as
@@ -144,12 +144,12 @@ position:
     # for your robot.
     sigma: 0.15   # metres per sqrt(time-unit) -- zt/2's scale (sigma_tangential/1)
     discretized_gaussian:
-      - value: -1.0
-        weight: 0.25
+      - value: -1.732
+        weight: 0.166667
       - value: 0.0
-        weight: 0.5
-      - value: 1.0
-        weight: 0.25
+        weight: 0.666666
+      - value: 1.732
+        weight: 0.166667
 
 battery:
   # EVERYTHING about battery lives here: whether it's modeled at all,
@@ -182,12 +182,12 @@ battery:
                     # see basic_action_theory.pl's own MERGE-GRID
                     # QUANTIZATION note). 0 disables this (exact).
   discretized_gaussian:
-    - value: -1.0
-      weight: 0.25
+    - value: -1.732
+      weight: 0.166667
     - value: 0.0
-      weight: 0.5
-    - value: 1.0
-      weight: 0.25
+      weight: 0.666666
+    - value: 1.732
+      weight: 0.166667
 
 tolerances:
   on_track: 0.5   # metres -- tolerance/1 (on_track/1 drift-reporting diagnostic)

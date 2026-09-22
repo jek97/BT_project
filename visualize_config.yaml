@@ -1,23 +1,35 @@
 # visualize_config.yaml
 #
-# Parameters for visualize_ground_graph.py -- see that script's own
-# header for what it actually draws and, importantly, for the honest
+# SHARED by both visualize_ground_graph.py and
+# visualize_compiled_graph.py -- see graph_viz_common.py's own header
+# for what actually differs between the two (mainly: what counts as a
+# "proof" -- sign-agnostic for the ground graph, "true leaves only"
+# sign-aware for the compiled one) and, importantly, for the honest
 # limits of the "shiny" effect below (matplotlib has no real specular
 # lighting model; this fakes it with a bright glint marker + a light
 # outline, it isn't true 3D shading).
 
-# Where ground_nodes.json lives -- produced by main.py's own
-# --save-graphs flag (off by default; see README.md), written to
-# output/<problem>/graphs/ by module/theory/graph_export.py.
+# Where ground_nodes.json / compiled_nodes.json live -- both produced
+# together by main.py's own --save-graphs flag (off by default; see
+# README.md), written to output/<problem>/graphs/ by
+# module/theory/graph_export.py.
 graphs_dir: output/problem0S/graphs
 
 # Which declared query is "the goal" this animation builds up to.
 # null = auto-pick "verify_goal_formula" if the graph has it, else the
-# first declared query (alphabetical) -- see load_ground_graph() for
-# the exact fallback. Otherwise, the EXACT query string as it appears
-# as a key in ground_nodes.json's own "queries" map, e.g.
-# "verify_goal_formula" or "plan_outcome(true)".
+# first declared query (alphabetical) -- see pick_goal_index() in
+# graph_viz_common.py for the exact fallback. Otherwise, the EXACT
+# query string as it appears as a key in ground_nodes.json's/
+# compiled_nodes.json's own "queries" map, e.g. "verify_goal_formula"
+# or "plan_outcome(true)".
 goal_query: null
+
+# Common directory BOTH scripts write their own video into (e.g.
+# ground_graph.mp4 and compiled_graph.mp4, extension picked from
+# animation.writer below) -- null = interactive plt.show() for both
+# instead (needs a display). See --output/--output-dir on either
+# script to override this per-run without editing the config.
+output_dir: output/problem0S/graph_videos
 
 # --- static appearance ---------------------------------------------
 background_color: white
@@ -57,11 +69,12 @@ proof_paths:
     - "#ffd600"    # gold
   size_multiplier: 1.8
   shiny: true
-  # Safety cap on the proof-search itself -- enumerate_proofs stops
-  # (with a warning printed to stderr) after this many node-visits
-  # even if fewer than `count` distinct proofs were found yet; see
-  # visualize_ground_graph.py's own note on why this search can blow
-  # up combinatorially on a large real ground graph.
+  # Safety cap on the proof-search itself -- enumerate_proofs/
+  # enumerate_true_leaf_proofs stop (with a warning printed to
+  # stderr) after this many node-visits even if fewer than `count`
+  # distinct proofs were found yet; see graph_viz_common.py's own
+  # note on why this search can blow up combinatorially on a large
+  # real ground/compiled graph.
   max_search_steps: 200000
 
 # --- animation / output ---------------------------------------------
@@ -71,12 +84,11 @@ animation:
   # one full reveal cycle, then the interactive window loops it again.
   duration_seconds: null
   tail_seconds: 3.0
-  # null = interactive plt.show() (needs a display). Set to a path
-  # (e.g. output/ground_graph.mp4 or .gif) to render to a file instead
-  # -- required in a headless environment. writer below picks how:
-  # "ffmpeg" for .mp4 (needs the ffmpeg binary on PATH), "pillow" for
-  # .gif (no extra binary needed, just matplotlib's own writer).
-  output_path: null
+  # Picks the file extension used under output_dir above ("ffmpeg" ->
+  # .mp4, needs the ffmpeg binary on PATH; "pillow" -> .gif, no extra
+  # binary needed). Only matters when output_dir (or --output/
+  # --output-dir) is actually set -- with neither, both scripts open
+  # an interactive window instead.
   writer: ffmpeg
 
 # --- layout ----------------------------------------------------------

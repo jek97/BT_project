@@ -48,37 +48,59 @@ This dumps, into this run's own output/<problem>/graphs/:
 --save-graphs=false explicitly turns it off (same as the default);
 bare --save-graphs or --save-graphs=true/1 turns it on.
 
-## Visualizing the ground graph (visualize_ground_graph.py)
+## Visualizing the graphs (visualize_ground_graph.py / visualize_compiled_graph.py)
 
-visualize_ground_graph.py loads a saved ground_nodes.json (from
---save-graphs above) and renders it as a spinning 3D point cloud --
-small grey balls for nodes, black lines for edges, white background,
-rotating around the vertical axis. Driven by visualize_config.yaml
-(see that file's own comments for every parameter), it then plays out
-two reveal steps on top of the static graph:
+Two scripts, sharing graph_viz_common.py's own rendering engine and
+BOTH driven by the SAME visualize_config.yaml, render a graph from
+--save-graphs above as a spinning 3D point cloud -- small grey balls
+for nodes, black lines for edges, white background, rotating around
+the vertical axis:
+
+  - visualize_ground_graph.py -- the ground graph (ground_nodes.json).
+  - visualize_compiled_graph.py -- the compiled circuit
+    (compiled_nodes.json; SDD if pysdd is installed, DSharp d-DNNF
+    otherwise).
+
+Both then play out the same two reveal steps on top of the static
+graph:
 
   1. After t1_seconds, the goal query node (goal_query in the config;
      defaults to verify_goal_formula) turns red and "shiny".
-  2. Starting interval_seconds later, n distinct PROOFS of the goal
-     (sub-DAGs from the AD-fact leaves up to the goal node) light up
-     one at a time, each its own color, one every interval_seconds.
+  2. Starting interval_seconds later, n distinct paths from the goal
+     light up one at a time, each its own color, one every
+     interval_seconds.
+
+Step 2 means something SLIGHTLY different in each script, and it's a
+real distinction, not just wording: visualize_ground_graph.py's own
+paths are ordinary proof sub-DAGs (sign-agnostic -- the ground graph
+isn't a deterministic circuit). visualize_compiled_graph.py's own
+paths are restricted to the goal's TRUE leaves only -- compilation
+makes the circuit deterministic, so a leaf only ever reached through a
+negative reference along a given path genuinely means "false along
+this path" (confirmed directly against real dsharp output), and is
+left uncolored rather than highlighted. See graph_viz_common.py's own
+header for the full explanation.
 
 Usage:
 
     python3 main.py --problem problem0S --save-graphs
-    python3 visualize_ground_graph.py --graphs-dir output/problem0S/graphs
+    python3 visualize_ground_graph.py
+    python3 visualize_compiled_graph.py
 
-Or just point visualize_config.yaml's own graphs_dir at the right
-output/<problem>/graphs/ directory and run
-`python3 visualize_ground_graph.py` with no arguments. Set
-animation.output_path in the config (or pass --output path.mp4/.gif)
-to render to a file instead of opening an interactive window --
-required in a headless environment.
+Both scripts read graphs_dir and output_dir from visualize_config.yaml
+by default (no arguments needed once the config points at the right
+problem) -- output_dir is a COMMON directory both scripts write their
+own video into (ground_graph.mp4 / compiled_graph.mp4, or .gif if
+animation.writer is "pillow"). output_dir: null (or omitting
+--output/--output-dir) opens an interactive window instead --
+requires a display, so set output_dir in a headless environment.
+--graphs-dir/--goal-query/--output/--output-dir on either script
+override the config for that one run.
 
 Honest caveat: matplotlib has no real specular/lighting model, so
-"shiny" here is faked (a brighter/larger marker, a light outline, and
-a small white "glint" dot on top) -- it reads as a highlight, but it
-is not true 3D shading. See visualize_ground_graph.py's own header if
-a real lighting model (e.g. via PyVista) is ever wanted instead --
-the graph-loading/layout/proof-enumeration code doesn't need to change
-for that, only the rendering section.
+"shiny" here is faked (a brighter/larger marker and a small white
+"glint" dot on top) -- it reads as a highlight, but it is not true 3D
+shading. See graph_viz_common.py's own render() if a real lighting
+backend (e.g. PyVista) is ever wanted instead -- the graph-loading/
+layout/proof-enumeration code doesn't need to change for that, only
+the rendering section.

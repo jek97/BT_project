@@ -560,7 +560,7 @@ def main():
                           "way (confirmed). Parse/Ground are UNCHANGED. "
                           "Bare --approximate or --approximate=true/"
                           "false/1/0 (default: false).")
-    ap.add_argument("--save-graphs", nargs="?", const=True, default=True,
+    ap.add_argument("--save-graphs", nargs="?", const=True, default=False,
                      type=_str2bool,
                      help="Also dump the ground LogicFormula and the "
                           "compiled circuit (SDD or DSharp d-DNNF, "
@@ -573,9 +573,15 @@ def main():
                           "is a declared query, which is a do_node(...)/"
                           "cond(...)/... call, which is a bare AD fact) "
                           "and why the ground graph carries richer "
-                          "per-node provenance than the compiled one. "
-                          "Bare --save-graphs or --save-graphs=true/false/"
-                          "1/0 (default: true).")
+                          "per-node provenance than the compiled one. Off "
+                          "by default -- adds overhead (a full pass over "
+                          "the ground formula, plus writing potentially "
+                          "large .dot/.json files for a real problem's "
+                          "ground graph) that most runs don't want; turn "
+                          "on with a bare --save-graphs or "
+                          "--save-graphs=true/1 when you actually intend "
+                          "to inspect/visualize this run's graphs "
+                          "(see visualize_ground_graph.py).")
     ap.add_argument("--approximate-convergence", type=float, default=1e-2,
                      help="Only used with --approximate: stop once the "
                           "k-best evaluator's own reported lower bound is "

@@ -1,0 +1,90 @@
+# visualize_config.yaml
+#
+# Parameters for visualize_ground_graph.py -- see that script's own
+# header for what it actually draws and, importantly, for the honest
+# limits of the "shiny" effect below (matplotlib has no real specular
+# lighting model; this fakes it with a bright glint marker + a light
+# outline, it isn't true 3D shading).
+
+# Where ground_nodes.json lives -- produced by main.py's own
+# --save-graphs flag (off by default; see README.md), written to
+# output/<problem>/graphs/ by module/theory/graph_export.py.
+graphs_dir: output/problem0S/graphs
+
+# Which declared query is "the goal" this animation builds up to.
+# null = auto-pick "verify_goal_formula" if the graph has it, else the
+# first declared query (alphabetical) -- see load_ground_graph() for
+# the exact fallback. Otherwise, the EXACT query string as it appears
+# as a key in ground_nodes.json's own "queries" map, e.g.
+# "verify_goal_formula" or "plan_outcome(true)".
+goal_query: null
+
+# --- static appearance ---------------------------------------------
+background_color: white
+node_color: "#999999"        # small grey balls
+node_size: 18                # matplotlib scatter marker area (points^2)
+edge_color: black
+edge_width: 0.5
+edge_alpha: 0.35
+
+# --- camera spin, around the vertical axis (z, which this script's
+# own layered layout already uses for "derivation depth": leaves at
+# z=0, the goal/query node at the top) ------------------------------
+spin:
+  enabled: true
+  degrees_per_second: 18
+  elevation: 18               # fixed camera elevation angle, degrees
+
+# --- step 1: after t1 seconds, the goal query node turns red and
+# "shiny" (see the honest caveat above) ------------------------------
+goal_highlight:
+  t1_seconds: 3.0
+  color: red
+  size_multiplier: 2.5
+  shiny: true
+
+# --- step 2: n separate proof sub-DAGs for the goal light up, one
+# every x_seconds after the goal's own highlight moment --------------
+proof_paths:
+  count: 5                    # n
+  interval_seconds: 2.0       # x
+  colors:                     # cycles if count > len(colors)
+    - "#ff8c00"    # dark orange
+    - "#e91e63"    # magenta/pink
+    - "#00bcd4"    # cyan
+    - "#7cb342"    # lime green
+    - "#3f51b5"    # indigo
+    - "#ffd600"    # gold
+  size_multiplier: 1.8
+  shiny: true
+  # Safety cap on the proof-search itself -- enumerate_proofs stops
+  # (with a warning printed to stderr) after this many node-visits
+  # even if fewer than `count` distinct proofs were found yet; see
+  # visualize_ground_graph.py's own note on why this search can blow
+  # up combinatorially on a large real ground graph.
+  max_search_steps: 200000
+
+# --- animation / output ---------------------------------------------
+animation:
+  fps: 30
+  # null = auto: t1_seconds + count*interval_seconds + tail_seconds,
+  # one full reveal cycle, then the interactive window loops it again.
+  duration_seconds: null
+  tail_seconds: 3.0
+  # null = interactive plt.show() (needs a display). Set to a path
+  # (e.g. output/ground_graph.mp4 or .gif) to render to a file instead
+  # -- required in a headless environment. writer below picks how:
+  # "ffmpeg" for .mp4 (needs the ffmpeg binary on PATH), "pillow" for
+  # .gif (no extra binary needed, just matplotlib's own writer).
+  output_path: null
+  writer: ffmpeg
+
+# --- layout ----------------------------------------------------------
+# Layered by derivation depth (leaves = depth 0 at the bottom, the
+# goal/query node at the top), nodes at the same depth spread evenly
+# around a ring -- see layered_layout_3d()'s own note for why this was
+# chosen over a generic force-directed layout (O(n) vs O(n^2), and
+# depth is already a meaningful axis for a proof DAG).
+layout:
+  ring_base_radius: 1.0
+  ring_crowding_factor: 0.15

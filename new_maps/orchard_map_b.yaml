@@ -1,0 +1,9 @@
+free_thresh: 0.196
+image: orchard_map_b.pgm
+negate: 0
+occupied_thresh: 0.65
+origin:
+- -11.500499950009997
+- -39.000499950009996
+- 0.0
+resolution: 0.1

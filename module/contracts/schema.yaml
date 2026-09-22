@@ -42,6 +42,46 @@
 # ports that are wired to another node rather than given a literal
 # value -- this schema only describes port TYPES/directions, not a
 # serialization, so it stays agnostic of that choice).
+#
+# TWO things this schema deliberately treats differently, because they
+# matter to THIS project's own ProbLog translator but not to a real
+# BT.cpp program:
+#
+#   - triggers (input, on MoveTo/InstallTool/UninstallTool/DeployTool/
+#     RetractTool) IS still a real, declared port here, because
+#     module/translators/bt_to_prolog.py genuinely parses it as an XML
+#     attribute -- MOST triggers are auto-derived (collision/battery
+#     always added; a STRUCTURAL guard auto-derived from every
+#     ReactiveSequence/ReactiveFallback left-sibling Condition -- see
+#     "CONTROL-FLOW GUARD DERIVATION" in that file's own module
+#     docstring), but not ALL of them: a leg-INTRINSIC termination
+#     condition that isn't derivable from tree structure at all (e.g.
+#     a Bug-algorithm leg's own line_of_sight_clear/crosses_segment
+#     stopping rule -- see problem3's own behavior_tree.xml for a real,
+#     currently-shipping example: triggers="obstacle_on_path(0.6)")
+#     still has to be written by the tree author, with nowhere else to
+#     write it. Removing triggers from a schema entry's own ports:
+#     list would make bt_to_prolog.py's own _validate_ports reject
+#     that attribute outright, breaking every tree that needs one.
+#
+#   - reason (output, on nearly every action) is NOT a real declared
+#     port anywhere below -- confirmed nothing in bt_to_prolog.py ever
+#     reads attrs["reason"]/attrs.get("reason") for an ACTION (only
+#     HaltedWith's own, unrelated, INPUT "reason" port -- see its own
+#     entry further down -- is actually read), and no problem's own
+#     behavior_tree.xml has ever written reason="..." on one. It is
+#     PURELY where the auto-generated Prolog Reason term (tag_reason/3)
+#     conceptually lives, documented as a comment right where the port
+#     used to be (search for "NOT a real BT.cpp port" below) so the
+#     Reason vocabulary each action can produce stays discoverable --
+#     but genuinely removable with zero functional impact, which is
+#     exactly why it's a comment and not a ports: entry.
+#
+# Every problem's own hand-written <TreeNodesModel> (in its own
+# behavior_tree.xml) already omits reason entirely and never declared
+# triggers as anything other than a real input port either -- a
+# mechanical TreeNodesModel generator built from this file later
+# should do the same (skip every "reason" comment, keep triggers).
 # ============================================================
 
 schema_version: 1
@@ -142,26 +182,28 @@ actions:
           triggers="obstacle_in_bound(0.6);battery_below(20)", or the
           attribute omitted entirely if this leg needs nothing beyond
           the automatic collision/battery/structural-guard triggers.
-      - name: reason
-        direction: output
-        type: std::string
-        description: >
-          One of: completed, battery_depleted, crashed(ObstacleId),
-          obstacle_in_bound(Threshold,ObstacleId),
-          obstacle_on_path(Threshold,ObstacleId), battery_under(Threshold),
-          battery_equal(Threshold), battery_over(Threshold), or any
-          other entry from triggers that actually fired.
-          crashed/obstacle_in_bound/obstacle_on_path carry WHICH
-          obstacle_polygon/2 Id they fired against (an argmin over
-          obstacles at the exact crossing point, computed by
-          collision_geometry.py), not just that one fired. Every
-          battery_* Reason above also carries the Threshold that was
-          crossed (echoing the trigger's own argument). Reason functors
-          deliberately differ from their trigger names ONLY where a
-          distinct word was actually requested -- battery_below's
-          Reason is battery_under (mirroring collision/crashed's own
-          asymmetry), while battery_equal/battery_over keep the SAME
-          functor as their trigger name.
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: >
+      #     One of: completed, battery_depleted, crashed(ObstacleId),
+      #     obstacle_in_bound(Threshold,ObstacleId),
+      #     obstacle_on_path(Threshold,ObstacleId), battery_under(Threshold),
+      #     battery_equal(Threshold), battery_over(Threshold), or any
+      #     other entry from triggers that actually fired.
+      #     crashed/obstacle_in_bound/obstacle_on_path carry WHICH
+      #     obstacle_polygon/2 Id they fired against (an argmin over
+      #     obstacles at the exact crossing point, computed by
+      #     collision_geometry.py), not just that one fired. Every
+      #     battery_* Reason above also carries the Threshold that was
+      #     crossed (echoing the trigger's own argument). Reason functors
+      #     deliberately differ from their trigger names ONLY where a
+      #     distinct word was actually requested -- battery_below's
+      #     Reason is battery_under (mirroring collision/crashed's own
+      #     asymmetry), while battery_equal/battery_over keep the SAME
+      #     functor as their trigger name.
       - name: status
         direction: output
         type: bool
@@ -205,21 +247,35 @@ actions:
       Reason/Status simply report whether a path was found. Reason
       itself carries not just completed/no_path but ALSO which
       ActionCode this specific PlanWith occurrence is (mirroring
-      MoveTo's own ActionCode -- see MoveTo's own reason port above),
-      which algorithm ran, and which point it was working toward (see
-      the reason port below) -- so two PlanWith calls in the same tree
+      MoveTo's own ActionCode -- see MoveTo's own "reason" comment above
+      its own ports: list), which algorithm ran, and which point it was
+      working toward (see this entry's own "reason" comment below) --
+      so two PlanWith calls in the same tree
       failing with no_path are always distinguishable, the same way
       two MoveTo legs crashing are.
 
-      Four `algorithm` values are supported, each with its own ports
-      actually used (goal for astar/straight/voronoi; obstacle_id +
-      offset for follow_boarder -- see each port's own description for
-      which):
+      Five `algorithm` values are supported, each with its own ports
+      actually used (goal for astar/straight/voronoi/dastar; obstacle_id +
+      offset for follow_boarder; step ADDITIONALLY for dastar -- see
+      each port's own description for which):
         astar    -- black-box A* (planners.py's plan_astar/5).
         straight -- direct straight-line planner (planners.py's
           plan_straight/5), no map lookup, a single degenerate
           (collinear-control-point) Bezier segment; only fails
           (no_path) for degenerate/non-finite input.
+        dastar   -- "discretized A*" (planners.py's plan_dastar/6):
+          runs the SAME raw A* grid search as astar above, but instead
+          of fitting one smooth spline through the whole raw path,
+          first resamples it BY ARC LENGTH -- one waypoint every `step`
+          metres walked along it, always including the goal itself --
+          then connects those waypoints with STRAIGHT-LINE segments
+          chained together (the same multi-leg chaining
+          PlanWithWaypoints uses internally), rather than one smooth
+          curve. Useful when a piecewise-linear path following A*'s own
+          free-space corridor is preferred to a smoothed spline (e.g.
+          sharper, more predictable corners near obstacles). Fails
+          (no_path) under exactly the same conditions astar itself
+          would.
         voronoi  -- generalized-Voronoi-diagram roadmap planner
           (planners.py's plan_voronoi/5): builds a roadmap from
           scipy's Voronoi diagram of points sampled along every
@@ -255,20 +311,21 @@ actions:
           absorbed into the planner's own first path segment. Since
           this algorithm has no real goal point, its own Reason
           reports `none` where astar/straight/voronoi would report
-          the point they were working toward (see the reason port
-          below).
+          the point they were working toward (see this entry's own
+          "reason" comment below its ports: list).
     ports:
       - name: algorithm
         direction: input
         type: std::string
         required: true
         description: >
-          One of: astar, straight, voronoi, follow_boarder -- written
-          VERBATIM as Prolog text (a bare atom for the first three;
-          for follow_boarder, this port names the ALGORITHM, its own
-          obstacle_id/offset ports below carry the rest). Picks both
-          which ports below are actually required (goal for the first
-          three; obstacle_id+offset for follow_boarder) and which
+          One of: astar, straight, voronoi, follow_boarder, dastar --
+          written VERBATIM as Prolog text (a bare atom for astar/
+          straight/voronoi/dastar; for follow_boarder, this port names
+          the ALGORITHM, its own obstacle_id/offset ports below carry
+          the rest). Picks both which ports below are actually required
+          (goal for astar/straight/voronoi/dastar; obstacle_id+offset
+          for follow_boarder; step ADDITIONALLY for dastar) and which
           plan_call/8 clause runs.
       - name: goal
         direction: input
@@ -276,12 +333,20 @@ actions:
         required: false
         description: >
           Target position for this planning call -- REQUIRED when
-          algorithm is astar/straight/voronoi, and must be OMITTED
-          when algorithm is follow_boarder (which has no goal point at
+          algorithm is astar/straight/voronoi/dastar, and must be
+          OMITTED when algorithm is follow_boarder (which has no goal point at
           all -- see its own note above). Maps directly to planWith's
           own point(GX,GY) argument in basic_action_theory.pl --
           per-call, not shared across other planning calls in the same
-          tree.
+          tree. Either a literal "X;Y" OR a blackboard reference like
+          "{target}" bound by an earlier node's own Point output (e.g.
+          NearestToolOfKind's own position) -- the ONE exception to
+          this schema's usual "input ports are literals" rule (same
+          treatment InstallTool/DeployTool/RetractTool/UninstallTool's
+          own tool port gets, below); when blackboard-sourced, this
+          call's own Reason records the ground atom `wild` in place of
+          the concrete point (unknown until runtime), same convention
+          an argmin ObstacleId already uses elsewhere.
       - name: obstacle_id
         direction: input
         type: std::string
@@ -291,7 +356,7 @@ actions:
           algorithm is follow_boarder, and must be OMITTED otherwise.
           Written VERBATIM as Prolog text (a bare atom, e.g.
           obstacle_id="obs5"), same convention as HaltedWith's own
-          reason port below -- NOT quoted. Typically the SAME
+          reason INPUT port below -- NOT quoted. Typically the SAME
           ObstacleId a preceding trigger/condition reported (e.g.
           obstacle_on_path(Threshold,ObstacleId)'s second argument).
       - name: offset
@@ -307,6 +372,21 @@ actions:
           planner does not separately add robot radius/safety_buffer,
           so pass a Threshold that already accounts for them if that's
           the intent, same as every other Threshold in this schema).
+      - name: step
+        direction: input
+        type: double
+        required: false
+        default: 2.0
+        description: >
+          Arc-length spacing (metres) between discretized waypoints
+          along A*'s own raw grid path -- ONLY meaningful when
+          algorithm is dastar, and must be OMITTED for every other
+          algorithm (a translation-time BTValidationError otherwise,
+          same treatment as obstacle_id/offset given for a non-
+          follow_boarder algorithm). Defaults to 2.0 when omitted with
+          algorithm=dastar. Smaller values track A*'s own path more
+          closely (more, shorter straight segments); larger values
+          give a coarser, straighter-cornered path.
       - name: control_points
         direction: output
         type: std::vector<Point>
@@ -316,24 +396,592 @@ actions:
           straight; a roadmap-routed or clockwise-loop path for
           voronoi/follow_boarder; etc., see each algorithm's own note
           above). Empty if reason=no_path(...).
-      - name: reason
-        direction: output
-        type: std::string
-        description: >
-          completed(Algorithm,Goal,ActionCode) or
-          no_path(Algorithm,Goal,ActionCode) -- Algorithm is this
-          node's own `algorithm` value (follow_boarder(ObstacleId,
-          Offset) as a compound term when algorithm=follow_boarder,
-          matching plan_call/8's own dispatch shape; a bare atom
-          otherwise), Goal is the point(GX,GY) this call was working
-          toward (the atom `none` for follow_boarder, which has none),
-          and ActionCode identifies WHICH PlanWith occurrence in the
-          tree this is (same per-occurrence code MoveTo's own reason
-          port already uses).
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: >
+      #     completed(Algorithm,Goal,ActionCode) or
+      #     no_path(Algorithm,Goal,ActionCode) -- Algorithm is this
+      #     node's own `algorithm` value (follow_boarder(ObstacleId,
+      #     Offset) as a compound term when algorithm=follow_boarder,
+      #     dastar(Step) likewise when algorithm=dastar, matching
+      #     plan_call/8's own dispatch shape; a bare atom for astar/
+      #     straight/voronoi), Goal is the point(GX,GY) this call was working
+      #     toward (the atom `none` for follow_boarder, which has none),
+      #     and ActionCode identifies WHICH PlanWith occurrence in the
+      #     tree this is (same per-occurrence code MoveTo's own reason
+      #     port already uses).
       - name: status
         direction: output
         type: bool
         description: "true iff reason is completed(...)."
+
+  # ----------------------------------------------------------------
+  # PlanWithWaypoints -- corresponds to planWithWaypoints(Algorithm,
+  # Waypoints,CP,ActionCode) in basic_action_theory.pl. The MULTI-
+  # WAYPOINT generalization of PlanWith above, for astar/straight ONLY
+  # (voronoi has no natural per-leg chaining and follow_boarder has no
+  # goal point at all, so neither gets a multi-waypoint form "for now"
+  # -- use PlanWith directly for those). Plans a route from the CURRENT
+  # position THROUGH every waypoint in order, concatenating each leg's
+  # own chained-Bezier control points into ONE combined chain (see
+  # planners.py's own "MULTI-WAYPOINT MERGING" section header for the
+  # concatenation arithmetic) -- the SAME "length 3k+1" shape PlanWith's
+  # own control_points already has, just spanning every waypoint's own
+  # leg. Fails OUTRIGHT (no_path, empty control_points) if ANY single
+  # leg between consecutive waypoints has no path; there is no partial-
+  # credit result.
+  #
+  # WHY THIS NODE EXISTS, stated plainly: N separate PlanWith+MoveTo
+  # legs each draw their OWN independent z/zt position-noise pair (see
+  # this project's own FUTUREWORK.md), and all N stay simultaneously
+  # "live" once the plan's final situation is reached, which is what
+  # drives up the compiled ProbLog formula's size on a many-leg tree.
+  # A single PlanWithWaypoints+MoveTo pair spanning the SAME N
+  # waypoints draws exactly ONE z/zt pair for the whole route instead,
+  # directly shrinking that compiled formula. Nothing here needs to be
+  # hand-written to get this benefit: bt_to_prolog.py's own translator
+  # AUTOMATICALLY detects a Sequence whose direct children are
+  # THEMSELVES a run of Sequence(PlanWith,MoveTo) pairs -- sharing one
+  # algorithm (astar or straight), each PlanWith's own goal a literal
+  # (not blackboard-wired), each MoveTo with no explicit triggers of
+  # its own -- and rewrites that whole run into ONE PlanWithWaypoints+
+  # MoveTo pair, with no XML change required from the tree author (see
+  # that module's own "AUTOMATIC PLAN+MOVETO MERGING" section header
+  # for the exact detection rule and its scope). A tree author can
+  # also write <PlanWithWaypoints> directly, e.g. as part of a subtree
+  # meant to always be merged, or simply because the route is already
+  # known to be one continuous multi-point walk.
+  #
+  # TRADEOFF, stated equally plainly (repeated from do_node(
+  # planWithWaypoints(...))'s own note, since a BT AUTHOR should see it
+  # here too, not just a theory maintainer): this is a genuine change
+  # to the PROBABILISTIC MODEL, not just an implementation-level
+  # optimization. N separate legs each independently "reset" position
+  # noise at their own waypoint; ONE merged leg does not -- a single
+  # noise realization now governs drift across the ENTIRE merged
+  # route. Automatic merging (see above) is applied unconditionally
+  # wherever the pattern matches -- there is no opt-out attribute; if
+  # independently-reset noise at every original waypoint is part of
+  # what a tree is meant to model, give the PlanWith a blackboard-
+  # wired goal instead of a literal one (the merge pass only ever
+  # collapses a run of LITERAL goals -- see bt_to_prolog.py's own
+  # detection rule) to keep that leg unmerged.
+  - id: PlanWithWaypoints
+    prolog_action: planWithWaypoints
+    ports:
+      - name: algorithm
+        direction: input
+        type: std::string
+        required: true
+        description: >
+          One of: astar, straight -- ONLY these two (see this entry's
+          own header for why). An unsupported value here is a
+          translation-time (bt_to_prolog.py) BTValidationError, not a
+          silent runtime failure.
+      - name: waypoints
+        direction: input
+        type: std::vector<Point>
+        required: true
+        description: >
+          Ordered list of "X;Y" points to visit IN ORDER, "|"-separated
+          -- e.g. waypoints="5;27|41;27|0;0" plans (current position)
+          -> (5,27) -> (41,27) -> (0,0). "|" (not ";", already used
+          inside each "X;Y" pair, and not "," which this schema's own
+          std::vector<std::string> ports already use for a different
+          port type) is this schema's own encoding for a std::vector
+          <Point> INPUT port -- see bt_to_prolog.py's own module
+          docstring for the full "X;Y"/vector<std::string>/{blackboard_
+          key} encoding list this joins. At least one point is
+          required; a single-point list is equivalent to plain
+          PlanWith's own behavior (one leg, nothing to chain), just
+          via this node's own Reason shape instead. Every point here
+          must be a LITERAL "X;Y" -- unlike PlanWith's own goal port,
+          a blackboard-wired waypoint is not supported (there is
+          nothing here to write, since no existing node outputs a
+          std::vector<Point> a tree author would wire in).
+      - name: control_points
+        direction: output
+        type: std::vector<Point>
+        description: >
+          The FULL merged path, chained cubic Bezier control points,
+          length 3k+1 -- same shape/consumer (a following MoveTo) as
+          PlanWith's own control_points, just spanning every
+          waypoint's own leg concatenated into one chain.
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note):
+      #   direction: output
+      #   type: std::string
+      #   description: >
+      #     completed(Algorithm,Waypoints,ActionCode) or
+      #     no_path(Algorithm,Waypoints,ActionCode) -- Waypoints is
+      #     the SAME [point(X,Y),...] list this node's own waypoints
+      #     port parsed into, echoed back whole (not one point at a
+      #     time) -- see do_node(planWithWaypoints(...))'s own note in
+      #     basic_action_theory.pl for why a list here needed no
+      #     change to tag_reason/3 or halted_with_pattern/3's own
+      #     generic machinery.
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is completed(...)."
+
+  # ----------------------------------------------------------------
+  # TakeSample -- corresponds to take_sample(SampleId,ActionCode) in
+  # basic_action_theory.pl. INSTANTANEOUS, like PlanWith above (does
+  # not advance now/2, no Duration/Triggers, no continuous trajectory)
+  # -- but UNLIKE every other action in this schema, its outcome is a
+  # genuine new probabilistic choice, not a deterministic function of
+  # the current situation/geometry: a single fixed-probability coin
+  # flip (this problem's own config.yaml, sample.success_probability
+  # -- defaults to 0.5 if omitted), independent per occurrence (see
+  # basic_action_theory.pl's own do_node(take_sample(...)) note on
+  # exactly what "independent" means here -- keyed on the SITUATION,
+  # not on the robot's physical state). ONLY on success, a SECOND,
+  # independent random draw produces a VALUE too, shaped ONE OF TWO
+  # WAYS by config.yaml: sample.value.discretized -- an EXPLICIT list
+  # of {value, weight} outcomes, this problem's own choice of exactly
+  # how many values are possible and each one's own probability (same
+  # convention position.lateral/tangential's own discretized_gaussian
+  # tables already use) -- if present; otherwise sample.value.mean/
+  # sigma, a discretized Normal over the FIXED integers 0..10
+  # (defaulting to mean=5.0/sigma=2.0 if the whole sample.value section
+  # -- or all of sample: -- is omitted). See config_to_prolog.py's own
+  # note on both, and SampleValueBelow/SampleValueEqual/SampleValueOver
+  # further down for checking the drawn value against a threshold (a
+  # plain numeric comparison either way -- nothing downstream assumes
+  # the 0..10 range or integer-only values, so a sample.value.
+  # discretized list is free to use any values at all).
+  # ----------------------------------------------------------------
+  - id: TakeSample
+    prolog_action: take_sample
+    description: >
+      An instantaneous action with no target/goal/trigger of its own:
+      succeeds or fails via a single fixed-probability coin flip
+      (sample.success_probability, this problem's own config.yaml),
+      and on success draws a further VALUE (sample.value.discretized's
+      own explicit {value,weight} list if given, else a discretized
+      Normal(mean,sigma) over 0..10) recorded under this node's own id. Records the robot's
+      own current position (at/4) at the instant of sampling as part
+      of its own Reason -- see this entry's own "reason" comment below
+      its ports: list, and
+      basic_action_theory.pl's own sample_success_at/3 for querying
+      WHERE a successful sample landed.
+    ports:
+      - name: id
+        direction: input
+        type: std::string
+        required: true
+        description: >
+          This occurrence's own name (e.g. "soil1"), chosen by the
+          tree author -- NOT the auto-generated ActionCode every
+          action's own Reason already carries (see each entry's own
+          "reason" comment). A later
+          SampleValueBelow/SampleValueEqual/SampleValueOver condition
+          node references this SAME id to check what value THIS
+          specific sample came back with. Must be a valid Prolog atom
+          (lowercase-start, letters/digits/underscores).
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: >
+      #     sample_success(X,Y,V,SampleId,ActionCode) or sample_failure
+      #     (X,Y,SampleId,ActionCode) -- X,Y is the robot's own position
+      #     (metres, map frame) at the instant this action ran; V (only
+      #     present on success) is the drawn value, 0..10; SampleId is
+      #     this node's own id port, above; ActionCode identifies WHICH
+      #     TakeSample occurrence in the tree this is (same per-
+      #     occurrence code every other action's own Reason already
+      #     uses).
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is sample_success(...)."
+
+  # ----------------------------------------------------------------
+  # InstallTool / UninstallTool -- correspond to install_tool_leg
+  # (Tool,Triggers,ActionCode)/uninstall_tool_leg(Tool,Triggers,
+  # ActionCode) in basic_action_theory.pl: DURATIVE actions, same
+  # start/halt shape as MoveTo (a fixed-Duration analogue of one
+  # startMoveto/haltMoveto pair -- see that action's own do_node note),
+  # but the robot never moves: no CP/position noise of its own at all.
+  # Duration is FIXED per (action, tool) pair (this problem's own
+  # config.yaml, tool.install.duration_seconds.<tool>/tool.uninstall.
+  # duration_seconds.<tool> -- defaults to 10 seconds if omitted), not
+  # derived from spline arc length. Preconditions (see basic_action_
+  # theory.pl's own poss(start_install_tool(...))/poss(start_uninstall_
+  # tool(...))): neither can start while the robot is moving;
+  # InstallTool additionally requires hitch(free,S) (nothing already
+  # attached); UninstallTool requires hitch(Tool,S) (THIS SPECIFIC tool
+  # -- not just "something" -- currently attached). Success/failure is
+  # a genuine coin flip too, same "not a deterministic function of
+  # geometry" shape as TakeSample above (tool.install.success_
+  # probability/tool.uninstall.success_probability, this problem's own
+  # config.yaml, default 0.9) -- but ONLY once the full Duration
+  # elapses with nothing halting it early; a battery trigger firing
+  # first halts it with THAT Reason instead, same "earliest wins"
+  # mechanism MoveTo's own Triggers already use.
+  # ----------------------------------------------------------------
+  - id: InstallTool
+    prolog_action: install_tool_leg
+    description: >
+      Runs a fixed-Duration install of `tool` (a specific tool INSTANCE
+      id, e.g. "cart1" -- this problem's own config.yaml tool.instances
+      -- not a kind; see basic_action_theory.pl's own tool_instance/2),
+      halting early on whichever of `triggers` occurs first, or
+      resolving a success/failure coin flip once the full Duration
+      elapses with nothing halting it early (see this entry's own
+      header above for the full mechanism). Only battery-related
+      trigger names are accepted -- the robot never moves during this
+      action, so a motion-based trigger has no meaningful geometry to
+      check (see the triggers port's own description below).
+    ports:
+      - name: tool
+        direction: input
+        type: std::string
+        required: true
+        description: >
+          A tool INSTANCE id from this problem's own config.yaml
+          tool.instances (e.g. "cart1"), NOT a kind -- multiple
+          instances of the same kind (cart/plow) can exist. Not
+          validated against a fixed set at translation time (this
+          translator never parses config.yaml); an unknown id simply
+          makes this action's own precondition unsatisfiable (see
+          basic_action_theory.pl's own poss(start_install_tool(...))).
+          Either a literal id OR a blackboard reference like "{tool}"
+          bound by an earlier node's own std::string output (e.g.
+          NearestToolOfKind's own id, or HitchedId's) -- see PlanWith's
+          own goal port note above for the full "literal OR blackboard
+          ref" convention this follows, including the `wild` Reason
+          substitution when blackboard-sourced.
+      - name: triggers
+        direction: input
+        type: std::vector<std::string>
+        required: false
+        description: >
+          EXTRA halting conditions, beyond the automatic battery=0%
+          one -- OPTIONAL, may be omitted or empty. RESTRICTED to
+          battery-related names ONLY: battery_below(Threshold),
+          battery_equal(Threshold), battery_over(Threshold) (see
+          MoveTo's own triggers port for what each means -- the
+          semantics are identical, just evaluated against the IDLE
+          drain rate, since this action never moves the robot). A
+          motion-based name (collision, obstacle_in_bound(...),
+          obstacle_on_path(...), line_of_sight_clear(...),
+          crosses_segment(...)) is a HARD translation-time error here
+          -- there is no path/geometry for it to check.
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: >
+      #     install_tool_success(Tool,ActionCode)/install_tool_failure
+      #     (Tool,ActionCode) if the full Duration elapsed, or
+      #     battery_depleted/battery_under(Threshold)/battery_equal
+      #     (Threshold)/battery_over(Threshold) if a battery trigger
+      #     fired first (same Reason vocabulary MoveTo's own battery
+      #     triggers use).
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is install_tool_success(...)."
+
+  - id: UninstallTool
+    prolog_action: uninstall_tool_leg
+    description: >
+      The mirror image of InstallTool above -- same ports/mechanism,
+      uninstall_tool_success(Tool,ActionCode)/uninstall_tool_failure
+      (Tool,ActionCode) in place of install_tool_success/
+      install_tool_failure. Requires hitch_id(Tool,S) to start (THIS
+      SPECIFIC tool INSTANCE currently attached, not just any instance
+      of its kind), not just hitch(free,S)'s own negation -- AND
+      \+ deployed(S): a tool currently deployed (see DeployTool/
+      RetractTool below) must be retracted first, it cannot be
+      uninstalled while still lowered.
+    ports:
+      - name: tool
+        direction: input
+        type: std::string
+        required: true
+        description: >
+          The tool INSTANCE id (e.g. "cart1") currently attached --
+          same id= an earlier <InstallTool> in this tree used. Either a
+          literal or a blackboard reference (e.g. HitchedId's own id
+          output) -- see InstallTool's own tool port note above.
+      - name: triggers
+        direction: input
+        type: std::vector<std::string>
+        required: false
+        description: "Same battery-only restriction as InstallTool's own triggers port."
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: >
+      #     uninstall_tool_success(Tool,ActionCode)/uninstall_tool_failure
+      #     (Tool,ActionCode), or a battery Reason -- same shape as
+      #     InstallTool's own "reason" comment.
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is uninstall_tool_success(...)."
+
+  # ----------------------------------------------------------------
+  # DeployTool / RetractTool -- correspond to deploy_tool_leg(Tool,
+  # Triggers,ActionCode)/retract_tool_leg(Tool,Triggers,ActionCode) in
+  # basic_action_theory.pl: SAME shape as InstallTool/UninstallTool
+  # above (fixed Duration, battery-only triggers, robot must be still,
+  # coin-flip success/failure once the full Duration elapses) -- but
+  # lowers/raises a tool that's ALREADY installed, rather than
+  # attaching/detaching it. Currently restricted to tool kind=plow ONLY
+  # (checked at the Prolog level, since this translator never parses
+  # config.yaml to know a given id's own kind -- see basic_action_
+  # theory.pl's own poss(start_deploy_tool(...))); other tool kinds may
+  # gain their own deploy/retract behaviour later.
+  #
+  # WHY THIS EXISTS, SEPARATELY FROM InstallTool/UninstallTool: merely
+  # having the plow installed (hitch(plow,S)) does NOT plough anything
+  # while the robot moves -- basic_action_theory.pl's own ploughed/3
+  # additionally requires deployed(S), which only becomes true between
+  # a successful DeployTool and its matching RetractTool. Between the
+  # two, MoveTo's own speed and battery drain rate also switch to the
+  # DEPLOYED-specific values (tool.equipped.plow.deployed_speed/
+  # deployed_moving_drain_rate, this problem's own config.yaml, see
+  # basic_action_theory.pl's own effective_tool_speed/3).
+  #
+  # Preconditions: neither can start while the robot is moving.
+  # DeployTool additionally requires hitch_id(Tool,S) (THIS SPECIFIC
+  # instance currently attached -- can't deploy something not
+  # installed) and \+ deployed(S) (not already deployed). RetractTool
+  # requires hitch_id(Tool,S) AND deployed(S) (can't retract what
+  # isn't deployed). UninstallTool, in turn, now requires \+ deployed
+  # (S) too -- a deployed tool must be retracted before it can be
+  # uninstalled (see UninstallTool's own note above).
+  # ----------------------------------------------------------------
+  - id: DeployTool
+    prolog_action: deploy_tool_leg
+    description: >
+      Runs a fixed-Duration deploy (lower into the ground) of `tool`,
+      an ALREADY-INSTALLED tool instance id whose own kind must
+      currently be plow. Halts early on whichever of `triggers` occurs
+      first, or resolves a success/failure coin flip once the full
+      Duration elapses with nothing halting it early (tool.deploy.
+      success_probability, this problem's own config.yaml, default
+      0.9). Only battery-related trigger names are accepted, same
+      restriction as InstallTool's own triggers port.
+    ports:
+      - name: tool
+        direction: input
+        type: std::string
+        required: true
+        description: >
+          The tool INSTANCE id (e.g. "plow1") currently attached --
+          same id= an earlier <InstallTool> in this tree used. Its own
+          kind must be plow (checked at the Prolog level, not here).
+          Either a literal or a blackboard reference (e.g. HitchedId's
+          own id output) -- see InstallTool's own tool port note above.
+      - name: triggers
+        direction: input
+        type: std::vector<std::string>
+        required: false
+        description: "Same battery-only restriction as InstallTool's own triggers port."
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: >
+      #     deploy_tool_success(Tool,ActionCode)/deploy_tool_failure
+      #     (Tool,ActionCode), or a battery Reason -- same shape as
+      #     InstallTool's own "reason" comment.
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is deploy_tool_success(...)."
+
+  - id: RetractTool
+    prolog_action: retract_tool_leg
+    description: >
+      The mirror image of DeployTool above -- same ports/mechanism,
+      retract_tool_success(Tool,ActionCode)/retract_tool_failure(Tool,
+      ActionCode) in place of deploy_tool_success/deploy_tool_failure
+      (tool.retract.success_probability, default 0.9). Requires `tool`
+      to be currently DEPLOYED to start, not just attached.
+    ports:
+      - name: tool
+        direction: input
+        type: std::string
+        required: true
+        description: >
+          The tool INSTANCE id (e.g. "plow1") currently deployed --
+          same id= an earlier <DeployTool> in this tree used. Either a
+          literal or a blackboard reference (e.g. HitchedId's own id
+          output) -- see InstallTool's own tool port note above.
+      - name: triggers
+        direction: input
+        type: std::vector<std::string>
+        required: false
+        description: "Same battery-only restriction as InstallTool's own triggers port."
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: >
+      #     retract_tool_success(Tool,ActionCode)/retract_tool_failure
+      #     (Tool,ActionCode), or a battery Reason -- same shape as
+      #     InstallTool's own "reason" comment.
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is retract_tool_success(...)."
+
+  # ----------------------------------------------------------------
+  # ToolPosition / ToolsOfKind / NearestToolOfKind -- correspond to
+  # tool_position_query(Id,Position,ActionCode)/tools_of_kind_query
+  # (Kind,Tools,ActionCode)/nearest_tool_of_kind_query(Kind,Id,Position,
+  # ActionCode) in basic_action_theory.pl. Pure, side-effect-free QUERY
+  # leaves against tool_position/4, tools_of_kind/5, nearest_tool_of_
+  # kind/6 (Section 5c/5d) -- INSTANTANEOUS, like PlanWith/TakeSample,
+  # but with no precondition of their own to state (unlike TakeSample,
+  # they can be asked ANYTIME, not just \+ moving(S)) and no world-
+  # changing effect at all (unlike TakeSample's own genuine coin flip,
+  # these never draw new randomness -- asking twice in the same
+  # situation always reports the SAME answer).
+  #
+  # NearestToolOfKind is NOT simply "ToolPosition then ToolsOfKind
+  # chained in the tree" -- picking the CLOSEST candidate needs an
+  # argmin fold (findall/3 + a hand-written min_candidate/2 in the
+  # theory, since ProbLog has no aggregate_all/3) that has no BT.cpp-
+  # tree-composable equivalent, so it is its own self-contained leaf --
+  # even though its own Prolog implementation internally composes
+  # tools_of_kind/5 (which itself composes tool_instance/2 with tool_
+  # position/4), that composition happens ENTIRELY inside one Prolog
+  # predicate, not across multiple tree nodes.
+  # ----------------------------------------------------------------
+  - id: ToolPosition
+    prolog_action: tool_position_query
+    description: >
+      Looks up WHERE tool instance `id` currently sits. Succeeds
+      (status=true) iff it's a known instance (config.yaml tool.
+      instances) that is NOT currently hitched -- a hitched tool's
+      position is wherever the robot is, not a separate thing to track,
+      so this fails for one (see basic_action_theory.pl's own
+      tool_position/4 note).
+    ports:
+      - name: id
+        direction: input
+        type: std::string
+        required: true
+        description: "A tool INSTANCE id, e.g. \"cart1\" -- a literal, not yet blackboard-wireable."
+      - name: position
+        direction: output
+        type: Point
+        description: "Bound to the tool's own current (X,Y) if found."
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: "tool_position_found(Id) or tool_position_unavailable(Id)."
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is tool_position_found(...)."
+
+  - id: ToolsOfKind
+    prolog_action: tools_of_kind_query
+    description: >
+      Lists every instance of `kind` that currently has a position
+      (i.e. is not hitched). Succeeds (status=true) iff at least one
+      such instance exists.
+    ports:
+      - name: kind
+        direction: input
+        type: std::string
+        required: true
+        description: "cart, plow, or any future kind -- not validated against a fixed set here (this translator never parses config.yaml)."
+      - name: tools
+        direction: output
+        type: std::string
+        description: "Bound to a Prolog list of tool(Id,point(X,Y)) terms, one per matching free instance."
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: "tools_of_kind_found(Kind) or tools_of_kind_empty(Kind)."
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is tools_of_kind_found(...)."
+
+  - id: NearestToolOfKind
+    prolog_action: nearest_tool_of_kind_query
+    description: >
+      Picks whichever free instance of `kind` is closest to the
+      robot's own CURRENT position right now. Succeeds (status=true)
+      iff `kind` has at least one free instance.
+    ports:
+      - name: kind
+        direction: input
+        type: std::string
+        required: true
+        description: "cart, plow, or any future kind -- same validation as ToolsOfKind's own kind port."
+      - name: id
+        direction: output
+        type: std::string
+        description: "Bound to the closest matching instance's own id."
+      - name: position
+        direction: output
+        type: Point
+        description: "Bound to that instance's own current (X,Y)."
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: "nearest_tool_found(Kind,Id) or no_tool_of_kind(Kind)."
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is nearest_tool_found(...)."
+
+  - id: HitchedId
+    prolog_action: hitched_id_query
+    description: >
+      Looks up the id of WHATEVER tool is currently hitched (if any) --
+      no input port, unlike ToolPosition/ToolsOfKind/NearestToolOfKind:
+      it reports on the hitch's own current state directly (basic_
+      action_theory.pl's own hitch_id/2), not a lookup keyed by
+      kind/id. Succeeds (status=true) iff something is currently
+      hitched. Exists so a tree can say "deploy/retract/uninstall
+      WHATEVER is hitched right now" without needing to have plumbed
+      that id in from wherever it was originally installed -- e.g. a
+      tool that was ALREADY hitched before some "make sure it's
+      installed" guard even ran never flows through an InstallTool/
+      NearestToolOfKind occurrence in THAT run at all.
+    ports:
+      - name: id
+        direction: output
+        type: std::string
+        description: "Bound to the currently-hitched instance's own id, if any."
+      # reason (NOT a real BT.cpp port -- see this schema's own
+      # header note; kept here as documentation of the Reason
+      # values this action's own do_node clause can produce):
+      #   direction: output
+      #   type: std::string
+      #   description: "hitched_id_found(Id) or hitched_id_unavailable."
+      - name: status
+        direction: output
+        type: bool
+        description: "true iff reason is hitched_id_found(...)."
 
 conditions:
 
@@ -448,12 +1096,14 @@ conditions:
           battery_depleted(ActionCode), crashed(ObstacleId,ActionCode),
           obstacle_in_bound(Threshold,ObstacleId,ActionCode),
           battery_under(Threshold,ActionCode), or any other Reason
-          from MoveTo's own reason port above (same notes on crashed/
-          obstacle_in_bound carrying WHICH obstacle, and obstacle_in_
-          bound/battery_under also carrying WHICH threshold, apply
-          here). From PlanWith: completed(Algorithm,Goal,ActionCode)
-          or no_path(Algorithm,Goal,ActionCode) -- see PlanWith's own
-          reason port above. Written exactly as valid Prolog text,
+          MoveTo's own do_node clause can produce (see MoveTo's own
+          "reason" comment above its ports: list -- same notes on
+          crashed/obstacle_in_bound carrying WHICH obstacle, and
+          obstacle_in_bound/battery_under also carrying WHICH
+          threshold, apply here). From PlanWith: completed(Algorithm,
+          Goal,ActionCode) or no_path(Algorithm,Goal,ActionCode) --
+          see PlanWith's own equivalent "reason" comment above its own
+          ports: list. Written exactly as valid Prolog text,
           e.g. reason="crashed(_,_)" to match ANY crash regardless of
           obstacle/ActionCode (a bare reason="crashed" no longer
           matches anything -- a bare atom never unifies with a
@@ -566,6 +1216,142 @@ conditions:
         type: double
         required: true
         description: Battery level threshold, percent (0-100).
+
+  # ----------------------------------------------------------------
+  # holds(sample_value_below/equal/over(SampleId,Threshold), S) in
+  # basic_action_theory.pl -- checks the VALUE a SUCCESSFUL <TakeSample
+  # id="..."/> came back with (see that entry's own note), NOT a live
+  # geometry/battery lookup like BatteryOver above: a sample's own
+  # value is fixed the instant it's drawn (TakeSample is instantaneous,
+  # no Duration to elapse), so this is a HISTORY lookup (searches S's
+  # whole history for a matching sample_success, same shape HaltedWith
+  # uses) -- NON-CONTINUOUS for exactly that reason (excluded from
+  # automatic reactive-guard derivation, same treatment HaltedWith
+  # gets, see bt_to_prolog.py's own _NON_CONTINUOUS_CONDITIONS). Fails
+  # (neither true nor false, simply unsatisfied) if id never had a
+  # successful sample anywhere in S's history.
+  # ----------------------------------------------------------------
+  - id: SampleValueBelow
+    prolog_condition: sample_value_below
+    description: >
+      True iff the value <TakeSample id="..."/> recorded (0..10) is
+      below Threshold.
+    ports:
+      - name: id
+        direction: input
+        type: std::string
+        required: true
+        description: "Must match the id= of an earlier <TakeSample> in this tree."
+      - name: threshold
+        direction: input
+        type: double
+        required: true
+        description: "Value threshold, 0-10."
+
+  - id: SampleValueEqual
+    prolog_condition: sample_value_equal
+    description: >
+      True iff the value <TakeSample id="..."/> recorded (0..10) is
+      exactly Threshold.
+    ports:
+      - name: id
+        direction: input
+        type: std::string
+        required: true
+        description: "Must match the id= of an earlier <TakeSample> in this tree."
+      - name: threshold
+        direction: input
+        type: double
+        required: true
+        description: "Value threshold, 0-10."
+
+  - id: SampleValueOver
+    prolog_condition: sample_value_over
+    description: >
+      True iff the value <TakeSample id="..."/> recorded (0..10) is
+      above Threshold.
+    ports:
+      - name: id
+        direction: input
+        type: std::string
+        required: true
+        description: "Must match the id= of an earlier <TakeSample> in this tree."
+      - name: threshold
+        direction: input
+        type: double
+        required: true
+        description: "Value threshold, 0-10."
+
+  # ----------------------------------------------------------------
+  # holds(hitched,S)/holds(hitched(Kind),S) in basic_action_theory.pl --
+  # a thin BT-tree-facing wrapper around hitch/2 (Section 5c), which is
+  # a plain fluent, not itself holds(...)-wrapped. NON-CONTINUOUS (see
+  # bt_to_prolog.py's own _NON_CONTINUOUS_CONDITIONS note) -- hitch/2 is
+  # provably constant for the whole span of any one MoveTo leg.
+  # ----------------------------------------------------------------
+  - id: Hitched
+    prolog_condition: hitched
+    description: >
+      True iff a tool is currently attached (kind omitted), or
+      specifically a tool of `kind` is (kind given).
+    ports:
+      - name: kind
+        direction: input
+        type: std::string
+        required: false
+        description: "cart or plow -- OMIT to check \"is anything attached\" instead of one specific kind."
+
+  # ----------------------------------------------------------------
+  # holds(deployed,S) in basic_action_theory.pl -- a thin BT-tree-
+  # facing wrapper around deployed/1 (Section 5d). No ports -- only one
+  # tool can ever be hitched at a time, so there is nothing to
+  # parametrize (unlike Hitched's own optional kind). Same NON-
+  # CONTINUOUS treatment as Hitched above, for the same reason.
+  # ----------------------------------------------------------------
+  - id: Deployed
+    prolog_condition: deployed
+    description: "True iff the currently-hitched tool is deployed (lowered), not just attached."
+    ports: []
+
+  # ----------------------------------------------------------------
+  # holds(ploughed_at(GX,GY),S)/holds(ploughed_between(X1,Y1,X2,Y2),S)
+  # in basic_action_theory.pl -- thin BT-tree-facing wrappers around
+  # ploughed/3 (the cell-indexed ploughing fluent the plow-deploy leg
+  # already marks), discretizing a continuous point/pair-of-points
+  # through the SAME plough_cell_size grid ploughed/3 itself uses.
+  # NON-CONTINUOUS (see bt_to_prolog.py's own _NON_CONTINUOUS_
+  # CONDITIONS note) -- ploughed/3 only ever becomes newly true at a
+  # MoveTo leg's own halt/interrupt, never incrementally mid-leg.
+  # ----------------------------------------------------------------
+  - id: PloughedAt
+    prolog_condition: ploughed_at
+    description: "True iff the cell at goal is already ploughed."
+    ports:
+      - name: goal
+        direction: input
+        type: Point
+        required: true
+        description: "\"X;Y\" -- discretized to a cell via this problem's own ploughing.cell_size before checking."
+
+  - id: PloughedBetween
+    prolog_condition: ploughed_between
+    description: >
+      True iff EVERY cell the straight line connecting p1's own cell
+      center to p2's touches is already ploughed (standard integer
+      Bresenham line algorithm over the discretized grid -- NOT the
+      full axis-aligned box spanned by p1/p2) -- "has this whole
+      SWATH already been ploughed".
+    ports:
+      - name: p1
+        direction: input
+        type: Point
+        required: true
+        description: "\"X;Y\" -- one corner of the box to check."
+      - name: p2
+        direction: input
+        type: Point
+        required: true
+        description: "\"X;Y\" -- the opposite corner of the box to check."
 
   # ----------------------------------------------------------------
   # holds(line_of_sight_clear(ObstacleId,GX,GY), S) in

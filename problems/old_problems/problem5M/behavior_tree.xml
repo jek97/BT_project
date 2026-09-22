@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<!--
+  behavior_tree.xml (problem5M, on orchard_map_b). Sibling of
+  problem5L (orchard_map_a) and problem5S (orchard_map_c), all three
+  sharing this SAME tree shape with different coordinates via their
+  own config.yaml/goal_formula.pl.
+
+  install_closest_plow, then plan+walk to (5,-9), plough the swath
+  from (5,-9) to (25,-9), uninstall the plow (walking back to its own
+  dock at (8,9) first), then plan+walk back to the start position
+  (9,27).
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <include path="install_closest_plow.xml"/>
+  <include path="plowing.xml"/>
+  <include path="uninstall_plow.xml"/>
+  <BehaviorTree ID="MainTree">
+    <Sequence name="MainTree">
+      <SubTree ID="install_closest_plow"/>
+      <PlanWith algorithm="astar" goal="5;-9" control_points="{cp1}"/>
+      <MoveTo control_points="{cp1}"/>
+      <SubTree ID="plowing" p1="5;-9" p2="25;-9"/>
+      <SubTree ID="uninstall_plow" p1="8;9"/>
+      <PlanWith algorithm="astar" goal="9;27" control_points="{cp2}"/>
+      <MoveTo control_points="{cp2}"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

@@ -103,13 +103,33 @@
 % an actual obstacle).
 obstacle_polygon(no_obstacles_placeholder, []) :- fail.
 
+% obstacle_hole/2: the ADDITIVE counterpart to obstacle_polygon/2 --
+% zero or more per obstacle Id, each one a HOLLOW interior boundary
+% WITHIN that same obstacle (e.g. a perimeter fence's own inner face,
+% surrounding the walkable ground inside it) -- see occgrid_to_
+% problog.py's own module docstring for how these get extracted
+% (cv2.RETR_CCOMP, a two-level contour hierarchy) and module/theory/
+% collision_geometry.py's own OBSTACLE_POLYGONS/_inside_polygon note
+% for how every consumer (collision_geometry.py AND planners.py)
+% combines an obstacle's own outer+hole rings back into ONE
+% containment/clearance test, so a hole's own free interior correctly
+% reads as free space rather than "inside the obstacle". An ordinary,
+% hole-less obstacle (a tree, a building) has ZERO obstacle_hole facts
+% and behaves exactly as it always has. Same "always a KNOWN predicate"
+% placeholder-clause fix as obstacle_polygon/2 above, for the SAME
+% reason (a problem whose own map has no holes at all -- the common
+% case -- would otherwise have ZERO obstacle_hole facts anywhere in
+% the loaded program).
+obstacle_hole(no_obstacle_holes_placeholder, []) :- fail.
+
 :- consult('./problem_data.pl').
 % Must exist relative to wherever this file itself lives (module/theory/),
 % not CWD -- same resolution rule every consult/use_module directive in
 % this file follows.
 
 % planners.py provides plan_astar/5, plan_straight/5, plan_voronoi/5,
-% and follow_boarder/5 as BLACK-BOX (Python-implemented) predicates --
+% plan_dastar/6, and follow_boarder/5 as BLACK-BOX (Python-implemented)
+% predicates --
 % see that file's own header for the full explanation. ProbLog imports
 % and executes it directly the moment this directive loads
 % (problog.clausedb's load_external_module), registering both
@@ -222,6 +242,23 @@ quantize_up(Value, Grid, Value) :- Grid =< 0.
 quantize_up(Value, Grid, Quantized) :-
     Grid > 0,
     Quantized is ceiling(Value / Grid) * Grid.
+
+% cell_index(+Value, +CellSize, -Index): the ploughed/3 fluent's own
+% discretization primitive (see that predicate's own note, further
+% down) -- DELIBERATELY NOT quantize/3 above, even though it looks
+% similar. quantize/3 snaps Value to the NEAREST GRID-ALIGNED VALUE,
+% still a float in the original coordinate units (round(Value/Grid)*
+% Grid) -- fine for merge-grid quantization, where the snapped position
+% is used again as a real coordinate. A cell fluent needs the opposite:
+% a bare INTEGER cell index, with no residual floating-point
+% representation at all, so that two samples landing in the same cell
+% (from the same leg, or from two DIFFERENT worlds/legs whose merge-
+% grid-quantized starting conditions happen to coincide) produce the
+% EXACT SAME Prolog term and merge -- a rounded-but-still-float value
+% risks not doing so (5.0 and 5.000000000000001 don't unify), which
+% would make ploughed(Cx,Cy,S) effectively never share proofs across
+% worlds.
+cell_index(Value, CellSize, Index) :- Index is round(Value / CellSize).
 
 sum_list([], 0.0).
 sum_list([H|T], Sum) :- sum_list(T, SumT), Sum is H + SumT.
@@ -348,11 +385,68 @@ arc_length(ControlPoints, Length) :-
     sum_list(Ds, Length).
 
 % speed/1 is now a config fact -- see the problem's own config.yaml's motion.speed.
+% tool_speed/2 is its EQUIPPED-TOOL-AWARE generalization -- tool_speed
+% (free,Speed) reuses the SAME base speed/1 value (config_to_prolog.py
+% emits all three tool_speed(free/cart/plow,_) facts uniformly, cart/
+% plow defaulting to speed/1's own value if config.yaml's tool.equipped
+% section doesn't override them -- see that file's own note), so
+% walk_duration/3 below never needs to special-case "no tool equipped"
+% itself. speed/1 stays a separate fact (not removed) since tool_speed
+% (free,_) is DERIVED from it at generation time, not the other way
+% round.
 
-walk_duration(ControlPoints, Duration) :-
+% walk_duration(+ControlPoints,+Tool,+S,-Duration): Tool is WHICH tool
+% (if any -- free/cart/plow, see hitch/2) is equipped for the walk this
+% Duration is being computed for, per this feature's own request
+% ("if the robot is equipped with the cart or the plow... the moveto
+% action will use these parameters (velocity and battery drain rate)
+% for its evaluations. once the tool is uninstalled they get back to
+% the normal drain rate and velocity"). Callers resolve Tool via
+% hitch(Tool,S) at the SAME situation-term point they already resolve
+% CP from (current_walk/6 or the leg's own startMoveto(...) term) --
+% hitch/2 is PROVABLY constant for the whole span of one walk (only
+% halt_install_tool/halt_uninstall_tool ever change it, and both
+% REQUIRE \+ moving(S) just to start -- see their own poss/2 notes), so
+% it makes no difference whether a given call site re-derives it from S
+% or from SPrev; either reads the SAME value. deployed/1 (Section 5c)
+% has the SAME provably-constant-for-one-walk property, for the SAME
+% reason (start_deploy_tool/start_retract_tool also require \+ moving
+% (S)) -- S is threaded through here ONLY so effective_tool_speed/3
+% below can tell whether Tool is currently DEPLOYED (a plow lowered
+% into the ground moves differently than one just carried along), same
+% situation argument, same "either S or SPrev works" property.
+walk_duration(ControlPoints, Tool, S, Duration) :-
     arc_length(ControlPoints, Length),
-    speed(Speed),
+    effective_tool_speed(Tool, S, Speed),
     Duration is Length / Speed.
+
+% effective_tool_speed(+Tool,+S,-Speed) / effective_tool_moving_drain_
+% rate(+Tool,+S,-Rate): the deployed-aware wrapper around tool_speed/2/
+% tool_moving_drain_rate/2 -- TWO mutually exclusive clauses (deployed(
+% S) vs. \+ deployed(S)), not an if-then-else (ProbLog's own dialect
+% doesn't support '->'/2, same convention every other multi-case
+% predicate in this file already uses). tool_speed_deployed/2 and
+% tool_moving_drain_rate_deployed/2 (this problem's own config.yaml,
+% tool.equipped.<kind>.deployed_speed/.deployed_moving_drain_rate) are
+% emitted for EVERY tool kind, same as tool_speed/2 itself, even though
+% only the plow can currently ever actually be deployed (see poss(
+% start_deploy_tool(...))'s own kind restriction) -- a kind that can
+% never deploy simply never has deployed(S) true while it's the one
+% hitched, so its own _deployed value is harmless, never-consulted
+% config, not a special case to avoid emitting.
+effective_tool_speed(Tool, S, Speed) :-
+    deployed(S),
+    tool_speed_deployed(Tool, Speed).
+effective_tool_speed(Tool, S, Speed) :-
+    \+ deployed(S),
+    tool_speed(Tool, Speed).
+
+effective_tool_moving_drain_rate(Tool, S, Rate) :-
+    deployed(S),
+    tool_moving_drain_rate_deployed(Tool, Rate).
+effective_tool_moving_drain_rate(Tool, S, Rate) :-
+    \+ deployed(S),
+    tool_moving_drain_rate(Tool, Rate).
 
 % ---------------------------------------------------------------
 % 4. STOCHASTIC LATERAL DRIFT -- ONE discretized-Gaussian draw
@@ -431,6 +525,251 @@ current_walk(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), CP, Triggers, Act
 current_walk(do(A,S), CP, Triggers, ActionCode, T0, SPrev) :-
     A \= startMoveto(_,_,_,_),
     current_walk(S, CP, Triggers, ActionCode, T0, SPrev).
+
+% ---------------------------------------------------------------
+% 5b. INSTALLING_TOOL / UNINSTALLING_TOOL -- the install_tool/
+%     uninstall_tool analogue of moving/1 above: true while a fixed-
+%     Duration install (or uninstall) is in progress, between
+%     start_install_tool(Tool,...)/start_uninstall_tool(Tool,...) and
+%     whichever halt_install_tool(...)/halt_uninstall_tool(...) ends
+%     it -- there is no interrupt(...) counterpart for either (not
+%     asked for; the plan never voluntarily cuts one short the way it
+%     can a walk). Tool is carried in the base clause's own head so a
+%     caller can ask "is THIS tool currently being installed" (used as
+%     halt_install_tool's own PRECONDITION, per this action's own
+%     request) as well as just "is something being installed".
+installing_tool(Tool, do(start_install_tool(Tool,_,_,_), _)).
+installing_tool(Tool, do(A,S)) :-
+    A \= halt_install_tool(_,_,_),
+    installing_tool(Tool, S).
+
+uninstalling_tool(Tool, do(start_uninstall_tool(Tool,_,_,_), _)).
+uninstalling_tool(Tool, do(A,S)) :-
+    A \= halt_uninstall_tool(_,_,_),
+    uninstalling_tool(Tool, S).
+
+% current_install_tool(+S, -Tool,-Triggers,-ActionCode,-T0,-SPrev):
+% the install_tool analogue of current_walk/6 above -- the most recent
+% start_install_tool in S's history, generically skipping over any
+% OTHER action layered on top (same pass-through shape). No CP slot at
+% all -- install_tool has no path, nothing to recover. Used exactly
+% where current_walk/6 is: recovering a leg's own parameters at
+% poss(halt_install_tool(...)) time.
+current_install_tool(do(start_install_tool(Tool,Triggers,ActionCode,T0),SPrev), Tool, Triggers, ActionCode, T0, SPrev).
+current_install_tool(do(A,S), Tool, Triggers, ActionCode, T0, SPrev) :-
+    A \= start_install_tool(_,_,_,_),
+    current_install_tool(S, Tool, Triggers, ActionCode, T0, SPrev).
+
+current_uninstall_tool(do(start_uninstall_tool(Tool,Triggers,ActionCode,T0),SPrev), Tool, Triggers, ActionCode, T0, SPrev).
+current_uninstall_tool(do(A,S), Tool, Triggers, ActionCode, T0, SPrev) :-
+    A \= start_uninstall_tool(_,_,_,_),
+    current_uninstall_tool(S, Tool, Triggers, ActionCode, T0, SPrev).
+
+% deploying_tool/2, retracting_tool/2, current_deploy_tool/6,
+% current_retract_tool/6: the deploy_tool/retract_tool analogues of
+% installing_tool/2, uninstalling_tool/2, current_install_tool/6,
+% current_uninstall_tool/6 just above -- IDENTICAL shape, start_deploy_
+% tool/start_retract_tool in place of start_install_tool/start_
+% uninstall_tool, halt_deploy_tool/halt_retract_tool in place of
+% halt_install_tool/halt_uninstall_tool.
+deploying_tool(Tool, do(start_deploy_tool(Tool,_,_,_), _)).
+deploying_tool(Tool, do(A,S)) :-
+    A \= halt_deploy_tool(_,_,_),
+    deploying_tool(Tool, S).
+
+retracting_tool(Tool, do(start_retract_tool(Tool,_,_,_), _)).
+retracting_tool(Tool, do(A,S)) :-
+    A \= halt_retract_tool(_,_,_),
+    retracting_tool(Tool, S).
+
+current_deploy_tool(do(start_deploy_tool(Tool,Triggers,ActionCode,T0),SPrev), Tool, Triggers, ActionCode, T0, SPrev).
+current_deploy_tool(do(A,S), Tool, Triggers, ActionCode, T0, SPrev) :-
+    A \= start_deploy_tool(_,_,_,_),
+    current_deploy_tool(S, Tool, Triggers, ActionCode, T0, SPrev).
+
+current_retract_tool(do(start_retract_tool(Tool,Triggers,ActionCode,T0),SPrev), Tool, Triggers, ActionCode, T0, SPrev).
+current_retract_tool(do(A,S), Tool, Triggers, ActionCode, T0, SPrev) :-
+    A \= start_retract_tool(_,_,_,_),
+    current_retract_tool(S, Tool, Triggers, ActionCode, T0, SPrev).
+
+% ---------------------------------------------------------------
+% 5c. THE HITCH FLUENT -- which tool KIND (if any) is currently
+%     attached: free (nothing attached), or the kind's own name
+%     (cart/plow). Starts free in s0. Flips to Kind ONLY on a
+%     SUCCESSFUL halt_install_tool(Id,...) (a FAILED attempt leaves it
+%     unchanged -- nothing actually got attached), and back to free
+%     ONLY on a SUCCESSFUL halt_uninstall_tool(...) -- per this
+%     action's own request. Monotonic-persistence (frame axiom) is the
+%     generic pass-through clause, same shape as at/4's/battery/3's own
+%     -- everything else in the history leaves hitch/2 unchanged.
+%     Reason (install_tool_success(Id,ActionCode)/uninstall_tool_
+%     success(Id,ActionCode)) is matched here in its FULLY TAGGED shape
+%     (see tag_reason/3) -- halt_install_tool/halt_uninstall_tool
+%     always carry the tagged Reason directly as their own 2nd
+%     argument (see do_node(install_tool_leg(...))'s own note further
+%     down), so there is no separate untagged form to also match here.
+%
+%     KIND vs. INSTANCE: a BT tree's own <InstallTool tool="..."> names
+%     a specific tool INSTANCE id (e.g. "cart1", from this problem's
+%     own config.yaml tool.instances -- see tool_instance/2 below), not
+%     a kind, since multiple instances of the same kind can exist. But
+%     every OTHER predicate that used to read hitch(Tool,S) purely to
+%     look up KIND-level physics (walk_duration/2 via tool_speed/2,
+%     tool_moving_drain_rate/2, install_tool_duration/2, ...) still
+%     wants the KIND, not which specific instance -- so hitch/2 itself
+%     stays kind-valued (join through tool_instance/2 to recover Kind
+%     from the event's own Id), leaving every one of those existing
+%     callers UNTOUCHED. hitch_id/2 immediately below is the sibling
+%     fluent for the few places that genuinely need to know WHICH
+%     instance (tool_position/4's own hitched-exclusion, and
+%     poss(start_uninstall_tool(...))'s own precondition -- uninstalling
+%     Id requires THAT SPECIFIC instance, not just "some instance of
+%     its kind", to be the one attached).
+hitch(free, s0).
+hitch(Kind, do(halt_install_tool(_T,install_tool_success(Id,_ActionCode),true), _)) :-
+    tool_instance(Id, Kind).
+hitch(free, do(halt_uninstall_tool(_T,uninstall_tool_success(_Id,_ActionCode),true), _)).
+hitch(State, do(A,S)) :-
+    A \= halt_install_tool(_,install_tool_success(_,_),true),
+    A \= halt_uninstall_tool(_,uninstall_tool_success(_,_),true),
+    hitch(State, S).
+
+% hitch_id/2: the INSTANCE-level sibling of hitch/2 above -- IDENTICAL
+% successor-state shape, just reporting the tool instance Id directly
+% (no tool_instance/2 join), so it can distinguish "cart1 is attached"
+% from "cart2 is attached" where hitch/2 would only ever say "cart" for
+% either.
+hitch_id(free, s0).
+hitch_id(Id, do(halt_install_tool(_T,install_tool_success(Id,_ActionCode),true), _)).
+hitch_id(free, do(halt_uninstall_tool(_T,uninstall_tool_success(_Id,_ActionCode),true), _)).
+hitch_id(State, do(A,S)) :-
+    A \= halt_install_tool(_,install_tool_success(_,_),true),
+    A \= halt_uninstall_tool(_,uninstall_tool_success(_,_),true),
+    hitch_id(State, S).
+
+% ---------------------------------------------------------------
+% 5d. THE DEPLOYED FLUENT -- true while the currently-hitched tool is
+%     LOWERED (deployed), as opposed to merely attached. Starts false
+%     (no clause covers s0, same "absence is false" convention moving/1
+%     itself relies on). Flips to true ONLY on a SUCCESSFUL
+%     halt_deploy_tool(...), back to false ONLY on a SUCCESSFUL
+%     halt_retract_tool(...) -- a FAILED attempt at either leaves it
+%     unchanged, same "only a SUCCESSFUL halt flips it" discipline
+%     hitch/2 already uses (the frame clause's own negative guard
+%     simply doesn't match a successful retract, so there's no separate
+%     "becomes false" clause to also write -- same trick moving/1 uses
+%     for its own ending case). No Tool/Id argument, unlike hitch/hitch_
+%     id -- only ONE tool can ever be hitched at a time, so "is the
+%     currently-hitched tool deployed" needs no further qualification.
+%
+%     WHY THIS EXISTS: merely installing the plow (hitch(plow,S)) does
+%     NOT plough anything while the robot moves -- see ploughed/3's own
+%     note, further down -- and does NOT switch MoveTo to the deployed-
+%     specific speed/drain-rate either (effective_tool_speed/3,
+%     effective_tool_moving_drain_rate/3, near walk_duration/4 above).
+%     Both require deployed(S) too, which only a genuine DeployTool
+%     (poss(start_deploy_tool(...)), below) can make true.
+deployed(do(halt_deploy_tool(_T,deploy_tool_success(_Id,_ActionCode),true), _)).
+deployed(do(A,S)) :-
+    A \= halt_deploy_tool(_,deploy_tool_success(_,_),true),
+    A \= halt_retract_tool(_,retract_tool_success(_,_),true),
+    deployed(S).
+
+% tool_position(+Id, -GX, -GY, +S): relational fluent -- WHERE tool
+% instance Id currently sits, or fails outright if Id is currently
+% attached (its "position" is trivially wherever the robot is, i.e.
+% at/4, not a separate thing to track -- and if a caller only means
+% "some instance of this kind, wherever it is", tools_of_kind/5 below
+% already excludes hitched instances for exactly this reason, so no
+% consumer should ever need a stale value here). Base case seeds from
+% this problem's own config.yaml (tool.instances[].x/y -- see
+% tool_start_position/3, config_to_prolog.py's own note). Updates ONLY
+% on a SUCCESSFUL uninstall of THIS Id, to wherever the robot actually
+% was (at/4) at that exact moment -- i.e. the tool is physically
+% dropped there. Persistence clause additionally requires \+ hitch_id
+% (Id, do(A,S)) -- NOT just "nothing changed since the last update",
+% same as at/4's/hitch/2's own frame clauses, but ALSO gated on "not
+% currently equipped" so the fluent goes silent (fails) for exactly as
+% long as Id stays attached, per this feature's own request, rather
+% than continuing to report a now-meaningless frozen value.
+%
+% tool_instance/2 and tool_start_position/3 THEMSELVES are pure config
+% data (config_to_prolog.py's own tool.instances -- see that file's own
+% note), never defined by a real clause anywhere in THIS file -- a
+% problem whose config.yaml has no tool.instances at all (or an empty
+% list) then has ZERO facts for either, anywhere in the whole consulted
+% program. ProbLog's own engine treats that as an outright "unknown
+% procedure" ERROR (not a graceful failure) the moment anything calls
+% either one -- unlike ordinary Prolog, ProbLog's parser also doesn't
+% support a ':- dynamic Name/Arity.' declaration to pre-empt this (tried
+% directly, confirmed unsupported). The fix is the classic Prolog
+% workaround instead: one placeholder clause per predicate whose own
+% body can never succeed, purely so the predicate is "known" to the
+% engine -- any REAL config-generated facts simply add MORE clauses
+% alongside this one, and a query against an unknown id/kind still
+% fails cleanly, exactly as intended, instead of throwing.
+tool_instance(no_tool_instances_configured, no_tool_instances_configured) :- fail.
+tool_start_position(no_tool_instances_configured, 0.0, 0.0) :- fail.
+
+tool_position(Id, GX, GY, s0) :-
+    tool_start_position(Id, GX, GY).
+tool_position(Id, GX, GY, do(halt_uninstall_tool(T,uninstall_tool_success(Id,_ActionCode),true), S)) :-
+    at(GX, GY, T, S).
+tool_position(Id, GX, GY, do(A,S)) :-
+    A \= halt_uninstall_tool(_,uninstall_tool_success(Id,_),true),
+    tool_position(Id, GX, GY, S),
+    \+ hitch_id(Id, do(A,S)).
+
+% tools_of_kind(+Kind, +S, -Id, -GX, -GY): nondeterministically
+% enumerates every tool instance of Kind that currently HAS a position
+% -- i.e. every instance tool_position/4 above will actually report for
+% right now, so a currently-hitched instance of this Kind is silently
+% skipped (the exclusion already lives in tool_position/4 itself, not
+% duplicated here). Backtracks over every tool_instance(Id,Kind) fact;
+% a Kind with no free instance simply fails outright, the same
+% "unsatisfied precondition, not a special error case" shape every
+% other fluent in this file already uses for "nothing to report".
+tools_of_kind(Kind, S, Id, GX, GY) :-
+    tool_instance(Id, Kind),
+    tool_position(Id, GX, GY, S).
+
+% nearest_tool_of_kind(+Kind, +S, -Id, -GX, -GY, -Dist): composes
+% tools_of_kind/5 (which itself composes tool_instance/2 with
+% tool_position/4) with the robot's own CURRENT position (now/2+at/4,
+% same "read S at exactly this point" pattern do_node(planWith(...))
+% already uses) to pick whichever free instance of Kind is closest
+% right now. The argmin fold is ordinary Prolog -- findall/3 to collect
+% every candidate's own distance, then min_candidate/2 below to fold
+% down to the smallest -- not a new KIND of computation this file
+% hasn't already needed (the same "closest of several candidates" shape
+% an obstacle-argmin Reason already resolves elsewhere, just over tool
+% instances instead). Fails outright if Kind has no free instance at
+% all (Candidates=[]), same "nothing to report" shape as tools_of_kind/5
+% itself.
+nearest_tool_of_kind(Kind, S, Id, GX, GY, Dist) :-
+    now(T, S), at(RX,RY,T,S),
+    findall(D-CandId-CX-CY,
+            (tools_of_kind(Kind,S,CandId,CX,CY), dist(RX,RY,CX,CY,D)),
+            Candidates),
+    Candidates \= [],
+    min_candidate(Candidates, Dist-Id-GX-GY).
+
+% min_candidate(+[D-Id-X-Y|...], -Best): folds a non-empty list of
+% Dist-Id-X-Y candidates down to the single smallest-Dist one. TWO
+% mutually exclusive clauses on D1=<D2 vs. D1>D2, rather than an if-
+% then-else -- ProbLog's own Prolog dialect doesn't support '->'/2,
+% same reason every other multi-case predicate in this file (e.g.
+% guard_bracket_scan) is written this way instead. A tie (D1=:=D2)
+% deterministically keeps the FIRST-encountered candidate (only the
+% D1=<D2 clause matches), never both -- so this always yields exactly
+% one Best, never two competing derivations for the same Dist.
+min_candidate([D-Id-X-Y], D-Id-X-Y).
+min_candidate([D1-Id1-X1-Y1,D2-Id2-X2-Y2|Rest], Best) :-
+    D1 =< D2,
+    min_candidate([D1-Id1-X1-Y1|Rest], Best).
+min_candidate([D1-Id1-X1-Y1,D2-Id2-X2-Y2|Rest], Best) :-
+    D1 > D2,
+    min_candidate([D2-Id2-X2-Y2|Rest], Best).
 
 % ---------------------------------------------------------------
 % 4b. THE BATTERY FLUENT -- a second clock fluent, on the exact same
@@ -543,6 +882,33 @@ leg_start_battery(T0, SPrev, B0) :-
     disc_step_battery(Grid),
     quantize_down(B0Exact, Grid, B0).
 
+% moving_phase_deviation(+Zb,+SigmaB,+Elapsed,+Duration,-Deviation):
+% the shared "Duration-normalized battery-noise deviation" formula
+% EVERY fixed-Duration battery-draining action's own MOVING/ACTIVE-
+% phase battery/3 clause below uses (MoveTo, InstallTool,
+% UninstallTool, DeployTool, RetractTool -- and battery_at_leg/7's own
+% by-hand-synced copy of MoveTo's), factored into one place rather
+% than six copies of the same arithmetic. Duration=<0.0 is a genuine,
+% valid case (a zero-length/zero-Duration leg -- every planner in
+% planners.py returns a degenerate, zero-arc-length control_points
+% list for an "already at the goal" leg, see e.g. _dastar_control_
+% points' own start_rc==goal_rc special case, and walk_duration/3
+% computes Duration=Length/Speed=0.0 for it; install/uninstall/deploy/
+% retract can likewise have a config-set Duration of 0), not something
+% to reject: Elapsed is ALWAYS 0.0 too whenever Duration=<0.0 (every
+% caller below clamps it to max(0.0,min(Elapsed0,Duration)) first), so
+% Deviation=0.0 is the correct, well-defined limit -- zero elapsed
+% time means no opportunity for drift to accumulate, exactly the "no
+% noise" reading this formula would give anyway if 0.0/sqrt(Duration)
+% were merely undefined rather than a hard ZeroDivisionError. TWO
+% mutually exclusive clauses, same "no if-then-else" convention every
+% other multi-case predicate in this file already uses.
+moving_phase_deviation(_Zb, _SigmaB, _Elapsed, Duration, 0.0) :-
+    Duration =< 0.0.
+moving_phase_deviation(Zb, SigmaB, Elapsed, Duration, Deviation) :-
+    Duration > 0.0,
+    Deviation is Zb * SigmaB * Elapsed / sqrt(Duration).
+
 % MOVING phase keeps the Duration-normalized scaling (Elapsed/sqrt(D),
 % not sqrt(Elapsed)) -- a walk DOES have a genuine, known, fixed
 % Duration, and that normalization is what keeps Level EXACTLY LINEAR
@@ -551,15 +917,23 @@ leg_start_battery(T0, SPrev, B0) :-
 % Structurally this is now the SAME "nominal drain minus a signed
 % deviation, clamped at zero" pattern as the idle phases -- only the
 % Deviation formula's normalization differs, for the reason above.
+% Tool -- hitch(Tool,S), S being the situation right before this walk
+% started (same one leg_start_battery/3 already reads B0 from) --
+% picks which of tool_speed/2 (via walk_duration/3)/tool_moving_drain_
+% rate/2 applies for THIS walk's own Duration/MovingRate, per this
+% feature's own request. See walk_duration/3's own note on why it's
+% safe to resolve Tool from S here (rather than, say, some later point
+% mid-walk): hitch/2 cannot change while moving(S) holds.
 battery(Level, T, do(startMoveto(CP,_Triggers,_ActionCode,T0), S)) :-
     leg_start_battery(T0, S, B0),
-    walk_duration(CP, Duration),
+    hitch(Tool, S),
+    walk_duration(CP, Tool, S, Duration),
     Elapsed0 is T - T0,
     Elapsed is max(0.0, min(Elapsed0, Duration)),
-    moving_drain_rate(MovingRate),
+    effective_tool_moving_drain_rate(Tool, S, MovingRate),
     sigma_battery(SigmaB),
     zbatt(Zb),
-    Deviation is Zb * SigmaB * Elapsed / sqrt(Duration),
+    moving_phase_deviation(Zb, SigmaB, Elapsed, Duration, Deviation),
     NominalDrain is MovingRate*Elapsed,
     noisy_drain(NominalDrain, Deviation, TotalDrain),
     Level is max(0, min(100, B0 - TotalDrain)).
@@ -600,15 +974,193 @@ battery(Level, T, do(interrupt(T1), S)) :-
     noisy_drain(NominalDrain, Deviation, TotalDrain),
     Level is max(0, min(100, B1 - TotalDrain)).
 
-% pass-through: any future non-movement action doesn't change how
-% battery is computed -- it's a pure function of T and of whichever
-% startMoveto/haltMoveto/interrupt anchors exist in the history, same
-% principle as at/4's own pass-through clause.
+% install_tool/uninstall_tool: OWN Duration-normalized anchor clauses,
+% EXACTLY mirroring startMoveto/haltMoveto above -- install_tool_drain_
+% rate/1 (or uninstall_tool_drain_rate/1) in place of moving_drain_
+% rate, a DEDICATED rate for the span of the action itself, distinct
+% from idle_drain_rate (this feature's own request: "keep a time and
+% drain rate of the battery specific for the action of installing or
+% uninstalling any tool" -- ONE rate per ACTION TYPE, defaulting to
+% idle_drain_rate's own configured value if config.yaml doesn't
+% override it, see config_to_prolog.py's own note), and install_tool_
+% duration(Tool,Duration) (or uninstall_tool_duration(Tool,Duration))
+% in place of walk_duration(CP,Tool,S,Duration). Even though install_
+% tool/uninstall_tool never move the robot, each one is still a FIXED-
+% DURATION leg exactly like a MoveTo leg is -- so it gets the SAME
+% "nominal drain minus a Duration-normalized signed deviation"
+% treatment that keeps Level EXACTLY LINEAR in elapsed time within the
+% leg (needed for first_battery_depletion_time's own closed-form
+% algebraic solve, shared with MoveTo -- same reason startMoveto's own
+% comment gives),
+% rather than the open-ended sqrt(Elapsed) idle formula the post-halt
+% clauses below (and interrupt's) use -- that one is for a genuinely
+% UNBOUNDED wait, where no Duration is known ahead of time, which is
+% not the case here. The post-halt clauses are themselves an EXACT
+% copy of haltMoveto's own post-halt clause, deliberately STILL using
+% plain idle_drain_rate (not install_tool_drain_rate/uninstall_tool_
+% drain_rate) -- once the leg ends the robot is just idle again, no
+% different from after a walk halts, exactly this feature's own "if
+% the robot doesn't move [and isn't mid-install/uninstall] we use the
+% same idle drain rate, no change on that" note.
+battery(Level, T, do(start_install_tool(Id,_Triggers,_ActionCode,T0), S)) :-
+    leg_start_battery(T0, S, B0),
+    tool_instance(Id, Kind),
+    install_tool_duration(Kind, Duration),
+    install_tool_drain_rate(Rate),
+    Elapsed0 is T - T0,
+    Elapsed is max(0.0, min(Elapsed0, Duration)),
+    sigma_battery(SigmaB),
+    zbatt(Zb),
+    moving_phase_deviation(Zb, SigmaB, Elapsed, Duration, Deviation),
+    NominalDrain is Rate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B0 - TotalDrain)).
+
+battery(Level, T, do(halt_install_tool(T1,Reason,Status), S)) :-
+    T =< T1,
+    battery(Level, T, S).
+battery(Level, T, do(halt_install_tool(T1,Reason,Status), S)) :-
+    T > T1,
+    battery(B1, T1, S),
+    idle_drain_rate(IdleRate),
+    sigma_battery(SigmaB),
+    zbatt(Zb),
+    Elapsed is T - T1,
+    Deviation is Zb * SigmaB * sqrt(Elapsed),
+    NominalDrain is IdleRate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B1 - TotalDrain)).
+
+battery(Level, T, do(start_uninstall_tool(Id,_Triggers,_ActionCode,T0), S)) :-
+    leg_start_battery(T0, S, B0),
+    tool_instance(Id, Kind),
+    uninstall_tool_duration(Kind, Duration),
+    uninstall_tool_drain_rate(Rate),
+    Elapsed0 is T - T0,
+    Elapsed is max(0.0, min(Elapsed0, Duration)),
+    sigma_battery(SigmaB),
+    zbatt(Zb),
+    moving_phase_deviation(Zb, SigmaB, Elapsed, Duration, Deviation),
+    NominalDrain is Rate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B0 - TotalDrain)).
+
+battery(Level, T, do(halt_uninstall_tool(T1,Reason,Status), S)) :-
+    T =< T1,
+    battery(Level, T, S).
+battery(Level, T, do(halt_uninstall_tool(T1,Reason,Status), S)) :-
+    T > T1,
+    battery(B1, T1, S),
+    idle_drain_rate(IdleRate),
+    sigma_battery(SigmaB),
+    zbatt(Zb),
+    Elapsed is T - T1,
+    Deviation is Zb * SigmaB * sqrt(Elapsed),
+    NominalDrain is IdleRate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B1 - TotalDrain)).
+
+% start_deploy_tool/halt_deploy_tool/start_retract_tool/halt_retract_
+% tool: SAME Duration-normalized anchor shape as the install/uninstall
+% pair just above -- deploy_tool_duration/2 (or retract_tool_
+% duration/2, both KIND-keyed via tool_instance/2) and deploy_tool_
+% drain_rate/1 (or retract_tool_drain_rate/1) in place of install_tool_
+% duration/uninstall_tool_duration/install_tool_drain_rate/
+% uninstall_tool_drain_rate; post-halt idle drain is the SAME plain
+% idle_drain_rate every other action's own post-halt clause already
+% uses (once the leg ends the robot -- and the tool -- are just idle
+% again).
+battery(Level, T, do(start_deploy_tool(Id,_Triggers,_ActionCode,T0), S)) :-
+    leg_start_battery(T0, S, B0),
+    tool_instance(Id, Kind),
+    deploy_tool_duration(Kind, Duration),
+    deploy_tool_drain_rate(Rate),
+    Elapsed0 is T - T0,
+    Elapsed is max(0.0, min(Elapsed0, Duration)),
+    sigma_battery(SigmaB),
+    zbatt(Zb),
+    moving_phase_deviation(Zb, SigmaB, Elapsed, Duration, Deviation),
+    NominalDrain is Rate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B0 - TotalDrain)).
+
+battery(Level, T, do(halt_deploy_tool(T1,Reason,Status), S)) :-
+    T =< T1,
+    battery(Level, T, S).
+battery(Level, T, do(halt_deploy_tool(T1,Reason,Status), S)) :-
+    T > T1,
+    battery(B1, T1, S),
+    idle_drain_rate(IdleRate),
+    sigma_battery(SigmaB),
+    zbatt(Zb),
+    Elapsed is T - T1,
+    Deviation is Zb * SigmaB * sqrt(Elapsed),
+    NominalDrain is IdleRate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B1 - TotalDrain)).
+
+battery(Level, T, do(start_retract_tool(Id,_Triggers,_ActionCode,T0), S)) :-
+    leg_start_battery(T0, S, B0),
+    tool_instance(Id, Kind),
+    retract_tool_duration(Kind, Duration),
+    retract_tool_drain_rate(Rate),
+    Elapsed0 is T - T0,
+    Elapsed is max(0.0, min(Elapsed0, Duration)),
+    sigma_battery(SigmaB),
+    zbatt(Zb),
+    moving_phase_deviation(Zb, SigmaB, Elapsed, Duration, Deviation),
+    NominalDrain is Rate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B0 - TotalDrain)).
+
+battery(Level, T, do(halt_retract_tool(T1,Reason,Status), S)) :-
+    T =< T1,
+    battery(Level, T, S).
+battery(Level, T, do(halt_retract_tool(T1,Reason,Status), S)) :-
+    T > T1,
+    battery(B1, T1, S),
+    idle_drain_rate(IdleRate),
+    sigma_battery(SigmaB),
+    zbatt(Zb),
+    Elapsed is T - T1,
+    Deviation is Zb * SigmaB * sqrt(Elapsed),
+    NominalDrain is IdleRate*Elapsed,
+    noisy_drain(NominalDrain, Deviation, TotalDrain),
+    Level is max(0, min(100, B1 - TotalDrain)).
+
+% pass-through: any future non-movement, non-tool action doesn't change
+% how battery is computed -- it's a pure function of T and of whichever
+% startMoveto/haltMoveto/interrupt/start_install_tool/halt_install_tool/
+% start_uninstall_tool/halt_uninstall_tool/start_deploy_tool/halt_
+% deploy_tool/start_retract_tool/halt_retract_tool anchors exist in the
+% history, same principle as at/4's own pass-through clause.
 battery(Level, T, do(A,S)) :-
     A \= startMoveto(_,_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
+    A \= start_install_tool(_,_,_,_), A \= halt_install_tool(_,_,_),
+    A \= start_uninstall_tool(_,_,_,_), A \= halt_uninstall_tool(_,_,_),
+    A \= start_deploy_tool(_,_,_,_), A \= halt_deploy_tool(_,_,_),
+    A \= start_retract_tool(_,_,_,_), A \= halt_retract_tool(_,_,_),
     battery(Level, T, S).
 
-% first_battery_depletion_time(+CP,+T0,+Duration,+B0,+Zb,-Tcross):
+% moving_phase_effective_rate(+Rate,+Zb,+SigmaB,+Duration,-EffectiveRate):
+% the shared "Duration-normalized effective drain rate" formula EVERY
+% closed-form battery-crossing predicate below uses (first_battery_
+% depletion_time/first_battery_below_time/first_battery_equal_time),
+% factored into one place rather than three copies of the same
+% arithmetic. Duration=<0.0 (a zero-length/zero-Duration leg -- see
+% moving_phase_deviation/5's own note just above for why this is a
+% genuine, valid case) makes this predicate simply FAIL rather than
+% divide by sqrt(0.0) -- correct BY CONSTRUCTION, not a special case
+% bolted on: a walk with zero elapsed time available can never
+% experience ANY threshold crossing DURING it, so "no solution" is
+% exactly the right answer, the same "FAILS = no crossing in this
+% walk" convention every caller below already documents for its OTHER
+% failure case (non-positive effective rate).
+moving_phase_effective_rate(Rate, Zb, SigmaB, Duration, EffectiveRate) :-
+    Duration > 0.0,
+    EffectiveRate is Rate - Zb*SigmaB/sqrt(Duration).
+
+% first_battery_depletion_time(+CP,+T0,+Duration,+B0,+Zb,+Tool,-Tcross):
 % CLOSED-FORM (not bracket/bisect) -- battery is exactly LINEAR in
 % elapsed time within one walk (fixed Zb => fixed EffectiveRate), so
 % the crossing at Level=0 is a direct algebraic solve. FAILS (no
@@ -616,22 +1168,25 @@ battery(Level, T, do(A,S)) :-
 % isn't actually decreasing -- noise happened to push it flat/up) or
 % the algebraic crossing falls beyond this walk's own span -- both
 % correctly represent "no depletion in this walk," exactly mirroring
-% how first_collision_time fails when there's no crossing.
-first_battery_depletion_time(CP,T0,Duration,B0,Zb,Tcross) :-
-    moving_drain_rate(MovingRate),
+% how first_collision_time fails when there's no crossing. Rate is the
+% moving-phase battery drain rate, already resolved to a plain number
+% by whichever poss/2 clause started this chain (tool_moving_drain_
+% rate(Tool,Rate), same lookup battery/3's own do(startMoveto(...),S)
+% clause makes) -- see earliest_halt/12's own note.
+first_battery_depletion_time(CP,T0,Duration,B0,Zb,Rate,Tcross) :-
     sigma_battery(SigmaB),
-    EffectiveRate is MovingRate - Zb*SigmaB/sqrt(Duration),
+    moving_phase_effective_rate(Rate, Zb, SigmaB, Duration, EffectiveRate),
     EffectiveRate > 0,
     Tcross0 is T0 + B0/EffectiveRate,
     Tcross0 =< T0 + Duration,
     Tcross = Tcross0.
 
-% first_battery_below_time(+CP,+T0,+Duration,+B0,+Zb,+Threshold,-Tcross):
+% first_battery_below_time(+CP,+T0,+Duration,+B0,+Zb,+Rate,+Threshold,-Tcross):
 % the SAME closed-form algebra as first_battery_depletion_time above,
 % generalized to an arbitrary Threshold instead of hardcoded Level=0 --
 % this is what battery_below(Threshold) (see TRIGGERS section and
 % holds(battery_below(...)) further down) uses, kept as a genuinely
-% SEPARATE predicate from first_battery_depletion_time/6 (not a
+% SEPARATE predicate from first_battery_depletion_time/7 (not a
 % generalize-in-place rename) since battery_depleted (Level=0 exactly)
 % stays its own distinct trigger/Reason, on request. UNLIKE
 % first_battery_depletion_time, B0 can legitimately already be AT OR
@@ -641,19 +1196,18 @@ first_battery_depletion_time(CP,T0,Duration,B0,Zb,Tcross) :-
 % T0" graceful clause every other threshold-crossing predicate in this
 % theory already has, rather than relying on the algebra to degrade
 % gracefully on its own (it only does that at exactly Threshold=0).
-first_battery_below_time(CP,T0,Duration,B0,Zb,Threshold,T0) :-
+first_battery_below_time(CP,T0,Duration,B0,Zb,_Rate,Threshold,T0) :-
     B0 =< Threshold.
-first_battery_below_time(CP,T0,Duration,B0,Zb,Threshold,Tcross) :-
+first_battery_below_time(CP,T0,Duration,B0,Zb,Rate,Threshold,Tcross) :-
     B0 > Threshold,
-    moving_drain_rate(MovingRate),
     sigma_battery(SigmaB),
-    EffectiveRate is MovingRate - Zb*SigmaB/sqrt(Duration),
+    moving_phase_effective_rate(Rate, Zb, SigmaB, Duration, EffectiveRate),
     EffectiveRate > 0,
     Tcross0 is T0 + (B0-Threshold)/EffectiveRate,
     Tcross0 =< T0 + Duration,
     Tcross = Tcross0.
 
-% first_battery_equal_time(+CP,+T0,+Duration,+B0,+Zb,+Threshold,-Tcross):
+% first_battery_equal_time(+CP,+T0,+Duration,+B0,+Zb,+Rate,+Threshold,-Tcross):
 % the SAME closed-form algebra again, this time for Level(T) = Threshold
 % EXACTLY. Battery is a continuous, monotonically non-increasing
 % function of T within one walk (see noisy_drain/3's own note), so for
@@ -667,19 +1221,18 @@ first_battery_below_time(CP,T0,Duration,B0,Zb,Threshold,Tcross) :-
 % from Threshold from here, so this correctly FAILS (no clause matches)
 % rather than firing at T0. B0 = Threshold exactly is its own graceful
 % "already true" case (Tcross=T0), same convention as everywhere else.
-first_battery_equal_time(CP,T0,Duration,B0,Zb,Threshold,T0) :-
+first_battery_equal_time(CP,T0,Duration,B0,Zb,_Rate,Threshold,T0) :-
     B0 =:= Threshold.
-first_battery_equal_time(CP,T0,Duration,B0,Zb,Threshold,Tcross) :-
+first_battery_equal_time(CP,T0,Duration,B0,Zb,Rate,Threshold,Tcross) :-
     B0 > Threshold,
-    moving_drain_rate(MovingRate),
     sigma_battery(SigmaB),
-    EffectiveRate is MovingRate - Zb*SigmaB/sqrt(Duration),
+    moving_phase_effective_rate(Rate, Zb, SigmaB, Duration, EffectiveRate),
     EffectiveRate > 0,
     Tcross0 is T0 + (B0-Threshold)/EffectiveRate,
     Tcross0 =< T0 + Duration,
     Tcross = Tcross0.
 
-% first_battery_over_time(+CP,+T0,+Duration,+B0,+Zb,+Threshold,-Tcross):
+% first_battery_over_time(+CP,+T0,+Duration,+B0,+Zb,+Rate,+Threshold,-Tcross):
 % Same TWO-CLAUSE shape as first_battery_below_time/first_battery_equal_time
 % (an "already true at T0" clause plus a general future-crossing search),
 % not a bespoke single-fact shortcut, so this stays a genuinely VALID,
@@ -706,34 +1259,57 @@ first_battery_equal_time(CP,T0,Duration,B0,Zb,Threshold,Tcross) :-
 % negative. If/when battery/3's regression is extended to model real
 % recharging, add clause 2 here using WHATEVER rate formula that
 % extension introduces (mirroring how clause 2 of
-% first_battery_below_time/first_battery_equal_time use
-% moving_drain_rate/sigma_battery today) -- CP/Duration/Zb are already
-% threaded through, genuinely used (not wildcarded away), specifically
-% so that clause can be added without changing this predicate's
-% signature or any of its callers.
-first_battery_over_time(CP,T0,Duration,B0,Zb,Threshold,T0) :-
+% first_battery_below_time/first_battery_equal_time use Rate/sigma_
+% battery today) -- CP/Duration/Zb/Rate are already threaded through,
+% genuinely used (not wildcarded away), specifically so that clause can
+% be added without changing this predicate's signature or any of its
+% callers.
+first_battery_over_time(CP,T0,Duration,B0,Zb,_Rate,Threshold,T0) :-
     B0 > Threshold.
 
-% battery_at_leg(+T0,+Duration,+Zb,+B0,+T,-Level): Level(T) during ONE
-% moveto leg, as a function of T alone -- the EXACT SAME formula as
+% battery_at_leg(+T0,+Duration,+Zb,+B0,+Rate,+T,-Level): Level(T) during
+% ONE moveto leg, as a function of T alone -- the EXACT SAME formula as
 % battery/3's own do(startMoveto(...),S) clause above (leg_start_
 % battery(T0,S,B0) resolved to a plain value, not re-derived from S),
-% just without S, for use by holds_leg/9 further down (which only ever
-% has CP/T0/Duration/Z/Zt/Zb/B0 on hand -- the same flat signature
-% every trigger_crossing_time/11 clause already receives, not a full
+% just without S, for use by holds_leg/10 further down (which only ever
+% has CP/T0/Duration/Z/Zt/Zb/B0/Rate on hand -- the same flat signature
+% every trigger_crossing_time/12 clause already receives, not a full
 % situation term). MUST be kept in sync BY HAND with battery/3's own
 % do(startMoveto(...),S) clause -- there is no single shared definition
-% because that clause additionally resolves B0 from S via
-% leg_start_battery/3, which this one takes already-resolved.
-battery_at_leg(T0,Duration,Zb,B0,T,Level) :-
+% because that clause additionally resolves B0/Tool (then Rate, via
+% tool_moving_drain_rate/2) from S via leg_start_battery/3 and hitch/2,
+% which this one takes already-resolved.
+battery_at_leg(T0,Duration,Zb,B0,Rate,T,Level) :-
     Elapsed0 is T - T0,
     Elapsed is max(0.0, min(Elapsed0, Duration)),
-    moving_drain_rate(MovingRate),
     sigma_battery(SigmaB),
-    Deviation is Zb * SigmaB * Elapsed / sqrt(Duration),
-    NominalDrain is MovingRate*Elapsed,
+    moving_phase_deviation(Zb, SigmaB, Elapsed, Duration, Deviation),
+    NominalDrain is Rate*Elapsed,
     noisy_drain(NominalDrain, Deviation, TotalDrain),
     Level is max(0, min(100, B0 - TotalDrain)).
+
+% first_tool_battery_depletion_time/6, first_tool_battery_below_time/7,
+% first_tool_battery_equal_time/7, first_tool_battery_over_time/7 USED
+% to live here -- install_tool/uninstall_tool's own twins of first_
+% battery_depletion_time/first_battery_below_time/first_battery_equal_
+% time/first_battery_over_time above, differing only by NOT threading
+% an (unused) CP parameter through. Removed once trigger_crossing_
+% time/13's own battery clauses (above -- Mode-wildcarded, since Rate
+% is what actually varies, not Mode) started calling the CP-taking
+% originals directly, passing whatever placeholder CP the caller
+% supplies (unused inside either version -- see first_battery_
+% depletion_time's own note above on why CP was always dead weight
+% there).
+
+% tool_battery_at_leg/7 USED to live here -- an install_tool/
+% uninstall_tool-only twin of battery_at_leg/7 above, differing only in
+% variable names, not in signature or body (both take Rate directly by
+% this point). Removed as dead code once holds_leg/11's own Mode=1
+% battery clauses (see that predicate's own note) started calling
+% battery_at_leg/7 directly instead -- the ONLY thing that used to call
+% tool_battery_at_leg/7 was tool_holds_leg's own battery clauses,
+% themselves removed for the same reason (see the note above tool_
+% trigger_crossing_time(guard_break(...)) further down).
 
 % ---------------------------------------------------------------
 % TRIGGERS -- the TEMPLATE mechanism. A leg's Triggers argument is
@@ -886,71 +1462,114 @@ battery_at_leg(T0,Duration,Zb,B0,T,Level) :-
 % (Threshold), is UNCHANGED -- Code is carried ALONGSIDE it, not
 % embedded inside it, so halted_with/2 and everything built on it
 % keeps working exactly as before).
-trigger_crossing_time(collision, CP,T0,Duration,Z,Zt,_Zb,_B0, crashed(ObstacleId), Tcross, none) :-
+% Mode (0 = MoveTo, 1 = install_tool/uninstall_tool -- SHARED with
+% holds_leg/11's own Mode, see that predicate's own note) restricts
+% these clauses the SAME way it restricts holds_leg/11's own motion
+% clauses: collision/obstacle_in_bound/obstacle_on_path/line_of_sight_
+% clear/crosses_segment below all pattern-match Mode=0 directly IN THE
+% HEAD, so under Mode=1 none of them unify at all -- CP is NEVER
+% touched, and all_trigger_candidates/11's own existing "no matching
+% clause, silently skip" convention (see its own note below) handles
+% the rest with NO new code, exactly the same way it already handles a
+% genuinely unrecognized trigger name. Unlike guard_break further down,
+% these clauses need NO extra outer gate the way tool_cond_supported/1
+% guards guard_break -- there is no first_becomes_false_time-style
+% "absence at T0 read as already-false" ambiguity here: all_trigger_
+% candidates' own two clauses are a plain "did this trigger fire, or
+% not" dispatch, so a Mode-blocked clause and a genuinely-inapplicable
+% trigger name look identical to it, both correctly contributing
+% nothing. battery/battery_below/battery_equal/battery_over wildcard
+% Mode away entirely -- both MoveTo and install_tool/uninstall_tool
+% legitimately want battery triggers evaluated the same way.
+trigger_crossing_time(collision, CP,T0,Duration,Z,Zt,_Zb,_B0,_Rate,0, crashed(ObstacleId), Tcross, none) :-
     first_collision_time(CP,T0,Duration,Z,Zt,Tcross,ObstacleId).
 
-trigger_crossing_time(battery, CP,T0,Duration,_Z,_Zt,Zb,B0, battery_depleted, Tcross, none) :-
-    first_battery_depletion_time(CP,T0,Duration,B0,Zb,Tcross).
+trigger_crossing_time(battery, CP,T0,Duration,_Z,_Zt,Zb,B0,Rate,_Mode, battery_depleted, Tcross, none) :-
+    first_battery_depletion_time(CP,T0,Duration,B0,Zb,Rate,Tcross).
 
-trigger_crossing_time(obstacle_in_bound(Threshold,Code), CP,T0,Duration,Z,Zt,_Zb,_B0, obstacle_in_bound(Threshold,ObstacleId), Tcross, Code) :-
+trigger_crossing_time(obstacle_in_bound(Threshold,Code), CP,T0,Duration,Z,Zt,_Zb,_B0,_Rate,0, obstacle_in_bound(Threshold,ObstacleId), Tcross, Code) :-
     clearance_adjusted_threshold(Threshold, AdjThreshold),
     first_threshold_crossing_time(CP,T0,Duration,Z,Zt,AdjThreshold,Tcross,ObstacleId).
 
-trigger_crossing_time(obstacle_on_path(Threshold,Code), CP,T0,Duration,Z,Zt,_Zb,_B0, obstacle_on_path(Threshold,ObstacleId), Tcross, Code) :-
+trigger_crossing_time(obstacle_on_path(Threshold,Code), CP,T0,Duration,Z,Zt,_Zb,_B0,_Rate,0, obstacle_on_path(Threshold,ObstacleId), Tcross, Code) :-
     clearance_adjusted_threshold(Threshold, AdjThreshold),
     first_on_path_crossing_time(CP,T0,Duration,Z,Zt,AdjThreshold,Tcross,ObstacleId).
 
-trigger_crossing_time(battery_below(Threshold,Code), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_under(Threshold), Tcross, Code) :-
-    first_battery_below_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
+trigger_crossing_time(battery_below(Threshold,Code), CP,T0,Duration,_Z,_Zt,Zb,B0,Rate,_Mode, battery_under(Threshold), Tcross, Code) :-
+    first_battery_below_time(CP,T0,Duration,B0,Zb,Rate,Threshold,Tcross).
 
-trigger_crossing_time(battery_equal(Threshold,Code), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_equal(Threshold), Tcross, Code) :-
-    first_battery_equal_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
+trigger_crossing_time(battery_equal(Threshold,Code), CP,T0,Duration,_Z,_Zt,Zb,B0,Rate,_Mode, battery_equal(Threshold), Tcross, Code) :-
+    first_battery_equal_time(CP,T0,Duration,B0,Zb,Rate,Threshold,Tcross).
 
-trigger_crossing_time(battery_over(Threshold,Code), CP,T0,Duration,_Z,_Zt,Zb,B0, battery_over(Threshold), Tcross, Code) :-
-    first_battery_over_time(CP,T0,Duration,B0,Zb,Threshold,Tcross).
+trigger_crossing_time(battery_over(Threshold,Code), CP,T0,Duration,_Z,_Zt,Zb,B0,Rate,_Mode, battery_over(Threshold), Tcross, Code) :-
+    first_battery_over_time(CP,T0,Duration,B0,Zb,Rate,Threshold,Tcross).
 
-trigger_crossing_time(line_of_sight_clear(ObstacleId,GX,GY,Code), CP,T0,Duration,Z,Zt,_Zb,_B0, line_of_sight_clear(ObstacleId,GX,GY), Tcross, Code) :-
+trigger_crossing_time(line_of_sight_clear(ObstacleId,GX,GY,Code), CP,T0,Duration,Z,Zt,_Zb,_B0,_Rate,0, line_of_sight_clear(ObstacleId,GX,GY), Tcross, Code) :-
     first_line_of_sight_clear_time(CP,T0,Duration,Z,Zt,ObstacleId,GX,GY,Tcross).
 
-trigger_crossing_time(crosses_segment(SX,SY,GX,GY,Code), CP,T0,Duration,Z,Zt,_Zb,_B0, crosses_segment(SX,SY,GX,GY), Tcross, Code) :-
+trigger_crossing_time(crosses_segment(SX,SY,GX,GY,Code), CP,T0,Duration,Z,Zt,_Zb,_B0,_Rate,0, crosses_segment(SX,SY,GX,GY), Tcross, Code) :-
     first_segment_crossing_time(CP,T0,Duration,Z,Zt,SX,SY,GX,GY,Tcross).
 
 % guard_break(Cond,Code): the GENERIC, AUTOMATICALLY-DERIVED trigger
-% bt_to_prolog.py's guard-derivation pass emits for a MoveTo sitting
-% under a ReactiveSequence/ReactiveFallback ancestor with a Condition
-% left sibling (see that file's own CONTROL-FLOW GUARD DERIVATION
-% note) -- Cond is ALREADY the exact term that must stay TRUE for the
-% guard to keep holding: the bare condition itself for a
-% ReactiveSequence-style "left siblings must all SUCCEED" guard, or
-% neg(Condition) for a ReactiveFallback-style "left siblings must all
-% FAIL" guard (bt_to_prolog.py builds this by NEGATING the actual
-% condition per the required polarity -- and per any <Inverter> in the
-% chain -- rather than by looking up a pre-built "opposite" trigger
-% name, so this works uniformly for every condition in schema.yaml's
-% conditions: list with no per-condition crossing-direction table to
-% keep in sync or leave a gap in). Fires at the first instant Cond
-% stops holding -- see first_becomes_false_time/9 and holds_leg/9
-% further down (right after holds/2's own condition clauses, which
-% holds_leg/9 mirrors).
-trigger_crossing_time(guard_break(Cond,Code), CP,T0,Duration,Z,Zt,Zb,B0, guard_break(Cond), Tcross, Code) :-
-    first_becomes_false_time(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Tcross).
+% bt_to_prolog.py's guard-derivation pass emits for a MoveTo (Mode=0)
+% or an InstallTool/UninstallTool (Mode=1) sitting under a
+% ReactiveSequence/ReactiveFallback ancestor with a Condition left
+% sibling (see that file's own CONTROL-FLOW GUARD DERIVATION note) --
+% Cond is ALREADY the exact term that must stay TRUE for the guard to
+% keep holding: the bare condition itself for a ReactiveSequence-style
+% "left siblings must all SUCCEED" guard, or neg(Condition) for a
+% ReactiveFallback-style "left siblings must all FAIL" guard (bt_to_
+% prolog.py builds this by NEGATING the actual condition per the
+% required polarity -- and per any <Inverter> in the chain -- rather
+% than by looking up a pre-built "opposite" trigger name, so this works
+% uniformly for every condition in schema.yaml's conditions: list with
+% no per-condition crossing-direction table to keep in sync or leave a
+% gap in). Fires at the first instant Cond stops holding -- see first_
+% becomes_false_time/11 and holds_leg/11 further down (right after
+% holds/2's own condition clauses, which holds_leg/11 mirrors).
+%
+% TWO clauses, split on Mode, NOT one clause forwarding Mode straight
+% through -- Mode=1 needs the SAME tool_cond_supported/1 gate this
+% predicate's install_tool/uninstall_tool analogue used to carry on its
+% own separate guard_break clause (see that predicate's own note above
+% for exactly why: first_becomes_false_time's own first clause reads
+% "no matching holds_leg/11 clause" as "already false at T0", so a
+% Mode=1-blocked motion Cond needs to be intercepted BEFORE ever
+% reaching first_becomes_false_time, not just have its holds_leg call
+% silently fail). Mode=0 needs no such gate -- holds_leg/11's own Mode=0
+% clause set already covers every functor _reduce_guard_condition can
+% ever emit (see holds_leg/11's own note), so there is no "unsupported
+% Cond" case for MoveTo to guard against.
+trigger_crossing_time(guard_break(Cond,Code), CP,T0,Duration,Z,Zt,Zb,B0,Rate,0, guard_break(Cond), Tcross, Code) :-
+    first_becomes_false_time(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,0,Tcross).
+trigger_crossing_time(guard_break(Cond,Code), CP,T0,Duration,Z,Zt,Zb,B0,Rate,1, guard_break(Cond), Tcross, Code) :-
+    tool_cond_supported(Cond),
+    first_becomes_false_time(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,1,Tcross).
 
 % all_trigger_candidates(+Triggers,...,-Candidates): Candidates is a
 % list of Reason-Time-Code TRIPLES now (was Reason-Time pairs), one
 % per trigger in Triggers that ACTUALLY fires in this resolved world
 % (triggers that don't fire contribute nothing -- same "absence, not
-% sentinel" convention as everywhere else). Unrecognized trigger names
-% (no matching trigger_crossing_time/11 clause) are silently skipped,
-% same as "never fires" -- lenient by design, so a typo in a Triggers
+% sentinel" convention as everywhere else). Unrecognized trigger names,
+% AND every Mode=0-only clause when Mode=1 (see trigger_crossing_time/
+% 13's own note above), are silently skipped the SAME way -- no
+% matching clause at all -- lenient by design, so a typo in a Triggers
 % list doesn't halt the whole theory, just means that trigger never
-% contributes.
-all_trigger_candidates([], _,_,_,_,_,_,_, []).
-all_trigger_candidates([Trig|Rest], CP,T0,Duration,Z,Zt,Zb,B0, [Reason-Tcross-Code|RestCands]) :-
-    trigger_crossing_time(Trig, CP,T0,Duration,Z,Zt,Zb,B0, Reason, Tcross, Code),
-    all_trigger_candidates(Rest, CP,T0,Duration,Z,Zt,Zb,B0, RestCands).
-all_trigger_candidates([Trig|Rest], CP,T0,Duration,Z,Zt,Zb,B0, RestCands) :-
-    \+ trigger_crossing_time(Trig, CP,T0,Duration,Z,Zt,Zb,B0, _, _, _),
-    all_trigger_candidates(Rest, CP,T0,Duration,Z,Zt,Zb,B0, RestCands).
+% contributes. Rate -- the battery drain rate for whichever consumer is
+% calling in (moving-phase for MoveTo via tool_moving_drain_rate(Tool,
+% Rate), install/uninstall-phase for install_tool/uninstall_tool via
+% install_tool_drain_rate/1 or uninstall_tool_drain_rate/1 -- see
+% earliest_halt/13's own note), already resolved to a plain number --
+% rides alongside CP/Z/Zt/Zb/B0/Mode, resolved ONCE by earliest_halt/
+% 13's own caller and passed straight through, same as every other
+% leg-constant parameter here.
+all_trigger_candidates([], _,_,_,_,_,_,_,_,_, []).
+all_trigger_candidates([Trig|Rest], CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode, [Reason-Tcross-Code|RestCands]) :-
+    trigger_crossing_time(Trig, CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode, Reason, Tcross, Code),
+    all_trigger_candidates(Rest, CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode, RestCands).
+all_trigger_candidates([Trig|Rest], CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode, RestCands) :-
+    \+ trigger_crossing_time(Trig, CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode, _, _, _),
+    all_trigger_candidates(Rest, CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode, RestCands).
 
 % earliest_of(+TriplesList, -ReasonTimeCodeTriple): generic "minimum by
 % SECOND element (Time)" over a non-empty list of Reason-Time-Code
@@ -969,6 +1588,93 @@ earliest_of([R1-T1-C1|Rest], Result) :-
     earliest_of(Rest, R2-T2-C2),
     T1 > T2,
     Result = R2-T2-C2.
+
+% ---------------------------------------------------------------
+% TOOL TRIGGERS -- install_tool/uninstall_tool USED to have their own,
+% separate RESTRICTED analogue of the TRIGGERS section above
+% (tool_trigger_crossing_time/all_tool_trigger_candidates/tool_
+% earliest_halt) -- REMOVED on request: trigger_crossing_time/13 and
+% all_trigger_candidates/11 above, and earliest_halt/13 further down,
+% are now the SINGLE SHARED "what happens first" engine for BOTH
+% MoveTo (Mode=0) and install_tool/uninstall_tool (Mode=1), the exact
+% same Mode mechanism that already let holds_leg/first_becomes_false_
+% time/guard_bracket_scan/guard_bisect be shared. install_tool/
+% uninstall_tool never move the robot, so a MOTION-based trigger
+% (collision, obstacle_in_bound, obstacle_on_path, line_of_sight_
+% clear, crosses_segment) has no meaningful geometry to check -- but
+% (as with holds_leg's own motion clauses) that no longer needs a
+% SEPARATE restricted predicate to enforce: trigger_crossing_time/13's
+% own motion-based clauses pattern-match Mode=0 directly in their own
+% heads (see that predicate's own note, back where it's defined), so
+% under Mode=1 none of them unify, CP is never touched, and all_
+% trigger_candidates/11's own EXISTING third clause -- "no matching
+% trigger_crossing_time/13 clause, silently skip" -- treats that
+% identically to "never fires", with NO new code needed for it (that
+% third clause already existed for the unrelated case of a genuinely
+% unrecognized trigger NAME, e.g. a typo -- a Mode-blocked trigger
+% just falls into the exact same bucket). module/translators/bt_to_
+% prolog.py's own _is_battery_trigger validation at translation time
+% is still what actually stops a BT author from writing a motion
+% trigger on <InstallTool>/<UninstallTool> in the first place -- this
+% Mode-blocking is the theory-level defense-in-depth BEHIND that (same
+% "hand-written plan_generated.pl bypassing the translator, same as
+% problem3's own" scenario every such defense in this file guards
+% against), not a substitute for it.
+%
+% guard_break(Cond,Code) is the ONE trigger_crossing_time/13 clause
+% that DOES need an explicit outer gate under Mode=1 (tool_cond_
+% supported/1, kept below) -- unlike the motion clauses above, it has
+% no per-trigger-name matching to fall back on (a SINGLE clause covers
+% every possible Cond shape), so a Mode=1-blocked motion Cond reaching
+% it would make holds_leg/11 correctly have no matching clause, which
+% first_becomes_false_time/11's own first clause (\+ holds_leg(...,
+% T0)) would misread as "already false at T0" -- firing IMMEDIATELY
+% instead of never. See trigger_crossing_time/13's own guard_break
+% clauses (above, split by Mode) for exactly where this gate applies.
+% Under NORMAL (translator-produced) operation this can never actually
+% happen -- bt_to_prolog.py's own _guard_condition_is_battery_only
+% validation already guarantees Cond is battery-only for install_tool/
+% uninstall_tool before a plan is ever written -- so, same as the
+% motion-trigger case above, this gate exists purely as defense-in-
+% depth for a bypassed-validation plan, not because ordinary use can
+% trigger it.
+tool_cond_supported(and(P,Q)) :- tool_cond_supported(P), tool_cond_supported(Q).
+tool_cond_supported(or(P,Q)) :- tool_cond_supported(P), tool_cond_supported(Q).
+tool_cond_supported(neg(P)) :- tool_cond_supported(P).
+tool_cond_supported(battery_below(_)).
+tool_cond_supported(battery_equal(_)).
+tool_cond_supported(battery_over(_)).
+
+% tool_leg_status(+Reason,+Code,-Status): the install_tool/
+% uninstall_tool/deploy_tool/retract_tool analogue of leg_status/9
+% above -- but NOTE the difference from moveto's own rule: reaching
+% "natural completion" is NOT itself a success (unlike moveto's
+% Reason=completed->true) -- *_tool_success(Tool,_)/*_tool_failure
+% (Tool,_) are BOTH possible outcomes of natural completion (the coin
+% flip already resolved which one -- see poss(halt_install_tool(...))
+% below), so THIS predicate
+% only ever sees the ALREADY-DECIDED Reason, never the completed
+% sentinel itself (see earliest_halt/13's own WARNING on why that
+% shared spelling with MoveTo's own completed does NOT share its
+% meaning). battery_depleted is the one hard, non-reactive
+% failure (mirroring battery_depleted's own classification in
+% leg_status/9); every OTHER battery-related trigger (battery_under/
+% equal/over(Threshold)) reactive-classifies, same convention.
+tool_leg_status(install_tool_success(_Tool), _Code, true).
+tool_leg_status(uninstall_tool_success(_Tool), _Code, true).
+tool_leg_status(install_tool_failure(_Tool), _Code, false).
+tool_leg_status(uninstall_tool_failure(_Tool), _Code, false).
+tool_leg_status(deploy_tool_success(_Tool), _Code, true).
+tool_leg_status(retract_tool_success(_Tool), _Code, true).
+tool_leg_status(deploy_tool_failure(_Tool), _Code, false).
+tool_leg_status(retract_tool_failure(_Tool), _Code, false).
+tool_leg_status(battery_depleted, _Code, false).
+tool_leg_status(Reason, Code, reactive(Code)) :-
+    Reason \= install_tool_success(_), Reason \= uninstall_tool_success(_),
+    Reason \= install_tool_failure(_), Reason \= uninstall_tool_failure(_),
+    Reason \= deploy_tool_success(_), Reason \= retract_tool_success(_),
+    Reason \= deploy_tool_failure(_), Reason \= retract_tool_failure(_),
+    Reason \= battery_depleted.
 
 % walk_noisy_point(+CP,+T0,+Duration,+Z,+Zt,+T,-X,-Y): position along
 % the spline at time T, given TWO ALREADY-RESOLVED, INDEPENDENT noise
@@ -1080,8 +1786,37 @@ now(0, s0).
 now(T, do(startMoveto(_,_,_,T),_)).
 now(T, do(haltMoveto(T,_,_),_)).
 now(T, do(interrupt(T),_)).
+% start_install_tool/halt_install_tool (and the uninstall pair) ALSO
+% genuinely advance the clock -- start_install_tool(...) takes real
+% time to REACH (T0 is when the install itself begins, exactly
+% mirroring startMoveto's own T0), and halt_install_tool(...) reports
+% the instant it ends, exactly mirroring haltMoveto's own T. UNLIKE
+% at/4/moving/1/current_walk/6 (whose own generic pass-through clauses
+% already handle these four new action functors correctly with no
+% changes at all) and battery/3 (which DOES need its own new anchor
+% clauses for these four functors -- see do_node(install_tool_leg
+% (...))'s own note), now/2 would be WRONG without these: its own
+% generic pass-through simply reuses whatever "now" already was,
+% which is only correct for a bookkeeping MARKER with no clock effect
+% of its own (checked/planned/sampled), not for an action that
+% GENUINELY advances time.
+now(T0, do(start_install_tool(_,_,_,T0),_)).
+now(T, do(halt_install_tool(T,_,_),_)).
+now(T0, do(start_uninstall_tool(_,_,_,T0),_)).
+now(T, do(halt_uninstall_tool(T,_,_),_)).
+% start_deploy_tool/halt_deploy_tool/start_retract_tool/halt_retract_
+% tool: SAME genuine-clock-advance shape as the install/uninstall pair
+% just above -- deploying/retracting is a fixed-Duration action too.
+now(T0, do(start_deploy_tool(_,_,_,T0),_)).
+now(T, do(halt_deploy_tool(T,_,_),_)).
+now(T0, do(start_retract_tool(_,_,_,T0),_)).
+now(T, do(halt_retract_tool(T,_,_),_)).
 now(T, do(A,S)) :-
     A \= startMoveto(_,_,_,_), A \= haltMoveto(_,_,_), A \= interrupt(_),
+    A \= start_install_tool(_,_,_,_), A \= halt_install_tool(_,_,_),
+    A \= start_uninstall_tool(_,_,_,_), A \= halt_uninstall_tool(_,_,_),
+    A \= start_deploy_tool(_,_,_,_), A \= halt_deploy_tool(_,_,_),
+    A \= start_retract_tool(_,_,_,_), A \= halt_retract_tool(_,_,_),
     now(T, S).
 
 % haltMoveto(T,Reason): the ways a walk stops other than an interrupt.
@@ -1096,7 +1831,7 @@ now(T, do(A,S)) :-
 % or running the battery dry without ever noticing, if collision/
 % battery aren't in its own Triggers list.
 %
-% earliest_halt/11 is the SINGLE SHARED definition of "what happens
+% earliest_halt/12 is the SINGLE SHARED definition of "what happens
 % first" -- used here, by Poss(interrupt(...)) below, AND by
 % verify_safe further down (called there with Z=0.0,Zt=0.0,Zb=0.0
 % instead of the resolved noise). Having exactly ONE definition, rather
@@ -1107,9 +1842,47 @@ now(T, do(A,S)) :-
 % candidate's own redescend-target code (none for natural completion/
 % collision/battery, since those never classify to reactive(_) --
 % see leg_status/9 further down and the CONTROL-FLOW REDESCEND TARGETS
-% note above do_node(reactivesequence(...)) further down).
-earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, Reason,T,Code) :-
-    all_trigger_candidates(Triggers, CP,T0,Duration,Z,Zt,Zb,B0, ExtraCandidates),
+% note above do_node(reactivesequence(...)) further down). Rate is the
+% battery drain rate for whichever consumer is calling in, already
+% resolved to a plain number by this predicate's own FIVE callers --
+% poss(haltMoveto(...))/poss(interrupt(...))/verify_safe (MoveTo,
+% effective_tool_moving_drain_rate(Tool,S,Rate), Mode=0) and poss(halt_install_
+% tool(...))/poss(halt_uninstall_tool(...)) (install_tool_drain_rate/1
+% or uninstall_tool_drain_rate/1, Mode=1) -- it rides alongside CP/Z/
+% Zt/Zb/B0/Mode into all_trigger_candidates/11, same as every other
+% leg-constant parameter; it does NOT affect NaturalEnd here (Duration
+% itself already reflects whatever Speed/no-Speed applies, resolved
+% separately by this predicate's own caller before Duration ever
+% reaches here). Mode is likewise just forwarded -- see trigger_
+% crossing_time/13's and holds_leg/11's own notes for what it means.
+% This predicate is now the SINGLE SHARED "what happens first" engine
+% for BOTH MoveTo and install_tool/uninstall_tool -- see the module's
+% own note above tool_cond_supported/1 for why install_tool/uninstall_
+% tool's own trigger dispatch (formerly tool_earliest_halt/all_tool_
+% trigger_candidates/tool_trigger_crossing_time, all removed) could be
+% folded in here with no CP-tolerance work needed, the same reasoning
+% that already let holds_leg/first_becomes_false_time/guard_bracket_
+% scan/guard_bisect be shared.
+%
+% WARNING -- SAME SENTINEL ATOM, NOT THE SAME MEANING ACROSS Mode: for
+% MoveTo (Mode=0), Reason=completed IS the final answer -- leg_status/9
+% maps it straight to Status=true, since reaching a walk's own natural
+% end already means success, nothing else to decide. For install_tool/
+% uninstall_tool (Mode=1), Reason=completed here is NOT a final answer
+% at all -- it is a pure SENTINEL meaning "reached the full Duration
+% with nothing halting it early", consumed immediately by poss(halt_
+% install_tool(...))/poss(halt_uninstall_tool(...)) (which match on it
+% exactly, in their own first clause), turning THAT specific outcome
+% into a SEPARATE success-or-failure coin flip (install_tool_result/3/
+% uninstall_tool_result/3) BEFORE Status is ever decided. This atom's
+% own value NEVER reaches tool_leg_status/3 or gets recorded as a real
+% Reason for install_tool/uninstall_tool -- it's discarded in favor of
+% whatever Reason0 the coin flip produces the moment it's matched. Do
+% not assume "Reason=completed" means "succeeded" under Mode=1 the way
+% it does under Mode=0 -- see poss(halt_install_tool(...))'s own note
+% for why the two spellings were deliberately merged anyway.
+earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0,Rate,Mode, Reason,T,Code) :-
+    all_trigger_candidates(Triggers, CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode, ExtraCandidates),
     NaturalEnd is T0 + Duration,
     earliest_of([completed-NaturalEnd-none], ExtraCandidates, Reason-T-Code).
 
@@ -1125,12 +1898,14 @@ earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, Reason,T,Code) :-
 poss(haltMoveto(T, Reason, Status), S) :-
     moving(S),
     current_walk(S, CP, Triggers, ActionCode, T0, SPrev),
-    walk_duration(CP, Duration),
+    hitch(Tool, SPrev),
+    walk_duration(CP, Tool, SPrev, Duration),
+    effective_tool_moving_drain_rate(Tool, SPrev, Rate),
     z(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Z),
     zt(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Zt),
     zbatt(Zb),
     leg_start_battery(T0, SPrev, B0),
-    earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, Reason0,T,Code),
+    earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0,Rate,0, Reason0,T,Code),
     leg_status(Reason0, CP, T0, Duration, Z, Zt, T, Code, Status),
     tag_reason(Reason0, ActionCode, Reason).
 
@@ -1240,13 +2015,305 @@ append([H|T], L, [H|R]) :- append(T, L, R).
 poss(interrupt(T), S) :-
     moving(S),
     current_walk(S, CP, Triggers, T0, SPrev),
-    walk_duration(CP, Duration),
+    hitch(Tool, SPrev),
+    walk_duration(CP, Tool, SPrev, Duration),
+    effective_tool_moving_drain_rate(Tool, SPrev, Rate),
     z(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Z),
     zt(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Zt),
     zbatt(Zb),
     leg_start_battery(T0, SPrev, B0),
-    earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0, _Reason,Tend,_Code),
+    earliest_halt(CP,Triggers,T0,Duration,Z,Zt,Zb,B0,Rate,0, _Reason,Tend,_Code),
     T >= T0, T < Tend.
+
+% poss(take_sample(SampleId,ActionCode,Reason,Status), S): take_sample's
+% own ONE precondition -- \+ moving(S), can't take a sample mid-walk
+% (the robot's own position is only meaningfully "where I am right
+% now" once a walk has actually stopped -- see at/4's own note on
+% freezing after a halt). Otherwise derives X,Y (at/4, already
+% resolved) and draws sample_result/3, binding Reason/Status TOGETHER
+% -- the SAME "Poss derives the action term's own output arguments"
+% idiom poss(haltMoveto(T,Reason,Status),S) already uses above. See
+% do_node(take_sample(...))'s own note (Section 5, ACTION leaf) for
+% the full picture.
+%
+% SampleId is the BT tree author's OWN chosen name for this occurrence
+% (schema.yaml's own TakeSample id port -- e.g. "soil1"), NOT the
+% auto-generated ActionCode: unlike ActionCode (assigned invisibly,
+% sequentially, during translation -- see _VarPool.next_action_code()),
+% a later SampleValueOver/Below/Equal condition node needs a name the
+% TREE AUTHOR can actually write down ahead of time to point back at
+% THIS specific sample, the same reason tool_instance ids exist (see
+% that predicate's own note) -- ActionCode and SampleId serve two
+% different purposes and are BOTH carried in Reason, exactly the same
+% "domain identifier plus auto-appended ActionCode" shape install_tool/
+% uninstall_tool's own Reason (install_tool_success(Id,ActionCode))
+% already established.
+%
+% ONLY on SUCCESS is a VALUE actually drawn (sample_value/3, this
+% problem's own config.yaml sample.value.mean/sigma -- a discretized
+% Normal distribution, see config_to_prolog.py's own note) -- a failed
+% sample reading is exactly that, a failed reading, there is no number
+% to report, same reasoning a failed install_tool never gets a
+% Duration-elapsed coin-flip outcome of its own either. sample_value/3
+% is keyed by (S,ActionCode), the SAME "fresh draw per genuinely new
+% situation" convention sample_result/3 itself already uses -- SampleId
+% plays no role in ITS OWN key, it only travels along inside Reason for
+% a later condition to read back out.
+poss(take_sample(SampleId,ActionCode,Reason,true), S) :-
+    \+ moving(S),
+    now(T, S), at(X,Y,T,S),
+    sample_result(S, ActionCode, true),
+    sample_value(S, ActionCode, V),
+    tag_reason(sample_success(X,Y,V,SampleId), ActionCode, Reason).
+poss(take_sample(SampleId,ActionCode,Reason,false), S) :-
+    \+ moving(S),
+    now(T, S), at(X,Y,T,S),
+    sample_result(S, ActionCode, false),
+    tag_reason(sample_failure(X,Y,SampleId), ActionCode, Reason).
+
+% poss(start_install_tool(Id,Triggers,ActionCode,T0), S): the three
+% preconditions this action's own design calls for -- \+ moving(S)
+% (can't start installing mid-walk, same reasoning as take_sample's own
+% precondition); hitch(free,S) (nothing already attached -- see
+% hitch/2's own note, Section 5c); and PROXIMITY -- the robot's current
+% position must be close to Id's own CURRENT location before it can be
+% installed. Reuses holds(distance_below(...)) DIRECTLY (the exact same
+% predicate a BT tree's own cond(distance_below(...)) leaf or a
+% holds_leg/9 reactive guard would use) rather than re-deriving the
+% dist/5 call by hand -- "close to the tool" IS "distance_below the
+% tool's own point, at Range", no different in kind from "close to the
+% goal". tool_position(Id,GX,GY,S) is the relational fluent above --
+% wherever Id started (config.yaml tool.instances) or was last dropped,
+% and it simply fails (making install impossible) for an Id that is
+% unknown OR already attached; install_tool_range/1 (tool.install.range,
+% defaulting to safety_margin) is the ONE proximity threshold, shared
+% across every tool kind (matching install_tool_drain_rate/1's own
+% "specific to the ACTION, not the tool" shape). T0 quantization
+% mirrors poss(startMoveto(...)) above exactly (same merge-grid
+% rationale).
+poss(start_install_tool(Id,_Triggers,_ActionCode,T0), S) :-
+    \+ moving(S),
+    hitch(free, S),
+    tool_position(Id, GX, GY, S),
+    install_tool_range(Range),
+    holds(distance_below(GX,GY,Range), S),
+    now(T0Exact, S),
+    disc_step_time(Grid),
+    quantize_up(T0Exact, Grid, T0).
+
+% poss(halt_install_tool(T,Reason,Status), S): installing_tool(Id,S)
+% is checked EXPLICITLY (this action's own request), even though
+% current_install_tool/6 below would already implicitly require it --
+% same redundant-but-explicit style poss(haltMoveto(...)) already uses
+% for moving(S) alongside current_walk/6. tool_instance(Id,Kind) is the
+% ONE new step versus before Id/Kind were split apart -- install_tool_
+% duration/2 is still keyed by KIND (config.yaml tool.install.
+% duration_seconds is per-kind, not per-instance: every cart takes the
+% same time to install), so this joins through tool_instance/2 to
+% recover it. TWO clauses, matching tool_earliest_halt/9's own
+% "completed is a SENTINEL here, not a real Reason -- see its own
+% WARNING" contract: clause 1 is what actually happens when Duration
+% elapses with nothing halting it early -- ONLY THEN does install_tool_
+% result/3 (this problem's own config.yaml, tool.install.
+% success_probability -- see config_generated.pl) get drawn, keyed on
+% (S,ActionCode) exactly like take_sample's own sample_result/3 (same
+% "fresh draw per genuinely new situation, shared only if the exact
+% situation term recurs" semantics -- see that predicate's own note);
+% clause 2 is a genuine battery trigger firing first, used as-is, same
+% shape poss(haltMoveto(...)) itself uses for its own ExtraCandidates.
+% Matching Reason0 against the bare atom `completed` in clause 1 (and
+% excluding it in clause 2) is exactly why that atom can never leak out
+% as this action's own recorded Reason -- it's consumed and replaced by
+% Reason0 (install_tool_success(Id)/install_tool_failure(Id)) before
+% Status is even decided.
+poss(halt_install_tool(T,Reason,Status), S) :-
+    installing_tool(Id, S),
+    current_install_tool(S, Id, Triggers, ActionCode, T0, SPrev),
+    tool_instance(Id, Kind),
+    install_tool_duration(Kind, Duration),
+    install_tool_drain_rate(Rate),
+    zbatt(Zb),
+    leg_start_battery(T0, SPrev, B0),
+    earliest_halt(_CP,Triggers,T0,Duration,_Z,_Zt,Zb,B0,Rate,1, completed,T,_Code),
+    install_tool_result(S, ActionCode, CoinStatus),
+    tool_install_reason(CoinStatus, Id, Reason0),
+    tool_leg_status(Reason0, none, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+poss(halt_install_tool(T,Reason,Status), S) :-
+    installing_tool(Id, S),
+    current_install_tool(S, Id, Triggers, ActionCode, T0, SPrev),
+    tool_instance(Id, Kind),
+    install_tool_duration(Kind, Duration),
+    install_tool_drain_rate(Rate),
+    zbatt(Zb),
+    leg_start_battery(T0, SPrev, B0),
+    earliest_halt(_CP,Triggers,T0,Duration,_Z,_Zt,Zb,B0,Rate,1, Reason0,T,Code),
+    Reason0 \= completed,
+    tool_leg_status(Reason0, Code, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+
+tool_install_reason(true, Id, install_tool_success(Id)).
+tool_install_reason(false, Id, install_tool_failure(Id)).
+
+% poss(start_uninstall_tool(Id,Triggers,ActionCode,T0), S): the
+% mirror image of poss(start_install_tool(...)) above -- \+ moving(S),
+% and hitch_id(Id,S) (per this action's own request: uninstalling A
+% SPECIFIC tool INSTANCE requires THAT instance -- not just "something
+% of its kind" -- to currently be the one attached; hitch_id/2, not
+% hitch/2, is the fluent that can tell cart1 apart from cart2). ALSO
+% \+ deployed(S) -- a tool currently deployed (Section 5d) must be
+% retracted first, per this feature's own request: uninstalling
+% something still lowered into the ground isn't allowed.
+poss(start_uninstall_tool(Id,_Triggers,_ActionCode,T0), S) :-
+    \+ moving(S),
+    hitch_id(Id, S),
+    \+ deployed(S),
+    now(T0Exact, S),
+    disc_step_time(Grid),
+    quantize_up(T0Exact, Grid, T0).
+
+% poss(halt_uninstall_tool(T,Reason,Status), S): the mirror image of
+% poss(halt_install_tool(...)) above, uninstall_tool_result/3 (this
+% problem's own config.yaml, tool.uninstall.success_probability) in
+% place of install_tool_result/3, and uninstall_tool_duration/2 (also
+% KIND-keyed, same tool_instance/2 join as install's own) in place of
+% install_tool_duration/2.
+poss(halt_uninstall_tool(T,Reason,Status), S) :-
+    uninstalling_tool(Id, S),
+    current_uninstall_tool(S, Id, Triggers, ActionCode, T0, SPrev),
+    tool_instance(Id, Kind),
+    uninstall_tool_duration(Kind, Duration),
+    uninstall_tool_drain_rate(Rate),
+    zbatt(Zb),
+    leg_start_battery(T0, SPrev, B0),
+    earliest_halt(_CP,Triggers,T0,Duration,_Z,_Zt,Zb,B0,Rate,1, completed,T,_Code),
+    uninstall_tool_result(S, ActionCode, CoinStatus),
+    tool_uninstall_reason(CoinStatus, Id, Reason0),
+    tool_leg_status(Reason0, none, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+poss(halt_uninstall_tool(T,Reason,Status), S) :-
+    uninstalling_tool(Id, S),
+    current_uninstall_tool(S, Id, Triggers, ActionCode, T0, SPrev),
+    tool_instance(Id, Kind),
+    uninstall_tool_duration(Kind, Duration),
+    uninstall_tool_drain_rate(Rate),
+    zbatt(Zb),
+    leg_start_battery(T0, SPrev, B0),
+    earliest_halt(_CP,Triggers,T0,Duration,_Z,_Zt,Zb,B0,Rate,1, Reason0,T,Code),
+    Reason0 \= completed,
+    tool_leg_status(Reason0, Code, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+
+tool_uninstall_reason(true, Id, uninstall_tool_success(Id)).
+tool_uninstall_reason(false, Id, uninstall_tool_failure(Id)).
+
+% poss(start_deploy_tool(Id,Triggers,ActionCode,T0), S): the deploy_
+% tool analogue of poss(start_install_tool(...)) above -- \+ moving(S)
+% (can't deploy mid-walk); hitch_id(Id,S) (Id must ALREADY be attached
+% -- can't lower a tool that isn't installed); tool_instance(Id,plow)
+% (currently restricted to the plow ONLY -- per this feature's own
+% request, "for now"; a future tool kind that can also deploy just
+% needs its own atom added here, or this replaced with a proper
+% deployable-kinds table if the list grows past one); \+ deployed(S)
+% (can't deploy what's already deployed). T0 quantization mirrors every
+% other durative action's own poss/2 (same merge-grid rationale).
+poss(start_deploy_tool(Id,_Triggers,_ActionCode,T0), S) :-
+    \+ moving(S),
+    hitch_id(Id, S),
+    tool_instance(Id, plow),
+    \+ deployed(S),
+    now(T0Exact, S),
+    disc_step_time(Grid),
+    quantize_up(T0Exact, Grid, T0).
+
+% poss(halt_deploy_tool(T,Reason,Status), S): the deploy_tool analogue
+% of poss(halt_install_tool(...)) above -- deploying_tool(Id,S) checked
+% EXPLICITLY (same redundant-but-explicit style), tool_instance(Id,
+% Kind) joined through for deploy_tool_duration/2 (KIND-keyed, same
+% reasoning install_tool_duration/2 already has -- every plow takes the
+% same time to deploy), deploy_tool_drain_rate/1 its own dedicated
+% action-specific rate (mirroring install_tool_drain_rate/1). Same TWO-
+% clause "completed is a sentinel, not a real Reason" contract as
+% poss(halt_install_tool(...)).
+poss(halt_deploy_tool(T,Reason,Status), S) :-
+    deploying_tool(Id, S),
+    current_deploy_tool(S, Id, Triggers, ActionCode, T0, SPrev),
+    tool_instance(Id, Kind),
+    deploy_tool_duration(Kind, Duration),
+    deploy_tool_drain_rate(Rate),
+    zbatt(Zb),
+    leg_start_battery(T0, SPrev, B0),
+    earliest_halt(_CP,Triggers,T0,Duration,_Z,_Zt,Zb,B0,Rate,1, completed,T,_Code),
+    deploy_tool_result(S, ActionCode, CoinStatus),
+    tool_deploy_reason(CoinStatus, Id, Reason0),
+    tool_leg_status(Reason0, none, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+poss(halt_deploy_tool(T,Reason,Status), S) :-
+    deploying_tool(Id, S),
+    current_deploy_tool(S, Id, Triggers, ActionCode, T0, SPrev),
+    tool_instance(Id, Kind),
+    deploy_tool_duration(Kind, Duration),
+    deploy_tool_drain_rate(Rate),
+    zbatt(Zb),
+    leg_start_battery(T0, SPrev, B0),
+    earliest_halt(_CP,Triggers,T0,Duration,_Z,_Zt,Zb,B0,Rate,1, Reason0,T,Code),
+    Reason0 \= completed,
+    tool_leg_status(Reason0, Code, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+
+tool_deploy_reason(true, Id, deploy_tool_success(Id)).
+tool_deploy_reason(false, Id, deploy_tool_failure(Id)).
+
+% poss(start_retract_tool(Id,Triggers,ActionCode,T0), S): the mirror
+% image of poss(start_deploy_tool(...)) above -- \+ moving(S), Id
+% currently hitched AND deployed(S) (can't retract what isn't
+% deployed). No tool_instance(Id,plow) check needed here explicitly --
+% deployed(S) can only ever be true for a plow in the first place (the
+% ONLY way it becomes true is via a successful halt_deploy_tool, which
+% itself already required tool_instance(Id,plow) -- see poss(start_
+% deploy_tool(...)) above), so requiring deployed(S) already implies it.
+poss(start_retract_tool(Id,_Triggers,_ActionCode,T0), S) :-
+    \+ moving(S),
+    hitch_id(Id, S),
+    deployed(S),
+    now(T0Exact, S),
+    disc_step_time(Grid),
+    quantize_up(T0Exact, Grid, T0).
+
+% poss(halt_retract_tool(T,Reason,Status), S): the mirror image of
+% poss(halt_deploy_tool(...)) above, retract_tool_result/3 (this
+% problem's own config.yaml, tool.retract.success_probability) in
+% place of deploy_tool_result/3, and retract_tool_duration/2 (also
+% KIND-keyed, same tool_instance/2 join) in place of deploy_tool_
+% duration/2.
+poss(halt_retract_tool(T,Reason,Status), S) :-
+    retracting_tool(Id, S),
+    current_retract_tool(S, Id, Triggers, ActionCode, T0, SPrev),
+    tool_instance(Id, Kind),
+    retract_tool_duration(Kind, Duration),
+    retract_tool_drain_rate(Rate),
+    zbatt(Zb),
+    leg_start_battery(T0, SPrev, B0),
+    earliest_halt(_CP,Triggers,T0,Duration,_Z,_Zt,Zb,B0,Rate,1, completed,T,_Code),
+    retract_tool_result(S, ActionCode, CoinStatus),
+    tool_retract_reason(CoinStatus, Id, Reason0),
+    tool_leg_status(Reason0, none, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+poss(halt_retract_tool(T,Reason,Status), S) :-
+    retracting_tool(Id, S),
+    current_retract_tool(S, Id, Triggers, ActionCode, T0, SPrev),
+    tool_instance(Id, Kind),
+    retract_tool_duration(Kind, Duration),
+    retract_tool_drain_rate(Rate),
+    zbatt(Zb),
+    leg_start_battery(T0, SPrev, B0),
+    earliest_halt(_CP,Triggers,T0,Duration,_Z,_Zt,Zb,B0,Rate,1, Reason0,T,Code),
+    Reason0 \= completed,
+    tool_leg_status(Reason0, Code, Status),
+    tag_reason(Reason0, ActionCode, Reason).
+
+tool_retract_reason(true, Id, retract_tool_success(Id)).
+tool_retract_reason(false, Id, retract_tool_failure(Id)).
 
 % ---------------------------------------------------------------
 % 6. THE POSITION FLUENT -- pure situation-calculus regression.
@@ -1267,7 +2334,8 @@ poss(interrupt(T), S) :-
 at(X,Y,_,s0) :- start(X,Y).
 
 at(X,Y,T, do(startMoveto(ControlPoints,Triggers,ActionCode,T0), S)) :-
-    walk_duration(ControlPoints, Duration),
+    hitch(Tool, S),
+    walk_duration(ControlPoints, Tool, S, Duration),
     z(do(startMoveto(ControlPoints,Triggers,ActionCode,T0),S), Z),
     zt(do(startMoveto(ControlPoints,Triggers,ActionCode,T0),S), Zt),
     walk_noisy_point(ControlPoints, T0, Duration, Z, Zt, T, X, Y).
@@ -1385,6 +2453,15 @@ nominal_at(X,Y,Frac,ControlPoints) :- spline_point(ControlPoints, Frac, X, Y).
 primitive_action(startMoveto(_,_,_,_)).
 primitive_action(haltMoveto(_,_,_)).
 primitive_action(interrupt(_)).
+primitive_action(take_sample(_,_,_,_)).
+primitive_action(start_install_tool(_,_,_,_)).
+primitive_action(halt_install_tool(_,_,_)).
+primitive_action(start_uninstall_tool(_,_,_,_)).
+primitive_action(halt_uninstall_tool(_,_,_)).
+primitive_action(start_deploy_tool(_,_,_,_)).
+primitive_action(halt_deploy_tool(_,_,_)).
+primitive_action(start_retract_tool(_,_,_,_)).
+primitive_action(halt_retract_tool(_,_,_)).
 
 do_action(A, S, do(A,S)) :- primitive_action(A), poss(A, S).
 
@@ -1402,6 +2479,70 @@ do_action(A, S, do(A,S)) :- primitive_action(A), poss(A, S).
 do_node(cond(C,Code), S, do(checked(Code,C,true), S), true)  :- holds(C, S).
 do_node(cond(C,Code), S, do(checked(Code,C,false),S), false) :- \+ holds(C, S).
 
+% -- ACTION leaf: take_sample -------------------------------------------
+% take_sample(SampleId,ActionCode) -- INSTANTANEOUS (no Duration/
+% Triggers/continuous trajectory of any kind), but UNLIKE PlanWith/
+% cond(C,Code) above, it DOES go through the full primitive_action/
+% poss/do_action machinery every OTHER genuine action in this theory
+% uses -- Reiter's own convention gates EVERY action on a Poss
+% precondition regardless of whether it takes time; PlanWith/cond are
+% the deliberate exceptions (pure computation / a fact about the
+% CURRENT situation with no precondition of its own to state), not the
+% default. The one precondition, for now: \+ moving(S) -- can't take a
+% sample while mid-walk. See primitive_action(take_sample(_,_,_,_)) and
+% poss(take_sample(...),S) further up/down (grep for both).
+%
+% Its own outcome is a genuine new probabilistic choice, NOT determined
+% by the current situation at all (unlike cond(C,Code)'s own
+% holds(C,S)) -- sample_result/3 (this problem's own config.yaml,
+% sample.success_probability -- see config_generated.pl), an annotated
+% disjunction keyed by (S,ActionCode): a FRESH draw for a genuinely new
+% situation, but the SAME cached draw if the exact same (S,ActionCode)
+% pair is ever re-derived (e.g. two upstream noise realizations that
+% landed on the same merge-grid-quantized point before reaching this
+% node) -- same "keyed on the situation term" convention z/2 and zt/2
+% already use for their own per-startMoveto draws, so "does the same
+% PHYSICAL STATE always sample the same way" is emphatically NOT what
+% this guarantees; only an identical SITUATION TERM does. sample_value/3
+% is a SECOND, independent annotated disjunction of the SAME shape,
+% drawn ONLY when sample_result/3 comes back true (see poss(take_sample
+% (...))'s own note) -- a discretized Normal(mean,sigma) over the
+% integers 0..10 (config.yaml sample.value.mean/sigma), NOT a fixed
+% coin flip like sample_result/3 itself: this is what actually lets a
+% later condition ask "was the READING above 7", not just "did the
+% sample succeed".
+%
+% X,Y (the robot's own CURRENT position, at/4, already resolved -- no
+% further noise of its own here) and V (the drawn value, success only)
+% are baked directly into the Reason, sample_success(X,Y,V,SampleId) or
+% sample_failure(X,Y,SampleId), then tagged with ActionCode via the
+% SAME generic tag_reason/3 haltMoveto/PlanWith already use -- giving
+% sample_success(X,Y,V,SampleId,ActionCode)/sample_failure(X,Y,SampleId,
+% ActionCode), the standard "trailing ActionCode" Reason shape every
+% other action in this theory produces, all bound TOGETHER by Poss --
+% the exact same "Poss derives the action term's own output arguments"
+% idiom poss(haltMoveto(T,Reason,Status),S) already uses, now that
+% take_sample is a genuine primitive_action too. This still needed its
+% OWN dedicated clauses at every "outermost do(...) layer" pattern-
+% match site -- halted_with/2 and outcome_entry/2, mirroring haltMoveto/
+% planned's own clauses at each -- verified directly (a standalone
+% ProbLog run caught any_reason_pattern(sample_success(wild,wild))
+% silently reading 0% before those clauses were added: halted_with/2's
+% own GENERIC do(_A,S) clause only SKIPS an unrecognized marker while
+% searching deeper, it does not also try to unify Reason against
+% whatever's inside it, so this doesn't come "for free" the way
+% at/4/battery/3/moving/1/now/2's OWN generic pass-through clauses do
+% for a bare marker with no Reason of its own to extract). Once
+% halted_with/2 sees it, any_reason_pattern(_by_action) and the
+% outcome-enumeration table (outcome_entry/2's own new clause below)
+% both work correctly with no further changes. See also
+% sample_success_at/3 further down, for querying WHERE a successful
+% sample landed, and holds(sample_value_over(...)) and its Below/Equal
+% siblings (Section 8, near distance_below/3) for querying WHAT VALUE a
+% specific, author-named sample (SampleId) came back with.
+do_node(take_sample(SampleId,ActionCode), S, S1, Status) :-
+    do_action(take_sample(SampleId,ActionCode,_Reason,Status), S, S1).
+
 % -- ACTION leaf --------------------------------------------------------
 % moveto_leg(CP,Triggers) -- Triggers is ALWAYS given explicitly here;
 % there is deliberately NO sugar/default form (no moveto_leg/1, no
@@ -1413,6 +2554,62 @@ do_node(cond(C,Code), S, do(checked(Code,C,false),S), false) :- \+ holds(C, S).
 do_node(moveto_leg(CP,Triggers,ActionCode), S, S1, Status) :-
     do_action(startMoveto(CP,Triggers,ActionCode,_T0), S, S2),
     do_action(haltMoveto(_T,_Reason,Status), S2, S1).
+
+% -- ACTION leaf: install_tool / uninstall_tool -------------------------
+% install_tool_leg(Tool,Triggers,ActionCode) -- a DURATIVE action, same
+% start/halt shape as moveto_leg above (do_action(start_install_tool
+% (...)),do_action(halt_install_tool(...))), just with a FIXED,
+% config-driven Duration (install_tool_duration(Tool,Duration) -- see
+% config_generated.pl) instead of one derived from spline arc length,
+% and no continuous position of its own at all: the robot never moves,
+% so at/4's/moving/1's/current_walk/6's own EXISTING generic pass-
+% through clauses already handle these two new action functors
+% correctly with NO changes needed to any of them. battery/3 and now/2
+% both DO need their own new explicit clauses (see each predicate's
+% own note) -- now/2's generic pass-through would otherwise silently
+% ignore a genuine clock advance, and battery/3 needed a real Duration-
+% normalized anchor (the SAME shape as startMoveto/haltMoveto's own,
+% install_tool_drain_rate/1 or uninstall_tool_drain_rate/1 in place of
+% moving_drain_rate) so its own Level computation during the leg stays
+% consistent with the closed-form crossing-time search (first_battery_
+% depletion_time and friends, SHARED with MoveTo via trigger_crossing_
+% time/13's own Mode argument -- see that predicate's own note) -- both
+% need to agree on the SAME Elapsed basis (from T0, not from whatever
+% idle anchor came before it). Triggers is the SAME mechanism as
+% moveto_leg's own, RESTRICTED to battery-related names only (see the
+% TOOL TRIGGERS section, above tool_cond_supported/1, for why and how
+% motion-based ones gracefully contribute nothing instead of erroring).
+% installing_tool(Id,S) is TRUE for
+% every situation between start_install_tool and halt_install_tool
+% (Section 5b) -- an explicit precondition of halt_install_tool's own
+% Poss, per this action's own request, even though current_install_
+% tool/6 would already implicitly require it. hitch(free,S) gates
+% starting an install; hitch_id(Id,S) (THIS specific tool INSTANCE, not
+% just "something of its kind") gates starting an uninstall -- see
+% hitch/2's/hitch_id/2's own notes (Section 5c) for the full state
+% machine, including why only a SUCCESSFUL halt flips either one. Tool
+% here (and throughout install_tool_leg/uninstall_tool_leg's own
+% do_action calls below) is always an Id, e.g. "cart1" from this
+% problem's own config.yaml tool.instances -- never a bare kind name --
+% see tool_instance/2's own note.
+do_node(install_tool_leg(Tool,Triggers,ActionCode), S, S1, Status) :-
+    do_action(start_install_tool(Tool,Triggers,ActionCode,_T0), S, S2),
+    do_action(halt_install_tool(_T,_Reason,Status), S2, S1).
+
+do_node(uninstall_tool_leg(Tool,Triggers,ActionCode), S, S1, Status) :-
+    do_action(start_uninstall_tool(Tool,Triggers,ActionCode,_T0), S, S2),
+    do_action(halt_uninstall_tool(_T,_Reason,Status), S2, S1).
+
+% do_node(deploy_tool_leg(...))/do_node(retract_tool_leg(...)): the
+% deploy_tool/retract_tool analogues of do_node(install_tool_leg(...))/
+% do_node(uninstall_tool_leg(...)) just above -- IDENTICAL shape.
+do_node(deploy_tool_leg(Tool,Triggers,ActionCode), S, S1, Status) :-
+    do_action(start_deploy_tool(Tool,Triggers,ActionCode,_T0), S, S2),
+    do_action(halt_deploy_tool(_T,_Reason,Status), S2, S1).
+
+do_node(retract_tool_leg(Tool,Triggers,ActionCode), S, S1, Status) :-
+    do_action(start_retract_tool(Tool,Triggers,ActionCode,_T0), S, S2),
+    do_action(halt_retract_tool(_T,_Reason,Status), S2, S1).
 
 % -- PLANNING actions: deliberately NOT part of the full action theory
 %    -- no primitive_action/1 entry, no Poss axiom, no do_action call
@@ -1487,6 +2684,30 @@ plan_call(voronoi, SX,SY,GX,GY, CP, completed, true) :-
 plan_call(voronoi, SX,SY,GX,GY, [], no_path, false) :-
     \+ plan_voronoi(SX,SY,GX,GY, _).
 
+% dastar(Step) -- a FIFTH planner: plans the SAME A* raster path
+% plan_astar/plan_call(astar,...) itself would (planners.py's own
+% _astar_control_points core, before that function's own spline-fit
+% step), but instead of fitting one smooth curve through the raw grid
+% path, DISCRETIZES it first -- one waypoint every Step metres of arc
+% length walked along that raw path (planners.py's own
+% _resample_path_every_step) -- then reuses PlanWithWaypoints' own
+% multi-leg STRAIGHT-LINE chaining (_chain_multi_leg_control_points)
+% to connect those waypoints, exactly like plan_straight_waypoints'
+% own contract except the waypoints are CHOSEN by A* itself rather
+% than supplied by the tree author. Algorithm here is a COMPOUND term
+% (dastar(Step)), same reason as follow_boarder(ObstacleId,Offset)
+% above: Step is a planner-specific extra parameter carried INSIDE
+% Algorithm, so planWith/do_node/planned_with need no interface
+% change. UNLIKE follow_boarder, dastar(Step) DOES have a real Goal
+% point (GX,GY) -- it falls through to do_node(planWith(Algorithm,
+% point(GX,GY),...))'s own second clause below (guarded by Algorithm
+% \= follow_boarder(_,_), which dastar(Step) satisfies), no third
+% do_node clause needed.
+plan_call(dastar(Step), SX,SY,GX,GY, CP, completed, true) :-
+    plan_dastar(SX,SY,GX,GY,Step, CP).
+plan_call(dastar(Step), SX,SY,GX,GY, [], no_path, false) :-
+    \+ plan_dastar(SX,SY,GX,GY,Step, _).
+
 % follow_boarder(ObstacleId,Offset) -- a FOURTH planner, exactly the
 % "add one more plan_astar-style function plus one more pair of
 % plan_call/8 clauses" recipe this section's own header comment
@@ -1523,6 +2744,79 @@ plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, CP, completed, true)
     follow_boarder(SX,SY,ObstacleId,Offset, CP).
 plan_call(follow_boarder(ObstacleId,Offset), SX,SY,_GX,_GY, [], no_path, false) :-
     \+ follow_boarder(SX,SY,ObstacleId,Offset, _).
+
+% plan_waypoints_call(+Algorithm,+SX,+SY,+Waypoints,-CP,-Reason,-Status):
+% the MULTI-WAYPOINT generalization of plan_call/8 just above -- SAME
+% "Reason/Status bound together, one clause pair per Algorithm" shape,
+% but for astar/straight ONLY (voronoi/follow_boarder have no multi-
+% waypoint form; see PlanWithWaypoints' own schema.yaml entry for why
+% this is scoped that way "for now"). Waypoints is a Prolog list,
+% [point(G1X,G1Y), point(G2X,G2Y), ...], at least one point -- plans
+% (SX,SY) -> Waypoints[0] -> Waypoints[1] -> ... -> the LAST point,
+% via planners.py's own plan_astar_waypoints/plan_straight_waypoints
+% (which chain the SAME single-goal plan_astar/plan_straight this
+% file already calls above, concatenating each leg's own control
+% points into ONE combined chain -- see that module's own "MULTI-
+% WAYPOINT MERGING" section header for the full rationale and the
+% concatenation arithmetic). FAILS OUTRIGHT (no_path, CP=[]) if ANY
+% single leg between consecutive waypoints has no path -- there is no
+% partial-credit result, exactly like plan_call/8's own astar/straight
+% clauses already fail outright rather than partially.
+plan_waypoints_call(astar, SX,SY, Waypoints, CP, completed, true) :-
+    plan_astar_waypoints(SX,SY, Waypoints, CP).
+plan_waypoints_call(astar, SX,SY, Waypoints, [], no_path, false) :-
+    \+ plan_astar_waypoints(SX,SY, Waypoints, _).
+
+plan_waypoints_call(straight, SX,SY, Waypoints, CP, completed, true) :-
+    plan_straight_waypoints(SX,SY, Waypoints, CP).
+plan_waypoints_call(straight, SX,SY, Waypoints, [], no_path, false) :-
+    \+ plan_straight_waypoints(SX,SY, Waypoints, _).
+
+% -- PLANNING leaf: planWithWaypoints(Algorithm,Waypoints,CP,ActionCode)
+%    -- the multi-waypoint sibling of planWith/4 just below, SAME shape
+%    (quantize current position via disc_step_position/1, dispatch via
+%    a plan_*_call predicate, tag_reason the result), just calling
+%    plan_waypoints_call/7 instead of plan_call/8 and threading
+%    Waypoints straight through as BOTH the call's own third argument
+%    AND the "Goal" slot of the recorded Reason (completed(Algorithm,
+%    Waypoints,ActionCode) / no_path(Algorithm,Waypoints,ActionCode)) --
+%    a list is just another Prolog term as far as tag_reason/3's own
+%    generic =.. reconstruction and halted_with_pattern/3's own
+%    generic match_wild/2 are concerned, so nothing downstream needed
+%    any change for a Reason whose second argument happens to be a
+%    list of points, not a single point/2 term.
+%
+%    THE WHOLE POINT of this action, stated plainly: a plan with N
+%    separate planWith/4 + moveto_leg/2 legs draws N independent z/zt
+%    noise-variable pairs (once per leg -- see basic_action_theory.pl's
+%    top-of-file FUTUREWORK.md reference and planners.py's own "MULTI-
+%    WAYPOINT MERGING" section header), all of which stay simultaneously
+%    "live" through Reiter regression once the plan's own final
+%    situation is reached, driving up the compiled ProbLog formula's
+%    size. Collapsing those SAME N legs into ONE planWithWaypoints +
+%    ONE moveto_leg (see bt_to_prolog.py's own automatic merge pass,
+%    which detects exactly this pattern -- a Sequence of Sequence(
+%    PlanWith,MoveTo) siblings sharing one algorithm -- and rewrites it
+%    this way without the tree author needing to hand-author
+%    PlanWithWaypoints at all) draws exactly ONE z/zt pair for the
+%    WHOLE merged route instead of N, directly shrinking the grounded/
+%    compiled formula. TRADEOFF, stated equally plainly: this is a
+%    genuine change to the probabilistic MODEL, not just an
+%    implementation optimization -- positional noise is no longer
+%    independently reset at each original waypoint (N independent
+%    "restart points" become ONE noise realization governing drift
+%    across the entire merged route). See PlanWithWaypoints' own
+%    schema.yaml entry for this same tradeoff from the BT-author's
+%    side.
+do_node(planWithWaypoints(Algorithm, Waypoints, CP, ActionCode), S,
+        do(planned(Algorithm,Reason), S), Status) :-
+    now(T, S), at(SXExact,SYExact,T,S),
+    disc_step_position(Grid),
+    quantize(SXExact, Grid, SX), quantize(SYExact, Grid, SY),
+    plan_waypoints_call(Algorithm, SX,SY, Waypoints, CP, Reason0, Status),
+    Reason0 =.. [Functor],
+    Reason1 =.. [Functor, Algorithm, Waypoints],
+    tag_reason(Reason1, ActionCode, Reason).
 
 % -- PLANNING leaf: ONE template, planWith(Algorithm,Goal,CP), covering
 %    every planner via plan_call/8's own dispatch on Algorithm --
@@ -1644,6 +2938,71 @@ do_node(planWith(Algorithm, point(GX,GY), CP, ActionCode), S,
     Reason0 =.. [Functor],
     Reason1 =.. [Functor, Algorithm, point(GX,GY)],
     tag_reason(Reason1, ActionCode, Reason).
+
+% -- QUERY leaves: ToolPosition/ToolsOfKind/NearestToolOfKind --------
+% Same "pure computation, no primitive_action/poss layer" shape as
+% planWith/4 just above and cond(C,Code) further down -- read-only,
+% side-effect-free lookups against tool_position/4, tools_of_kind/5,
+% nearest_tool_of_kind/6 (Section 5d), with no precondition of their
+% own to state (they can be asked ANYTIME, unlike a durative action).
+% Each gets its OWN distinct marker functor (tool_position_result/1,
+% tools_of_kind_result/1, nearest_tool_result/1), mirroring planned/2's
+% own "record what happened" role, but kept SEPARATE per query type
+% (rather than one shared marker the way every PlanWith algorithm
+% shares planned/2) since these three have different output shapes --
+% sharing one marker would make halted_with/2's own pattern-match
+% ambiguous across them. TWO mutually exclusive clauses each (found vs
+% not), same "no if-then-else" convention every other multi-case
+% predicate in this file already uses.
+do_node(tool_position_query(Id,Pos,ActionCode), S, do(tool_position_result(Reason), S), true) :-
+    tool_position(Id, GX, GY, S),
+    Pos = point(GX,GY),
+    tag_reason(tool_position_found(Id), ActionCode, Reason).
+do_node(tool_position_query(Id,_Pos,ActionCode), S, do(tool_position_result(Reason), S), false) :-
+    \+ tool_position(Id, _, _, S),
+    tag_reason(tool_position_unavailable(Id), ActionCode, Reason).
+
+do_node(tools_of_kind_query(Kind,Tools,ActionCode), S, do(tools_of_kind_result(Reason), S), true) :-
+    findall(tool(Id,point(GX,GY)), tools_of_kind(Kind,S,Id,GX,GY), Tools),
+    Tools \= [],
+    tag_reason(tools_of_kind_found(Kind), ActionCode, Reason).
+do_node(tools_of_kind_query(Kind,Tools,ActionCode), S, do(tools_of_kind_result(Reason), S), false) :-
+    findall(tool(Id,point(GX,GY)), tools_of_kind(Kind,S,Id,GX,GY), Tools),
+    Tools == [],
+    tag_reason(tools_of_kind_empty(Kind), ActionCode, Reason).
+
+do_node(nearest_tool_of_kind_query(Kind,Id,Pos,ActionCode), S, do(nearest_tool_result(Reason), S), true) :-
+    nearest_tool_of_kind(Kind, S, Id, GX, GY, _Dist),
+    Pos = point(GX,GY),
+    tag_reason(nearest_tool_found(Kind,Id), ActionCode, Reason).
+do_node(nearest_tool_of_kind_query(Kind,_Id,_Pos,ActionCode), S, do(nearest_tool_result(Reason), S), false) :-
+    \+ nearest_tool_of_kind(Kind, S, _, _, _, _),
+    tag_reason(no_tool_of_kind(Kind), ActionCode, Reason).
+
+% hitched_id_query(-Id,+ActionCode): a FOURTH query leaf, same "pure
+% computation, no primitive_action/poss layer" shape as the three
+% above -- outputs the id of whatever tool is CURRENTLY hitched (Section
+% 5c's own hitch_id/2, a plain persistent fluent, single-valued: either
+% free or exactly one instance id), fails (Status=false) if nothing is.
+% Exists specifically so a tree can say "deploy/retract/uninstall
+% WHATEVER is hitched right now" without needing to have plumbed that
+% id in from wherever it originally got installed -- e.g. a plow that
+% was ALREADY hitched before a "make sure it's installed" guard even
+% ran never flows through an InstallTool/NearestToolOfKind occurrence
+% at all in THIS run, so there is no earlier output port to reuse; this
+% queries hitch_id/2 fresh, works regardless of how the tool got
+% hitched. TWO mutually exclusive clauses (hitch_id(free,S) is a total,
+% single-valued relation -- never BOTH free and some Id at once -- so,
+% unlike tool_position_query's own \+ tool_position(...) false clause,
+% the false clause here can match hitch_id(free,S) directly, no
+% negation needed).
+do_node(hitched_id_query(Id,ActionCode), S, do(hitched_id_result(Reason), S), true) :-
+    hitch_id(Id, S),
+    Id \= free,
+    tag_reason(hitched_id_found(Id), ActionCode, Reason).
+do_node(hitched_id_query(_Id,ActionCode), S, do(hitched_id_result(Reason), S), false) :-
+    hitch_id(free, S),
+    tag_reason(hitched_id_unavailable, ActionCode, Reason).
 
 % planned_with(+Algorithm, +Reason, +S): the direct parallel to
 % halted_with/2, for the (now-recorded) planning marker. Searches the
@@ -1914,6 +3273,231 @@ holds(distance_equal(GX,GY,Threshold), S) :-
 holds(distance_over(GX,GY,Threshold), S) :-
     now(T, S), at(X,Y,T,S), dist(X,Y,GX,GY,D), D > Threshold.
 
+% point(GX,GY)-term adapters -- lets a <DistanceBelow>/<DistanceEqual>/
+% <DistanceOver>'s own goal port be a BLACKBOARD REFERENCE (e.g.
+% goal="{p1}", wired from a SubTree's own input port, or from
+% NearestToolOfKind's own position output) instead of only a literal
+% "X;Y", the same "either a literal or a blackboard reference bound to
+% point(GX,GY) at runtime" treatment PlanWith's own goal port already
+% gets (see planWith's own do_node(planWith(Algorithm,point(GX,GY),
+% CP,ActionCode),...) clause). module/translators/bt_to_prolog.py's own
+% _leaf_condition_term emits the flat 3-arg form above ONLY for a
+% literal goal; for a blackboard-ref goal it emits this 2-arg form
+% instead, with Point left as the bare Prolog variable that goal's own
+% producer binds to point(GX,GY) -- these three clauses just unify that
+% back apart and delegate to the existing flat-arg clauses above, so
+% those (and every existing caller depending on their own 3-arg shape,
+% e.g. Section 5c's own "close to the tool" reuse) are unchanged.
+holds(distance_below(point(GX,GY),Threshold), S) :-
+    holds(distance_below(GX,GY,Threshold), S).
+holds(distance_equal(point(GX,GY),Threshold), S) :-
+    holds(distance_equal(GX,GY,Threshold), S).
+holds(distance_over(point(GX,GY),Threshold), S) :-
+    holds(distance_over(GX,GY,Threshold), S).
+
+% sample_value_below(SampleId,Threshold) / sample_value_equal(SampleId,
+% Threshold) / sample_value_over(SampleId,Threshold): true iff the
+% VALUE (0..10, see sample_value/3) a SUCCESSFUL take_sample recorded
+% under SampleId -- the tree author's own id port, schema.yaml's own
+% TakeSample entry, NOT the auto-generated ActionCode -- is,
+% respectively, below/exactly-equal-to/above Threshold. Reads back out
+% of halted_with/2 (searches S's WHOLE history, same "history-based,
+% not a live fluent" shape halted_with_cond/1 itself has), NOT a fresh
+% dist/5-style computation the way distance_below/3 above is -- a
+% sample's value is fixed the INSTANT it's drawn (do_node(take_sample
+% (...)) is INSTANTANEOUS, no Duration to elapse), so there is nothing
+% to re-derive at a later situation, only something to look up. Fails
+% outright (same as every OTHER condition here) if SampleId never had a
+% SUCCESSFUL sample in S's history at all -- a failed or never-taken
+% sample has no value to compare, not a special error case.
+%
+% NON-CONTINUOUS for the SAME reason halted_with_cond/1 is (see
+% bt_to_prolog.py's own _NON_CONTINUOUS_CONDITIONS note): a value that
+% cannot change WHILE a leg is running has nothing for a reactive
+% crossing-search to watch for, so these three are excluded from
+% automatic guard-trigger derivation, same treatment HaltedWith gets.
+holds(sample_value_below(SampleId,Threshold), S) :-
+    halted_with(sample_success(_X,_Y,V,SampleId,_ActionCode), S),
+    V < Threshold.
+holds(sample_value_equal(SampleId,Threshold), S) :-
+    halted_with(sample_success(_X,_Y,V,SampleId,_ActionCode), S),
+    V =:= Threshold.
+holds(sample_value_over(SampleId,Threshold), S) :-
+    halted_with(sample_success(_X,_Y,V,SampleId,_ActionCode), S),
+    V > Threshold.
+
+% sample_value_below/3, sample_value_equal/3, sample_value_over/3 (bare,
+% NOT holds(...)-wrapped): thin pass-throughs so a goal_formula.pl can
+% reference "was SampleId's own reading over Threshold" directly, the
+% same way it already calls hitch/2 or sample_success_at/3 straight,
+% without needing holds/2 itself to be a goal-formula-callable
+% predicate (see vocabulary.yaml's own entries for these three and
+% module/contracts/goal_formula_check.py's own vocabulary-lookup, which
+% checks bare predicate names/arities, not holds(...)-wrapped ones).
+sample_value_below(SampleId, Threshold, S) :- holds(sample_value_below(SampleId,Threshold), S).
+sample_value_equal(SampleId, Threshold, S) :- holds(sample_value_equal(SampleId,Threshold), S).
+sample_value_over(SampleId, Threshold, S) :- holds(sample_value_over(SampleId,Threshold), S).
+
+% hitched / hitched(Kind): the BT-tree-facing CONDITION wrapper around
+% the ALREADY-existing hitch/2 fluent (Section 5c) -- hitch/2 itself is
+% a plain relational fluent, not holds(...)-wrapped, so a cond(C,Code)
+% BT leaf (which always dispatches through holds/2) needs this thin
+% bridge to use it, the same reason sample_value_below/3's own holds(
+% ...) clause exists alongside the bare wrapper, just in the opposite
+% direction here (bare fluent -> holds(...), not the other way round).
+% hitched (no argument) is TRUE iff ANYTHING is currently attached
+% (\+ hitch(free,S)) -- "is the hitch busy". hitched(Kind) checks ONE
+% SPECIFIC kind instead (cart/plow) -- "is it busy WITH THIS kind".
+% Both are NON-CONTINUOUS (see bt_to_prolog.py's own _NON_CONTINUOUS_
+% CONDITIONS note) -- hitch/2 is PROVABLY constant for the whole span
+% of any single MoveTo leg (only a successful (un)install can change
+% it, and both require \+ moving(S) to even start), so there is
+% nothing for a reactive crossing-search to watch mid-leg.
+holds(hitched, S) :- \+ hitch(free, S).
+holds(hitched(Kind), S) :- hitch(Kind, S).
+
+% deployed (bare atom, zero-arg CONDITION term -- NOT the same thing as
+% the deployed/1 FLUENT it wraps, disambiguated by arity/position the
+% same way every other bare-atom condition already is): the BT-tree-
+% facing wrapper around deployed/1 (Section 5d), same reasoning as
+% hitched/0 above. No Kind argument -- only one tool can ever be
+% hitched at a time, so "is the CURRENTLY-hitched tool deployed" needs
+% no further qualification, mirroring deployed/1's own shape exactly.
+% Also NON-CONTINUOUS, for the same reason hitched/0 is (deploy_tool/
+% retract_tool also require \+ moving(S) to start).
+holds(deployed, S) :- deployed(S).
+
+% ploughed_at(GX,GY) / ploughed_between(X1,Y1,X2,Y2): BT-tree-facing
+% wrappers around ploughed/3 (Section on ploughing, above quantize_up/3
+% /cell_index/3) -- ploughed/3 itself takes CELL INDICES (Cx,Cy), not
+% continuous coordinates, so these discretize a continuous point (or
+% pair of points) through the SAME plough_cell_size/cell_index/3 the
+% ploughing engine itself already uses, then defer straight to
+% ploughed/3 -- no new marking logic, purely a coordinate-space
+% adapter.
+%
+% ploughed_at(GX,GY): TRUE iff the single cell (GX,GY) falls into is
+% ploughed.
+%
+% ploughed_between(X1,Y1,X2,Y2): TRUE iff EVERY cell the STRAIGHT LINE
+% connecting (X1,Y1)'s own cell center to (X2,Y2)'s own touches is
+% ploughed -- "has this whole SWATH already been ploughed" (per this
+% feature's own request -- an earlier version of this clause checked
+% the full axis-aligned BOUNDING BOX instead; that's not what was
+% wanted, see bresenham_cells/5 below for the replacement). Discretizes
+% each endpoint to a cell index first (same as ploughed_at above), then
+% walks the discrete-grid line between them via the standard integer
+% Bresenham line algorithm (bresenham_cells/5 below) and requires every
+% cell on it to be ploughed.
+%
+% Both NON-CONTINUOUS, same reason hitched/0 and deployed/0 above are:
+% ploughed/3 only ever becomes newly true at a MoveTo leg's own halt/
+% interrupt situation (see its own note), never incrementally mid-leg,
+% so there is nothing for a reactive crossing-search to watch for
+% either -- see bt_to_prolog.py's own _NON_CONTINUOUS_CONDITIONS note.
+holds(ploughed_at(GX,GY), S) :-
+    plough_cell_size(CellSize),
+    cell_index(GX, CellSize, Cx),
+    cell_index(GY, CellSize, Cy),
+    ploughed(Cx, Cy, S).
+holds(ploughed_between(X1,Y1,X2,Y2), S) :-
+    plough_cell_size(CellSize),
+    cell_index(X1, CellSize, Cx0),
+    cell_index(Y1, CellSize, Cy0),
+    cell_index(X2, CellSize, Cx1),
+    cell_index(Y2, CellSize, Cy1),
+    bresenham_cells(Cx0,Cy0,Cx1,Cy1,Cells),
+    all_cells_ploughed(Cells, S).
+
+% bresenham_sign(+A,+B,-Sign): Sign is +1 if A<B, else -1 (covers
+% A=:=B too, picking -1 arbitrarily -- see bresenham_cells/5's own note
+% on why that axis's Sign is never actually consulted in that case).
+% TWO mutually exclusive clauses, not an if-then-else -- ProbLog's own
+% Prolog dialect has no '->'/2 (same convention every other multi-case
+% predicate in this file already follows, e.g. effective_tool_speed/3
+% above).
+bresenham_sign(A,B,1)  :- A < B.
+bresenham_sign(A,B,-1) :- A >= B.
+
+% bresenham_x_step(+E2,+Dy,+Sx,+Cx,+Err,-Cx2,-Err2) / bresenham_y_step
+% (+E2,+Dx,+Sy,+Cy,+Err,-Cy2,-Err2): one axis's own share of a single
+% Bresenham step -- TWO mutually exclusive clauses each (E2 below/above
+% the axis's own threshold), matching the classic algorithm's two
+% independent per-axis conditionals (E2>=Dy for X, E2=<Dx for Y) EXCEPT
+% expressed without '->'/2. Both conjuncts are called on every step
+% (bresenham_walk/10 below) -- they are independent, not alternatives
+% of each other, so a "diagonal" step where BOTH actually advance
+% (Cx2\=Cx AND Cy2\=Cy) is completely normal, not a separate case to
+% handle: Dy<=0=<Dx always holds (Dy is defined as -abs(...), Dx as
+% abs(...)), which makes "neither fires" mathematically impossible --
+% verified directly (a 300k-line scratch trace against a hand-derived
+% example, plus this predicate's own use in ploughed_between above)
+% before adopting this split.
+bresenham_x_step(E2,Dy,_Sx,Cx,Err,Cx,Err) :- E2 < Dy.
+bresenham_x_step(E2,Dy,Sx,Cx,Err,Cx2,Err2) :- E2 >= Dy, Cx2 is Cx+Sx, Err2 is Err+Dy.
+bresenham_y_step(E2,Dx,_Sy,Cy,Err,Cy,Err) :- E2 > Dx.
+bresenham_y_step(E2,Dx,Sy,Cy,Err,Cy2,Err2) :- E2 =< Dx, Cy2 is Cy+Sy, Err2 is Err+Dx.
+
+% bresenham_walk(+Cx,+Cy,+Cx1,+Cy1,+Dx,+Dy,+Sx,+Sy,+Err,-Cells): the
+% recursive walk itself -- Cells accumulates cell(Cx,Cy) terms from the
+% CURRENT position down to (and including) the target (Cx1,Cy1). Base
+% case relies on Prolog UNIFICATION, not an explicit =:= test, to
+% detect "already at the target": repeating the SAME variable (Cx, Cy)
+% in both the "current" and "target" argument positions only unifies
+% when the two ALREADY-BOUND integers this predicate is actually called
+% with are equal -- the recursive clause's own \+ (Cx=:=Cx1,Cy=:=Cy1)
+% guard is the exact complement, so the two clauses are mutually
+% exclusive and jointly exhaustive, same "no cut needed" style as every
+% other multi-case predicate in this file.
+bresenham_walk(Cx,Cy,Cx,Cy,_Dx,_Dy,_Sx,_Sy,_Err,[cell(Cx,Cy)]).
+bresenham_walk(Cx,Cy,Cx1,Cy1,Dx,Dy,Sx,Sy,Err,[cell(Cx,Cy)|Rest]) :-
+    \+ (Cx =:= Cx1, Cy =:= Cy1),
+    E2 is 2*Err,
+    bresenham_x_step(E2,Dy,Sx,Cx,Err,Cx2,ErrA),
+    bresenham_y_step(E2,Dx,Sy,Cy,ErrA,Cy2,ErrB),
+    bresenham_walk(Cx2,Cy2,Cx1,Cy1,Dx,Dy,Sx,Sy,ErrB,Rest).
+
+% bresenham_cells(+Cx0,+Cy0,+Cx1,+Cy1,-Cells): Cells is the list of
+% cell(Cx,Cy) pairs (INCLUDING both endpoints) the standard integer
+% Bresenham line algorithm visits walking from (Cx0,Cy0) to (Cx1,Cy1)
+% -- "every cell the straight line connecting these two cell centers
+% passes through", the discrete-grid analogue of dist/5's own straight-
+% line distance. Dy is defined NEGATIVE (-abs(...), not +abs(...)) --
+% the standard formulation's own convention, needed for bresenham_x_
+% step/bresenham_y_step's own threshold comparisons to work out; Sx/Sy
+% (this axis's own step direction) are never actually consulted when
+% that axis's own Dx/Dy is 0 (see bresenham_x_step/bresenham_y_step's
+% own E2<Dy / E2>Dx "no step" clauses -- Dy<=0 there makes E2>=Dy/
+% E2=<Dx false whenever Dx/Dy(abs) is 0, for ANY Sx/Sy), so
+% bresenham_sign's own arbitrary A=:=B tie-break is always safe.
+bresenham_cells(Cx0,Cy0,Cx1,Cy1,Cells) :-
+    Dx is abs(Cx1-Cx0),
+    Dy is -abs(Cy1-Cy0),
+    bresenham_sign(Cx0,Cx1,Sx),
+    bresenham_sign(Cy0,Cy1,Sy),
+    Err0 is Dx + Dy,
+    bresenham_walk(Cx0,Cy0,Cx1,Cy1,Dx,Dy,Sx,Sy,Err0,Cells).
+
+% all_cells_ploughed(+Cells,+S): TRUE iff EVERY cell(Cx,Cy) in Cells
+% (a plain, already-finite list -- see bresenham_cells/5 above) is
+% ploughed(Cx,Cy,S) -- plain list recursion, no forall/2 or double-
+% negation needed here (unlike an EARLIER, box-based version of
+% ploughed_between/4 this replaced): the candidate cells are already
+% fully enumerated by bresenham_cells/5, not generated lazily via
+% between/3, so there's nothing to universally quantify OVER, just a
+% list to walk.
+all_cells_ploughed([], _S).
+all_cells_ploughed([cell(Cx,Cy)|Rest], S) :-
+    ploughed(Cx, Cy, S),
+    all_cells_ploughed(Rest, S).
+
+% ploughed_at/3, ploughed_between/5 (bare, NOT holds(...)-wrapped): thin
+% pass-throughs so a goal_formula.pl can reference either directly, same
+% reasoning as sample_value_below/3's own bare wrapper above -- see
+% vocabulary.yaml's own entries for these two.
+ploughed_at(GX, GY, S) :- holds(ploughed_at(GX,GY), S).
+ploughed_between(X1, Y1, X2, Y2, S) :- holds(ploughed_between(X1,Y1,X2,Y2), S).
+
 % obstacle_in_bound(Threshold): true iff the CURRENT position (at the
 % current time, via now/2) is within Threshold of ANY obstacle. Same
 % parameter, same underlying geometry as the obstacle_in_bound(Threshold)
@@ -1954,7 +3538,8 @@ holds(line_of_sight_clear(ObstacleId,GX,GY), S) :-
 % to check a trajectory against, at s0).
 holds(obstacle_on_path(Threshold), S) :-
     current_walk(S, CP, Triggers, T0, SPrev),
-    walk_duration(CP, Duration),
+    hitch(Tool, SPrev),
+    walk_duration(CP, Tool, SPrev, Duration),
     z(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Z),
     zt(do(startMoveto(CP,Triggers,_ActionCode,T0),SPrev), Zt),
     now(T, S), at(X,Y,T,S),
@@ -1990,22 +3575,49 @@ holds(battery_over(Threshold), S) :-
     Level > Threshold.
 
 % ---------------------------------------------------------------
-% holds_leg/9: the T-PARAMETERIZED twin of holds/2 above, used ONLY by
-% first_becomes_false_time/9 below (in turn used ONLY by the
-% guard_break(Cond,Code) trigger -- see trigger_crossing_time/11) --
-% NOT part of the do_node/cond() interface itself (holds/2 stays the
-% ONLY thing cond(C) ever calls). holds/2 always asks "is C true RIGHT
-% NOW" via now(T,S) -- which, for an IN-PROGRESS leg's own situation
-% term do(startMoveto(...),SPrev), always returns that leg's own START
-% time T0, never a later instant WITHIN the leg (see the "no bracket-
-% scan/bisection here" note above holds(obstacle_in_bound(...)) further
-% up) -- so it cannot be reused as-is to watch a condition CONTINUOUSLY
-% across a leg's own future. holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,T)
-% asks the SAME question at an EXPLICIT T instead, using the SAME flat
-% (CP,T0,Duration,Z,Zt,Zb,B0) signature every trigger_crossing_time/11
+% holds_leg/11: the T-PARAMETERIZED twin of holds/2 above, used ONLY by
+% first_becomes_false_time/11 below (in turn used ONLY by trigger_
+% crossing_time/13's own guard_break(Cond,Code) clauses, far above --
+% ONE shared pair of clauses now, serving BOTH MoveTo and install_
+% tool/uninstall_tool, split by Mode) -- NOT part of the do_node/cond()
+% interface itself (holds/2 stays the ONLY thing cond(C) ever calls).
+% holds/2 always asks "is C true RIGHT NOW" via now(T,S) -- which, for
+% an IN-PROGRESS leg's own situation term do(startMoveto(...),SPrev),
+% always returns that leg's own START time T0, never a later instant
+% WITHIN the leg (see the "no bracket-scan/bisection here" note above
+% holds(obstacle_in_bound(...)) further up) -- so it cannot be reused
+% as-is to watch a condition CONTINUOUSLY across a leg's own future.
+% holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T) asks the SAME
+% question at an EXPLICIT T instead, using the SAME flat (CP,T0,
+% Duration,Z,Zt,Zb,B0,Rate) signature every trigger_crossing_time/13
 % clause already receives (no situation term needed at all -- X,Y come
-% from walk_noisy_point/8, battery Level from battery_at_leg/6 above,
-% both already pure functions of T within one leg).
+% from walk_noisy_point/8, battery Level from battery_at_leg/7 above,
+% both already pure functions of T within one leg, Rate included).
+%
+% Mode is SHARED with install_tool/uninstall_tool, on request -- 0
+% means "MoveTo: every clause below is available" (trigger_crossing_
+% time/13's own Mode=0 guard_break clause, plus poss(haltMoveto(...))/
+% poss(interrupt(...))/verify_safe further up, which resolve Mode=0
+% before it ever enters this whole chain, always pass 0), 1 means
+% "install_tool/uninstall_tool: BATTERY-ONLY" (trigger_crossing_time/
+% 13's own Mode=1 guard_break clause, and poss(halt_install_tool(...))/
+% poss(halt_uninstall_tool(...)), always pass 1). EVERY motion-based
+% clause below (distance_below/equal/over, obstacle_in_bound, obstacle_
+% on_path, line_of_sight_clear) pattern-matches Mode=0 directly IN THE
+% HEAD, so under Mode=1 none of them even attempt to unify -- CP is
+% NEVER touched, NEVER dereferenced, so the placeholder (a fresh
+% unbound variable) trigger_crossing_time/13's own Mode=1 guard_break
+% clause and poss(halt_install_tool(...))/poss(halt_uninstall_tool
+% (...)) pass in is safe no matter what it is. The battery clauses
+% (battery_below/equal/over) don't care which Mode they're called
+% under -- both callers legitimately want battery conditions evaluated,
+% so those three clauses wildcard Mode away entirely. Mode=1 alone does
+% NOT make an unsupported Cond (e.g. a motion condition reaching here
+% for install_tool/uninstall_tool) degrade safely on its OWN -- see
+% tool_cond_supported/1's own note (in the TOOL TRIGGERS section
+% further down) for why an explicit outer gate is still needed, on
+% trigger_crossing_time/13's own Mode=1 guard_break clause, before this
+% predicate is ever reached under Mode=1.
 %
 % ONE clause per condition in schema.yaml's conditions: list that can
 % MEANINGFULLY vary within a single leg (i.e. everything except
@@ -2014,60 +3626,80 @@ holds(battery_over(Threshold), S) :-
 % auto-derived guard BEFORE this predicate is ever reached, precisely
 % to avoid a missing clause here silently reading as "already false at
 % T0"). Adding a new schema.yaml condition later needs a matching
-% clause HERE for it to be usable as an automatically-derived reactive
-% guard -- or, if it genuinely can't vary mid-leg either, adding it to
-% _NON_CONTINUOUS_CONDITIONS in bt_to_prolog.py instead, same as
-% HaltedWith.
-holds_leg(and(P,Q), CP,T0,Duration,Z,Zt,Zb,B0,T) :-
-    holds_leg(P,CP,T0,Duration,Z,Zt,Zb,B0,T), holds_leg(Q,CP,T0,Duration,Z,Zt,Zb,B0,T).
-holds_leg(or(P,Q), CP,T0,Duration,Z,Zt,Zb,B0,T) :-
-    holds_leg(P,CP,T0,Duration,Z,Zt,Zb,B0,T) ; holds_leg(Q,CP,T0,Duration,Z,Zt,Zb,B0,T).
-holds_leg(neg(P), CP,T0,Duration,Z,Zt,Zb,B0,T) :-
-    \+ holds_leg(P,CP,T0,Duration,Z,Zt,Zb,B0,T).
+% clause HERE (Mode=0, if it's motion-based) for it to be usable as an
+% automatically-derived reactive guard -- or, if it genuinely can't
+% vary mid-leg either, adding it to _NON_CONTINUOUS_CONDITIONS in bt_
+% to_prolog.py instead, same as HaltedWith.
+holds_leg(and(P,Q), CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T) :-
+    holds_leg(P,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T), holds_leg(Q,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T).
+holds_leg(or(P,Q), CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T) :-
+    holds_leg(P,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T) ; holds_leg(Q,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T).
+holds_leg(neg(P), CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T) :-
+    \+ holds_leg(P,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T).
 
-holds_leg(distance_below(GX,GY,Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+holds_leg(distance_below(GX,GY,Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,_Rate,0,T) :-
     walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
     dist(X,Y,GX,GY,D), D < Threshold.
-holds_leg(distance_equal(GX,GY,Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+holds_leg(distance_equal(GX,GY,Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,_Rate,0,T) :-
     walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
     dist(X,Y,GX,GY,D), D =:= Threshold.
-holds_leg(distance_over(GX,GY,Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+holds_leg(distance_over(GX,GY,Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,_Rate,0,T) :-
     walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
     dist(X,Y,GX,GY,D), D > Threshold.
 
-holds_leg(obstacle_in_bound(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+% point(GX,GY)-term adapters, same blackboard-ref-goal treatment (and
+% same reasoning) as holds/2's own three just above -- needed here too
+% since an auto-derived REACTIVE GUARD (a DistanceBelow/Equal/Over left
+% sibling under a ReactiveSequence/ReactiveFallback) is checked
+% CONTINUOUSLY, mid-leg, via holds_leg/11 (exact bracket-scan crossing-
+% time detection), not via holds/2's one-shot check.
+holds_leg(distance_below(point(GX,GY),Threshold), CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T) :-
+    holds_leg(distance_below(GX,GY,Threshold), CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T).
+holds_leg(distance_equal(point(GX,GY),Threshold), CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T) :-
+    holds_leg(distance_equal(GX,GY,Threshold), CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T).
+holds_leg(distance_over(point(GX,GY),Threshold), CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T) :-
+    holds_leg(distance_over(GX,GY,Threshold), CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T).
+
+holds_leg(obstacle_in_bound(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,_Rate,0,T) :-
     walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
     clearance_adjusted_threshold(Threshold, AdjThreshold),
     obstacle_within_threshold(X,Y,AdjThreshold).
 
-holds_leg(obstacle_on_path(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+holds_leg(obstacle_on_path(Threshold), CP,T0,Duration,Z,Zt,_Zb,_B0,_Rate,0,T) :-
     walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
     clearance_adjusted_threshold(Threshold, AdjThreshold),
     obstacle_on_path_within_threshold(CP,T0,Duration,Z,Zt,X,Y,AdjThreshold).
 
-holds_leg(line_of_sight_clear(ObstacleId,GX,GY), CP,T0,Duration,Z,Zt,_Zb,_B0,T) :-
+holds_leg(line_of_sight_clear(ObstacleId,GX,GY), CP,T0,Duration,Z,Zt,_Zb,_B0,_Rate,0,T) :-
     walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
     line_of_sight_clear(X,Y,ObstacleId,GX,GY).
 
-holds_leg(battery_below(Threshold), _CP,T0,Duration,_Z,_Zt,Zb,B0,T) :-
-    battery_at_leg(T0,Duration,Zb,B0,T,Level), Level < Threshold.
-holds_leg(battery_equal(Threshold), _CP,T0,Duration,_Z,_Zt,Zb,B0,T) :-
-    battery_at_leg(T0,Duration,Zb,B0,T,Level), Level =:= Threshold.
-holds_leg(battery_over(Threshold), _CP,T0,Duration,_Z,_Zt,Zb,B0,T) :-
-    battery_at_leg(T0,Duration,Zb,B0,T,Level), Level > Threshold.
+holds_leg(battery_below(Threshold), _CP,T0,Duration,_Z,_Zt,Zb,B0,Rate,_Mode,T) :-
+    battery_at_leg(T0,Duration,Zb,B0,Rate,T,Level), Level < Threshold.
+holds_leg(battery_equal(Threshold), _CP,T0,Duration,_Z,_Zt,Zb,B0,Rate,_Mode,T) :-
+    battery_at_leg(T0,Duration,Zb,B0,Rate,T,Level), Level =:= Threshold.
+holds_leg(battery_over(Threshold), _CP,T0,Duration,_Z,_Zt,Zb,B0,Rate,_Mode,T) :-
+    battery_at_leg(T0,Duration,Zb,B0,Rate,T,Level), Level > Threshold.
 
-% first_becomes_false_time(+Cond,+CP,+T0,+Duration,+Z,+Zt,+Zb,+B0,
-% -Tcross): the FIRST instant in (T0,T0+Duration] that Cond (already
-% polarity-adjusted by bt_to_prolog.py -- see guard_break/2's own note
-% in trigger_crossing_time/11 above) stops holding, given it holds at
-% T0 -- the same "already true at T0 / genuine future search" two-shape
-% convention every other first_*_time predicate in this file already
-% follows (two MUTUALLY EXCLUSIVE clauses, on \+holds_leg(...,T0) vs
-% holds_leg(...,T0), no cut needed -- same style as first_battery_
-% below_time above), just GENERIC over any holds_leg/9-recognized Cond
-% instead of one bespoke formula per condition. FAILS (no crossing) if
-% Cond holds for the WHOLE walk -- same "absence, not sentinel"
-% convention as everywhere else in this file.
+% first_becomes_false_time(+Cond,+CP,+T0,+Duration,+Z,+Zt,+Zb,+B0,+Rate,
+% +Mode,-Tcross): the FIRST instant in (T0,T0+Duration] that Cond
+% (already polarity-adjusted by bt_to_prolog.py -- see guard_break/2's
+% own note in trigger_crossing_time/12 above) stops holding, given it
+% holds at T0 -- the same "already true at T0 / genuine future search"
+% two-shape convention every other first_*_time predicate in this file
+% already follows (two MUTUALLY EXCLUSIVE clauses, on \+holds_leg(...,
+% T0) vs holds_leg(...,T0), no cut needed -- same style as first_
+% battery_below_time above), just GENERIC over any holds_leg/11-
+% recognized Cond instead of one bespoke formula per condition. FAILS
+% (no crossing) if Cond holds for the WHOLE walk -- same "absence, not
+% sentinel" convention as everywhere else in this file. Rate is the
+% battery drain rate for whichever consumer is calling in (moving-phase
+% for MoveTo, install/uninstall-phase for install_tool/uninstall_tool),
+% already resolved to a plain number by whichever caller started this
+% chain -- see earliest_halt/12's own note and tool_trigger_crossing_
+% time's own guard_break clause. Mode is just forwarded straight to
+% holds_leg/11 -- see that predicate's own note for what it means and
+% why Mode=1 alone isn't a complete safety story on its own.
 %
 % Bracket-scans bracket_samples/1 equal steps (the SAME config knob
 % first_threshold_crossing_time's own black-box search already uses --
@@ -2078,15 +3710,15 @@ holds_leg(battery_over(Threshold), _CP,T0,Duration,_Z,_Zt,Zb,B0,T) :-
 % slightly EARLY (i.e. while Cond might still actually hold) -- same
 % "never let approximation look safer than reality" convention as
 % quantize_down/3.
-first_becomes_false_time(Cond,CP,T0,Duration,Z,Zt,Zb,B0,T0) :-
-    \+ holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,T0).
-first_becomes_false_time(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Tcross) :-
-    holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,T0),
+first_becomes_false_time(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T0) :-
+    \+ holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T0).
+first_becomes_false_time(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,Tcross) :-
+    holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,T0),
     bracket_samples(N),
     TEnd is T0 + Duration,
-    guard_bracket_scan(Cond,CP,T0,Duration,Z,Zt,Zb,B0,N,1,TEnd,T0,Tlo,Thi),
+    guard_bracket_scan(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,N,1,TEnd,T0,Tlo,Thi),
     crossing_eps(Eps),
-    guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tlo,Thi,Tcross).
+    guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,Eps,Tlo,Thi,Tcross).
 
 % guard_bracket_scan(...,+N,+I,+TEnd,+Tprev,-Tlo,-Thi): walk forward
 % from I=1 to N, one bracket_samples/1-th of the way from T0 to TEnd
@@ -2100,16 +3732,16 @@ first_becomes_false_time(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Tcross) :-
 % doesn't support '->'/2, same reason every other multi-case predicate
 % in this file (e.g. first_battery_below_time above) is written this
 % way instead.
-guard_bracket_scan(Cond,CP,T0,Duration,Z,Zt,Zb,B0,N,I,TEnd,Tprev,Tlo,Thi) :-
+guard_bracket_scan(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,N,I,TEnd,Tprev,Tlo,Thi) :-
     I =< N,
     Ti is T0 + (TEnd-T0) * I / N,
-    holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Ti),
+    holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,Ti),
     I1 is I + 1,
-    guard_bracket_scan(Cond,CP,T0,Duration,Z,Zt,Zb,B0,N,I1,TEnd,Ti,Tlo,Thi).
-guard_bracket_scan(Cond,CP,T0,Duration,Z,Zt,Zb,B0,N,I,TEnd,Tprev,Tprev,Ti) :-
+    guard_bracket_scan(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,N,I1,TEnd,Ti,Tlo,Thi).
+guard_bracket_scan(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,N,I,TEnd,Tprev,Tprev,Ti) :-
     I =< N,
     Ti is T0 + (TEnd-T0) * I / N,
-    \+ holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Ti).
+    \+ holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,Ti).
 
 % guard_bisect(...,+Eps,+Tlo,+Thi,-Tcross): standard bisection --
 % invariant Cond holds at Tlo, doesn't hold at Thi; narrows until the
@@ -2117,21 +3749,21 @@ guard_bracket_scan(Cond,CP,T0,Duration,Z,Zt,Zb,B0,N,I,TEnd,Tprev,Tprev,Ti) :-
 % first_becomes_false_time's own note on why the high end, not the
 % midpoint or the low end). Same mutually-exclusive-clauses style as
 % guard_bracket_scan above, no '->'/2.
-guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tlo,Thi,Thi) :-
+guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,Eps,Tlo,Thi,Thi) :-
     Width is Thi - Tlo,
     Width =< Eps.
-guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tlo,Thi,Tcross) :-
+guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,Eps,Tlo,Thi,Tcross) :-
     Width is Thi - Tlo,
     Width > Eps,
     Tmid is (Tlo + Thi) / 2,
-    holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Tmid),
-    guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tmid,Thi,Tcross).
-guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tlo,Thi,Tcross) :-
+    holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,Tmid),
+    guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,Eps,Tmid,Thi,Tcross).
+guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,Eps,Tlo,Thi,Tcross) :-
     Width is Thi - Tlo,
     Width > Eps,
     Tmid is (Tlo + Thi) / 2,
-    \+ holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Tmid),
-    guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Eps,Tlo,Tmid,Tcross).
+    \+ holds_leg(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,Tmid),
+    guard_bisect(Cond,CP,T0,Duration,Z,Zt,Zb,B0,Rate,Mode,Eps,Tlo,Tmid,Tcross).
 
 % ---------------------------------------------------------------
 % 8. VERIFICATION-TIME SAMPLING (NOT part of the action theory) --
@@ -2194,6 +3826,42 @@ outcome_entry(planned(_,Reason), Code-Pattern) :-
     append(Args0, [Code], Args),
     Pattern =.. [Functor|Args0].
 outcome_entry(checked(Code,_,Status), Code-Status).
+outcome_entry(take_sample(_SampleId,_ActionCode,Reason,_Status), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
+outcome_entry(halt_install_tool(_,Reason,_), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
+outcome_entry(halt_uninstall_tool(_,Reason,_), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
+outcome_entry(halt_deploy_tool(_,Reason,_), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
+outcome_entry(halt_retract_tool(_,Reason,_), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
+outcome_entry(tool_position_result(Reason), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
+outcome_entry(tools_of_kind_result(Reason), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
+outcome_entry(nearest_tool_result(Reason), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
+outcome_entry(hitched_id_result(Reason), Code-Pattern) :-
+    Reason =.. [Functor|Args],
+    append(Args0, [Code], Args),
+    Pattern =.. [Functor|Args0].
 
 % history_outcomes(+S, -Entries): every outcome_entry/2 found ANYWHERE
 % in S's own history, oldest-first -- the one GENERIC pass behind
@@ -2281,8 +3949,9 @@ plan_time_span(S, T0, TEnd) :-
 
 last_action_time(do(haltMoveto(T,_,_),_), _, _, T).
 last_action_time(do(interrupt(T),_), _, _, T).
-last_action_time(do(startMoveto(_,_,_,_),_), CP, T0, TEnd) :-
-    walk_duration(CP, Duration),
+last_action_time(do(startMoveto(_,_,_,_),SPrev), CP, T0, TEnd) :-
+    hitch(Tool, SPrev),
+    walk_duration(CP, Tool, SPrev, Duration),
     TEnd is T0 + Duration.
 last_action_time(do(A,S), CP, T0, TEnd) :-
     A \= haltMoveto(_,_,_), A \= interrupt(_), A \= startMoveto(_,_,_,_),
@@ -2298,10 +3967,29 @@ sample_time(I, S, T) :-
 % against nominal_at/4, which is parametrized the same way) --
 % distinct from sample_frac/2, which is a fraction of however much
 % of the plan actually got executed (0..(TEnd-T0)) if interrupted.
+% Duration=0.0 is a genuine, valid case here too (see collision_
+% geometry.py's own _walk_noisy_point note on why -- a zero-length
+% "already at the goal" leg), not something to reject: TWO mutually
+% exclusive clauses on Duration=<0.0 vs >0.0, same "no if-then-else"
+% convention every other multi-case predicate in this file already
+% uses (ProbLog's own Prolog dialect doesn't support '->'/2). A leg
+% that never actually progresses anywhere has WalkFrac=0.0 throughout
+% -- the same well-defined limit collision_geometry.py's own frac
+% picks for the identical reason.
 sample_walk_frac(I, S, WalkFrac) :-
     plan_time_span(S, T0, TEnd),
-    current_walk(S, CP, T0),
-    walk_duration(CP, Duration),
+    current_walk(S, CP, T0, SPrev),
+    hitch(Tool, SPrev),
+    walk_duration(CP, Tool, SPrev, Duration),
+    Duration =< 0.0,
+    sample_frac(I, _Frac),
+    WalkFrac is 0.0.
+sample_walk_frac(I, S, WalkFrac) :-
+    plan_time_span(S, T0, TEnd),
+    current_walk(S, CP, T0, SPrev),
+    hitch(Tool, SPrev),
+    walk_duration(CP, Tool, SPrev, Duration),
+    Duration > 0.0,
     sample_frac(I, Frac),
     T is T0 + (TEnd-T0)*Frac,
     WalkFrac is (T - T0) / Duration.
@@ -2347,6 +4035,15 @@ sample_walk_frac(I, S, WalkFrac) :-
 % fate than the final one is still handled correctly.
 halted_with(Reason, do(haltMoveto(_,Reason,_), _)).
 halted_with(Reason, do(planned(_Algorithm,Reason), _)).
+halted_with(Reason, do(take_sample(_SampleId,_ActionCode,Reason,_Status), _)).
+halted_with(Reason, do(halt_install_tool(_,Reason,_), _)).
+halted_with(Reason, do(halt_uninstall_tool(_,Reason,_), _)).
+halted_with(Reason, do(halt_deploy_tool(_,Reason,_), _)).
+halted_with(Reason, do(halt_retract_tool(_,Reason,_), _)).
+halted_with(Reason, do(tool_position_result(Reason), _)).
+halted_with(Reason, do(tools_of_kind_result(Reason), _)).
+halted_with(Reason, do(nearest_tool_result(Reason), _)).
+halted_with(Reason, do(hitched_id_result(Reason), _)).
 halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
 
 % visited(+Loc, +Tol, +S): TRUE iff the robot ACTUALLY ARRIVED at
@@ -2387,6 +4084,130 @@ visited(point(GX,GY), Tol, do(haltMoveto(T,completed(_ActionCode),true), S)) :-
     dist(X,Y,GX,GY,D),
     D =< Tol.
 visited(Loc, Tol, do(_A, S)) :- visited(Loc, Tol, S).
+
+% ploughed(-Cx, -Cy, +S): relational fluent -- TRUE iff macro-cell
+% (Cx,Cy) (see cell_index/3, above quantize_up/3; cell size is
+% plough_cell_size/1, this problem's own config.yaml ploughing.
+% cell_size, deliberately coarser than disc_step_position -- see
+% config_to_prolog.py's own note) was swept by the robot's ACTUAL path
+% during some MoveTo leg while the plow was BOTH equipped AND DEPLOYED
+% (hitch(plow,SPrev), deployed(SPrev) -- see Section 5c/5d) -- merely
+% having the plow installed is not enough, per this feature's own
+% request: nothing gets marked ploughed between InstallTool and the
+% first DeployTool, or after RetractTool, only in between a successful
+% deploy and its matching retract. Anywhere in S's history. Same
+% monotonic "search the whole history, no frame axiom
+% needed beyond a plain pass-through" shape as visited/3 above and
+% halted_with/2 -- once true for a situation, stays true for every
+% situation built on top of it.
+%
+% Deliberately NOT gated on Reason=completed(_)/Status=true the way
+% visited/3 is: a leg cut short by a collision, a trigger, or an
+% interrupt still physically ploughed whatever ground it actually
+% covered before halting, so BOTH do(haltMoveto(...),S) (any Reason/
+% Status) and do(interrupt(...),S) contribute -- Elapsed is T1-T0 (the
+% leg's own ACTUAL duration, however far it got), never the full
+% nominal Duration walk_duration/3 would report.
+%
+% Sampling, not a closed-form crossing search: unlike holds_leg/first_
+% becomes_false_time (which need the EXACT time a condition flips),
+% "which cells did the path pass through" has no useful closed form --
+% ploughed_cell_sample/11 below just walks the SAME noisy path
+% collision detection already samples (walk_noisy_point/8, at
+% bracket_samples/1 resolution) and buckets each sampled point into a
+% cell via cell_index/3. No left/right offset sampling either (an
+% earlier design considered marking a whole cross-strip either side of
+% the centerline) -- once the cell size itself approximates the plow's
+% own physical width, a centerline sample landing in a cell already
+% implies the plow's edges are within that cell or its immediate
+% neighbor, so nothing is gained by sampling the edges separately.
+%
+% THE ONE THING THIS APPROXIMATION HONESTLY TRADES AWAY: a pass exactly
+% along a cell boundary could miss marking the adjacent cell the plow's
+% edge technically grazed. That's a boundary rounding effect, not a
+% systematic bias, and it's the same kind of approximation error
+% already accepted by choosing a coarse cell size in the first place --
+% not a new source of imprecision on top of it.
+%
+% plough_cell_size/1 ITSELF is pure config data (config_to_prolog.py's
+% own ploughing.cell_size), only ever emitted as a fact when a
+% problem's config.yaml has a ploughing: section with a cell_size key
+% -- same "config-generated, no real clause in this file" shape as
+% tool_instance/2 above, and the same placeholder-clause fix applies:
+% a problem with a plow tool.instance but NO ploughing.cell_size could
+% still reach hitch(plow,S)=true (installing a plow needs no
+% ploughing config at all), and PloughedAt/PloughedBetween (see
+% holds(ploughed_at(...))/holds(ploughed_between(...)) above) query
+% plough_cell_size directly, unconditionally, before ever touching
+% ploughed/3 -- so this predicate needs to be "known" even in a
+% problem that never configures ploughing.
+plough_cell_size(no_ploughing_configured) :- fail.
+
+ploughed(Cx, Cy, do(haltMoveto(T1,_Reason,_Status), S)) :-
+    current_walk(S, CP, Triggers, ActionCode, T0, SPrev),
+    hitch(plow, SPrev),
+    deployed(SPrev),
+    walk_duration(CP, plow, SPrev, Duration),
+    z(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Z),
+    zt(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Zt),
+    Elapsed is T1 - T0,
+    plough_cell_size(CellSize),
+    bracket_samples(N),
+    ploughed_cell_sample(CP,T0,Duration,Elapsed,Z,Zt,CellSize,N,0,Cx,Cy).
+ploughed(Cx, Cy, do(interrupt(T1), S)) :-
+    current_walk(S, CP, Triggers, ActionCode, T0, SPrev),
+    hitch(plow, SPrev),
+    deployed(SPrev),
+    walk_duration(CP, plow, SPrev, Duration),
+    z(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Z),
+    zt(do(startMoveto(CP,Triggers,ActionCode,T0),SPrev), Zt),
+    Elapsed is T1 - T0,
+    plough_cell_size(CellSize),
+    bracket_samples(N),
+    ploughed_cell_sample(CP,T0,Duration,Elapsed,Z,Zt,CellSize,N,0,Cx,Cy).
+ploughed(Cx, Cy, do(A,S)) :-
+    A \= haltMoveto(_,_,_), A \= interrupt(_),
+    ploughed(Cx, Cy, S).
+
+% ploughed_cell_sample(+CP,+T0,+Duration,+Elapsed,+Z,+Zt,+CellSize,+N,
+% +I,-Cx,-Cy): nondeterministically enumerates the macro-cell for each
+% of I=0..N evenly-spaced samples across [T0,T0+Elapsed] (Elapsed, NOT
+% the full nominal Duration -- see ploughed/3's own note on why a leg
+% cut short still ploughs whatever it actually covered). Duration
+% itself is still passed to walk_noisy_point/8 (the SAME noisy-path
+% primitive at/4 and collision detection already use) since that's
+% what the spline's own parameterization needs, independent of how far
+% the leg actually got. Backtracks over every I -- ploughed/3's own
+% caller just needs ANY one sample to match a queried Cx,Cy, so plain
+% backtracking (no findall/list needed) is the simpler fit here, unlike
+% nearest_tool_of_kind/6's own use of findall/3+min_candidate/2, which
+% genuinely needs every candidate collected at once to fold down to a
+% minimum.
+ploughed_cell_sample(CP,T0,Duration,Elapsed,Z,Zt,CellSize,N,I,Cx,Cy) :-
+    I =< N,
+    T is T0 + Elapsed * I / N,
+    walk_noisy_point(CP,T0,Duration,Z,Zt,T,X,Y),
+    cell_index(X,CellSize,Cx),
+    cell_index(Y,CellSize,Cy).
+ploughed_cell_sample(CP,T0,Duration,Elapsed,Z,Zt,CellSize,N,I,Cx,Cy) :-
+    I < N,
+    I1 is I + 1,
+    ploughed_cell_sample(CP,T0,Duration,Elapsed,Z,Zt,CellSize,N,I1,Cx,Cy).
+
+% sample_success_at(+Loc,+Tol,+S): the take_sample analogue of
+% visited/3 above -- TRUE iff SOME take_sample action SUCCEEDED
+% (Reason=sample_success(X,Y,_ActionCode) -- see do_node(take_sample
+% (...)) further up) anywhere in S's history, at a recorded position
+% within Tol of Loc=point(GX,GY). Same monotonic, whole-history-search
+% shape as visited/3 (once true for a situation, true for every
+% situation built on top of it), so "did you take the sample at THESE
+% locations" is exactly "sample_success_at(point(GX1,GY1),Tol,S),
+% sample_success_at(point(GX2,GY2),Tol,S), ..." in a goal formula --
+% one conjunct per location, same idiom multi-waypoint goal formulas
+% already use for visited/3.
+sample_success_at(point(GX,GY), Tol, do(take_sample(_SampleId,_ActionCode,sample_success(X,Y,_V,_SampleId2,_ActionCode2),true), _S)) :-
+    dist(X,Y,GX,GY,D), D =< Tol.
+sample_success_at(Loc, Tol, do(_A, S)) :- sample_success_at(Loc, Tol, S).
 
 % -- crashed_in(S) / battery_depleted_in(S) / obstacle_in_bound_in(S) /
 %    battery_under_in(S): trivial one-liners reading the actual Reason,
@@ -2616,10 +4437,18 @@ any_condition_status(Code, Status) :-
 % trivially succeed even though something genuinely just halted. Every
 % new reactive-capable leaf type needs its OWN base clause added here
 % (or all leaves funneled through one shared halt-action functor with a
-% Kind tag, instead of a differently-named action per leaf type).
+% Kind tag, instead of a differently-named action per leaf type) --
+% install_tool/uninstall_tool (below) are the first to actually take
+% this up: two MORE base clauses, same shape as haltMoveto's own,
+% since halt_install_tool(T,Reason,Status)/halt_uninstall_tool(T,
+% Reason,Status) share that EXACT (T,Reason,Status) argument shape by
+% deliberate design (see do_node(install_tool_leg(...))'s own note).
 holds(last_halt(Reason), do(haltMoveto(_T,Reason,_Status),_SPrev)).
+holds(last_halt(Reason), do(halt_install_tool(_T,Reason,_Status),_SPrev)).
+holds(last_halt(Reason), do(halt_uninstall_tool(_T,Reason,_Status),_SPrev)).
 holds(last_halt(Reason), do(checked(_,_,_), S)) :- holds(last_halt(Reason), S).
 holds(last_halt(Reason), do(planned(_,_), S)) :- holds(last_halt(Reason), S).
+holds(last_halt(Reason), do(take_sample(_,_,_,_), S)) :- holds(last_halt(Reason), S).
 
 % KNOWN LIMITATION, found while adding cond(C,Code)'s own checked(...)
 % marker (Option B): cond(neg(last_halt(...))) -- problem3's OWN Bug0
@@ -2688,7 +4517,16 @@ any_battery_depletion :- final_situation(S), battery_depleted_in(S).
 
 % -- sample_index_for_time(+T,+T0,+Duration,-I): bucket an exact time
 %    into the nearest reporting sample, for continuity with plotting.
+%    Duration=0.0 is a genuine, valid case (a zero-length "already at
+%    the goal" leg -- see collision_geometry.py's own _walk_noisy_
+%    point note); such a leg's own single instant always buckets to
+%    sample 0, the same well-defined choice sample_walk_frac/3 above
+%    makes for the identical reason. TWO mutually exclusive clauses,
+%    same "no if-then-else" convention as everywhere else in this file.
+sample_index_for_time(T,T0,Duration,0) :-
+    Duration =< 0.0.
 sample_index_for_time(T,T0,Duration,I) :-
+    Duration > 0.0,
     num_samples(N),
     FracRaw is (T-T0)/Duration,
     IReal is FracRaw*N,
@@ -2709,8 +4547,9 @@ sample_index_for_time(T,T0,Duration,I) :-
 first_hit(I) :-
     final_situation(S),
     S = do(haltMoveto(Tcross,crashed(_ObstacleId,_ActionCode),_), _),
-    current_walk(S, CP, _Triggers, T0, _SPrev),
-    walk_duration(CP, Duration),
+    current_walk(S, CP, _Triggers, T0, SPrev),
+    hitch(Tool, SPrev),
+    walk_duration(CP, Tool, SPrev, Duration),
     sample_index_for_time(Tcross,T0,Duration,I).
 
 % -- Feature 2a analogue: P(the exact collision, if any, falls at or
@@ -2718,8 +4557,9 @@ first_hit(I) :-
 hit_by(N) :-
     final_situation(S),
     S = do(haltMoveto(Tcross,crashed(_ObstacleId,_ActionCode),_), _),
-    current_walk(S, CP, _Triggers, T0, _SPrev),
-    walk_duration(CP, Duration),
+    current_walk(S, CP, _Triggers, T0, SPrev),
+    hitch(Tool, SPrev),
+    walk_duration(CP, Tool, SPrev, Duration),
     sample_index_for_time(Tcross,T0,Duration,I),
     I =< N.
 
@@ -2772,9 +4612,11 @@ hit_by(N) :-
 verify_safe :-
     final_situation(S),
     current_walk(S, CP, Triggers, T0, SPrev),
-    walk_duration(CP, Duration),
+    hitch(Tool, SPrev),
+    walk_duration(CP, Tool, SPrev, Duration),
+    effective_tool_moving_drain_rate(Tool, SPrev, Rate),
     leg_start_battery(T0, SPrev, B0),
-    earliest_halt(CP,Triggers,T0,Duration,0.0,0.0,0.0,B0, completed,_,_).
+    earliest_halt(CP,Triggers,T0,Duration,0.0,0.0,0.0,B0,Rate,0, completed,_,_).
 
 plan_route_blocked :- \+ verify_safe.
 

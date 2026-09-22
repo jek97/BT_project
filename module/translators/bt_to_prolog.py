@@ -14,13 +14,39 @@ their own; ReactiveSequence/ReactiveFallback, which map to
 reactivesequence(Code)/reactivefallback(Code) and DO catch/locally
 redescend one whose own code matches -- see _REACTIVE_CONTROL_FLOW's own
 note and basic_action_theory.pl's own CONTROL-FLOW REDESCEND TARGETS
-note for the full mechanism; and Inverter, BT.cpp's single-child
-negation decorator, which maps to inverter(Child) -- flips true/false,
-passes a reactive(_) status straight through unchanged, never itself
-reactive), and translates it into the nested do_node/4 term text
-basic_action_theory.pl's plan/1 expects, plus one reactive_children/2
-fact per ReactiveSequence/ReactiveFallback (see generate_plan_pl's own
-note on why those live separately).
+note for the full mechanism; Inverter, BT.cpp's single-child negation decorator, which maps to
+inverter(Child) -- flips true/false, passes a reactive(_) status
+straight through unchanged, never itself reactive; and
+RetryUntilSuccessful(num_attempts="n")/Repeat(num_cycles="n"), BT.cpp's
+bounded-retry decorators, which are unrolled at translation time into a
+plain fallback_node/seq_node of n literal copies of their one child --
+see _RETRY_DECORATORS's own note for why that's a sound semantic match,
+not an approximation, and why n must be a literal integer, never a
+blackboard reference; and SubTree(ID="...", port1="...", ...), real
+BT.cpp v4 tree composition WITH full port remapping -- see
+_translate_node's own "SubTree" branch and _apply_subtree_remap's own
+note for the full mechanism. A tree file's own <root> may also contain
+<include path="other_file.xml"/> elements (siblings of its
+<BehaviorTree> definitions, exactly like real BT.cpp) naming any OTHER
+tree file in the SAME DIRECTORY whose own <BehaviorTree ID="..."> then
+become instantiable via <SubTree> too -- see _collect_tree_registry's
+own note for why "same directory, bare filename only" rather than
+BT.cpp's fuller relative-path/ros_pkg resolution. Every <SubTree> is
+expanded STATICALLY, at translation time (a deep-copied, port-
+substituted clone of the referenced tree's body is spliced in exactly
+where the <SubTree> sits, then translated normally) -- there is no
+runtime notion of a subtree instance in the generated Prolog at all,
+same "unroll away, no new do_node wrapper" treatment RetryUntilSuccessful/
+Repeat already get, and for the identical reason (see that decorator's
+own note): nothing about this project's do_node/poss encoding attaches
+state to a node's IDENTITY, so a statically-expanded copy and a
+hand-pasted one are indistinguishable Prolog terms. Direct or indirect
+self-inclusion (a SubTree that would need to expand itself, forever) is
+a hard translation error, not a runtime concern, since expansion
+happens once, up front, not lazily per tick, and translates it into the
+nested do_node/4 term text basic_action_theory.pl's plan/1 expects,
+plus one reactive_children/2 fact per ReactiveSequence/ReactiveFallback
+(see generate_plan_pl's own note on why those live separately).
 
 WHERE THE RESULT GOES: generate_plan_pl() writes the problem's own
 plan_generated.pl, a single plan/1 FACT (not a clause with a body --
@@ -68,21 +94,96 @@ OTHER PORT ENCODINGS (this project's own choice; schema.yaml describes
 port TYPES, not a serialization -- see its own note pointing here):
     Point               "X;Y"                  e.g. goal="11.675;11.525"
     vector<std::string> ";"-separated           e.g. triggers="collision;battery"
+    vector<Point>       "|"-separated "X;Y"s    e.g. waypoints="5;27|41;27"
+                         (PlanWithWaypoints' own waypoints port, the
+                         ONLY vector<Point> INPUT port so far -- "|"
+                         rather than ";" since Point itself already
+                         uses ";" internally, and rather than ","
+                         since vector<std::string> already claims that
+                         shape for a different port type)
     double / string     the attribute's own text, parsed by Python's
                          float()/left as-is respectively
 
-CONTROL-FLOW GUARD DERIVATION: a MoveTo's own Triggers list is no
-longer entirely hand-typed. For every <MoveTo>, this file now walks
+AUTOMATIC PLAN+MOVETO MERGING: before any of the translation above ever
+runs, _merge_plan_moveto_runs walks every <BehaviorTree> definition in
+the file (the main one plus any local siblings -- NOT reaching inside
+an <include>d file's own trees, each of which gets this same treatment
+independently, right after ITS OWN parse, in _collect_tree_registry)
+looking for a specific, narrow pattern: a plain <Sequence>'s direct
+children containing a RUN of two or more <Sequence> elements, each
+itself containing EXACTLY <PlanWith algorithm="..." goal="X;Y"
+control_points="{key}"/> followed by <MoveTo control_points="{key}"/>
+with no other attributes and no explicit triggers on the MoveTo, all
+sharing the SAME literal (non-blackboard) algorithm value astar or
+straight. Each such maximal run is spliced out and replaced by ONE
+synthetic <Sequence><PlanWithWaypoints algorithm="..." waypoints="G1|
+G2|...|Gn" control_points="{merged_key}"/><MoveTo control_points=
+"{merged_key}"/></Sequence> -- a REAL tree, indistinguishable from one
+a human hand-wrote this way, so nothing downstream (var_pool, action
+codes, reason-pattern/query generation, guard derivation) needs any
+special-casing for a merge-produced PlanWithWaypoints versus a hand-
+written one.
+
+WHY narrow this way, deliberately, rather than a more general rewrite:
+  - Only <Sequence> parents are scanned, never <Fallback>/
+    <ReactiveSequence>/<ReactiveFallback> -- a Fallback's own children
+    are ALTERNATIVES (only one runs), not a chain to concatenate, so
+    merging across one would change what the tree MEANS, not just how
+    it's compiled. (Their own children are still recursed into
+    looking for a NESTED plain <Sequence> with its own mergeable run,
+    same as everywhere else.)
+  - Only the "wrapped per-leg" shape -- a <Sequence> whose own two
+    children are PlanWith then MoveTo -- is detected, matching exactly
+    what this project's own translated-from-GPS-mission trees produce
+    (see problems/problem6*/behavior_tree.xml's own header). A BARE
+    PlanWith/MoveTo pair sitting directly among OTHER siblings (e.g.
+    plowing.xml's own DeployTool-separated legs) is NOT auto-merged --
+    wrap a run of bare pairs in their own <Sequence> first if merging
+    them is wanted.
+  - A leg whose PlanWith goal is blackboard-wired (not a literal "X;Y")
+    breaks the run at that point -- there is no concrete waypoint text
+    to splice into the merged node's own waypoints="..." attribute.
+  - A leg whose MoveTo has an explicit triggers="..." of its own breaks
+    the run -- a trigger firing partway through a MERGED multi-
+    waypoint walk would halt it at some arbitrary point along the
+    concatenated spline, not meaningfully "at waypoint k", so a leg
+    that genuinely needs its own early-halt condition cannot safely be
+    silently absorbed into a longer walk.
+  - voronoi/follow_boarder legs are never merged (PlanWithWaypoints
+    doesn't support them -- see schema.yaml's own note).
+A run of length exactly 1 (no adjacent mergeable sibling) is left
+completely alone -- merging a single leg into a one-waypoint
+PlanWithWaypoints would be a purely cosmetic rewrite, not worth doing.
+
+THE POINT of all this (repeated from PlanWithWaypoints' own schema.yaml
+entry and do_node(planWithWaypoints(...))'s own note, since it's worth
+seeing from all three angles): N separate PlanWith+MoveTo legs draw N
+independent z/zt position-noise pairs, all simultaneously "live" once
+the plan's own final situation is regressed -- see this project's own
+FUTUREWORK.md for why that drives up the compiled ProbLog formula's
+size on a many-leg tree. Collapsing a run of N such legs into ONE
+PlanWithWaypoints+MoveTo pair draws exactly ONE noise pair for the
+whole merged route instead, directly shrinking that formula -- at the
+cost of a real, stated change to the probabilistic model: positional
+noise is no longer independently reset at each original waypoint (see
+PlanWithWaypoints' own schema.yaml entry for that tradeoff in full).
+This pass runs UNCONDITIONALLY, on every tree translated -- there is
+no flag to disable it; give a leg a blackboard-wired goal (see above)
+to keep it out of a specific run.
+
+CONTROL-FLOW GUARD DERIVATION: a MoveTo's (or InstallTool's/
+UninstallTool's) own Triggers list is no longer entirely hand-typed.
+For every <MoveTo>/<InstallTool>/<UninstallTool>, this file now walks
 UP the tree from it to the root; at each ReactiveSequence/
 ReactiveFallback ancestor, every LEFT SIBLING of the branch leading to
-the MoveTo (optionally wrapped in one or more <Inverter>) that reduces
+it (optionally wrapped in one or more <Inverter>) that reduces
 to a single Condition leaf becomes an automatically-derived guard --
 a Sequence-shaped ancestor requires its left siblings to stay TRUE
 (interrupts on becoming false), a Fallback-shaped one requires them to
 stay FALSE (interrupts on becoming true; each <Inverter> flips this
 once), and the guard is tagged with THAT SPECIFIC ancestor's own code,
 not necessarily the nearest enclosing reactive composite (two nested
-reactive ancestors contributing guards to the same MoveTo get two
+reactive ancestors contributing guards to the same leaf get two
 DIFFERENT codes -- see _reduce_guard_condition's own note). Rather
 than looking up a pre-built "opposite" trigger name per condition
 (which would need both crossing directions hand-implemented for every
@@ -90,14 +191,23 @@ condition, and silently do the wrong thing for any gap), the required
 condition is built by NEGATING the actual Condition term when the
 guard's polarity calls for it (reusing holds/2's own neg/1
 combinator), and basic_action_theory.pl's guard_break(Cond,Code)
-trigger + holds_leg/9 do a GENERIC bracket-scan+bisection search for
-when THAT EXACT term stops holding -- see that file's own note above
-holds_leg/9. A left sibling that is a memory-level (plain Sequence/
-Fallback) guard, or that reduces to a HISTORY-based condition (e.g.
-HaltedWith -- see _NON_CONTINUOUS_CONDITIONS), or that reduces to
-neither a Condition leaf nor an <Inverter> chain over one, produces no
-Triggers entry / a hard BTValidationError respectively -- see
-_reduce_guard_condition.
+trigger + holds_leg/9 (MoveTo) or tool_holds_leg/6 (InstallTool/
+UninstallTool -- see that file's own TOOL TRIGGERS section) do a
+GENERIC bracket-scan+bisection search for when THAT EXACT term stops
+holding -- see that file's own note above holds_leg/9. A left sibling
+that is a memory-level (plain Sequence/Fallback) guard, or that
+reduces to a HISTORY-based condition (e.g. HaltedWith -- see
+_NON_CONTINUOUS_CONDITIONS), or that reduces to neither a Condition
+leaf nor an <Inverter> chain over one, produces no Triggers entry / a
+hard BTValidationError respectively -- see _reduce_guard_condition.
+guard_stack itself is built IDENTICALLY for every leaf kind (see
+_translate_node's own ReactiveSequence/ReactiveFallback branch) --
+InstallTool/UninstallTool additionally require every guard_stack
+entry they consume to be battery-only (see _guard_condition_is_
+battery_only and its own call site in _translate_leaf), a hard error
+otherwise, for the SAME reason their own triggers port is restricted
+to battery-related names: neither action ever moves the robot, so a
+motion-based guard has no meaningful geometry to watch.
 
 Every MoveTo also gets `collision` and (when this problem's own
 config.yaml has battery.enabled: true) `battery` ADDED AUTOMATICALLY,
@@ -120,6 +230,8 @@ tunable value, so there is nothing sensible to warn-and-continue with
 (same reasoning as module/translators/config_to_prolog.py's own hard
 requirements, as opposed to its two non-fatal numeric warnings).
 """
+import copy
+import itertools
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -146,14 +258,126 @@ _ACTION_DISPATCH = {
     # per schema entry -- see _PLAN_ALGORITHMS below and the "planWith"
     # kind's own branch in _translate_leaf.
     "PlanWith": {"kind": "planWith"},
+    # planWithWaypoints(Algorithm,Waypoints,CP,ActionCode) -- the multi-
+    # waypoint sibling of PlanWith, astar/straight only (see schema.
+    # yaml's own PlanWithWaypoints entry, and _PLAN_WAYPOINTS_ALGORITHMS
+    # below). A tree author can write this directly, but it's also
+    # produced AUTOMATICALLY by _merge_plan_moveto_runs's own rewrite
+    # pass (see this module's own "AUTOMATIC PLAN+MOVETO MERGING"
+    # section header) -- by the time _translate_node ever sees one,
+    # there is no way to tell "hand-written" from "merge-produced"
+    # apart, nor any need to: both go through the exact same "kind"
+    # branch in _translate_leaf below.
+    "PlanWithWaypoints": {"kind": "planWithWaypoints"},
+    # take_sample(SampleId,ActionCode) -- INSTANTANEOUS (see schema.
+    # yaml's own TakeSample entry): its own Reason universe doesn't
+    # depend on Triggers/algorithm the way MoveTo/PlanWith's do, but it
+    # DOES take one port now -- id, the tree author's own name for this
+    # occurrence, needed so a later SampleValueBelow/Equal/Over
+    # condition can reference it (see this file's own "take_sample"
+    # kind branch in _translate_leaf for the full picture).
+    "TakeSample": {"kind": "take_sample"},
+    # install_tool_leg(Tool,Triggers,ActionCode)/uninstall_tool_leg
+    # (Tool,Triggers,ActionCode) -- DURATIVE, same start/halt shape as
+    # MoveTo, but the robot never moves: see each one's own "kind"
+    # branch in _translate_leaf for the battery-only Triggers
+    # restriction (_TOOL_TRIGGER_FUNCTORS below) and its own tool="..."
+    # port validation.
+    "InstallTool": {"kind": "install_tool"},
+    "UninstallTool": {"kind": "uninstall_tool"},
+    # deploy_tool_leg(Tool,Triggers,ActionCode)/retract_tool_leg(Tool,
+    # Triggers,ActionCode) -- SAME shared shape as InstallTool/
+    # UninstallTool just above (the "install_tool"/"uninstall_tool"/
+    # "deploy_tool"/"retract_tool" kind branch in _translate_leaf is
+    # 100% generic over info["kind"] as the functor prefix, no special-
+    # casing needed here at all): lowers/raises whichever tool is
+    # ALREADY hitched (requires it be installed first -- see
+    # basic_action_theory.pl's own poss(start_deploy_tool(...))), and
+    # currently only ever possible for Tool's own kind=plow (checked at
+    # the Prolog level, not here -- this translator never parses
+    # config.yaml, so it can't know a given id's own kind). Between a
+    # successful DeployTool and its matching RetractTool, MoveTo starts
+    # marking ploughed/3 cells and picks up the deployed-specific speed/
+    # battery-drain-rate values -- see basic_action_theory.pl's own
+    # Section 5d.
+    "DeployTool": {"kind": "deploy_tool"},
+    "RetractTool": {"kind": "retract_tool"},
+    # tool_position_query(Id,Pos,ActionCode)/tools_of_kind_query(Kind,
+    # Tools,ActionCode)/nearest_tool_of_kind_query(Kind,Id,Pos,
+    # ActionCode) -- pure, side-effect-free QUERY leaves against
+    # tool_position/4, tools_of_kind/5, nearest_tool_of_kind/6
+    # (basic_action_theory.pl Section 5c/5d), same "pure computation, no
+    # primitive_action/poss layer" shape as PlanWith itself (can be
+    # asked ANYTIME, no precondition of its own). NearestToolOfKind is
+    # NOT simply "ToolPosition then ToolsOfKind chained in the tree" --
+    # picking the CLOSEST candidate needs an argmin fold (findall/3 +
+    # min_candidate/2 in the theory) that has no BT.cpp-tree-composable
+    # equivalent, so it's its own self-contained leaf, even though its
+    # own Prolog implementation internally composes tools_of_kind/5
+    # (which itself composes tool_instance/2 with tool_position/4).
+    "ToolPosition": {"kind": "tool_position_query"},
+    "ToolsOfKind": {"kind": "tools_of_kind_query"},
+    "NearestToolOfKind": {"kind": "nearest_tool_of_kind_query"},
+    # hitched_id_query(Id,ActionCode) -- a FOURTH query leaf, same
+    # "pure computation, no primitive_action/poss layer" shape as the
+    # three above. Outputs the id of whatever tool is CURRENTLY
+    # hitched, no input port at all -- see basic_action_theory.pl's own
+    # do_node(hitched_id_query(...)) note for why this exists
+    # separately from NearestToolOfKind/ToolPosition (an already-
+    # hitched tool never flows through either of those in the SAME
+    # run).
+    "HitchedId": {"kind": "hitched_id_query"},
 }
+
+# InstallTool/UninstallTool's own tool="..." port names a specific
+# tool INSTANCE id (e.g. "cart1"), not a kind -- config.yaml's own
+# tool.instances lists which ids exist and what kind each one is (see
+# config_to_prolog.py's own note, and basic_action_theory.pl's
+# tool_instance/2) -- NOT known to this translator, which never parses
+# config.yaml, so there is no fixed set to validate tool="..." against
+# at translation time the way there used to be back when only one
+# instance per kind existed. An unknown id is instead caught at the
+# Prolog level: tool_instance/2 (and therefore tool_position/4) simply
+# fails for it, making poss(start_install_tool(...)) unsatisfiable --
+# the same "unsatisfied precondition, not a translator error" shape
+# every other config-dependent value in this theory already has. All
+# this translator still checks is that the string is even a SYNTACTICALLY
+# valid Prolog atom (see _VALID_PROLOG_ATOM_RE below) -- catching an
+# obvious typo (capitalized, embedded spaces, ...) before it reaches
+# generated Prolog at all, without pretending to validate its meaning.
+
+# Trigger-list functors install_tool/uninstall_tool's own triggers
+# port ACCEPTS -- battery-related ONLY (reusing _is_battery_trigger's
+# own functor check below, unchanged): the robot never moves during
+# either action, so a motion-based trigger name (collision,
+# obstacle_in_bound, obstacle_on_path, line_of_sight_clear,
+# crosses_segment) is REJECTED here at translation time (a clear
+# authoring mistake, same "hard failure for structural mistakes"
+# posture every other validation in this file already takes) --
+# basic_action_theory.pl's own tool_trigger_crossing_time/8 is ALSO
+# independently robust to one anyway (see that predicate's own note),
+# for a hand-written plan_generated.pl that bypasses this translator
+# entirely (same "defense in depth" reasoning problem3's own
+# known-limitation notes document elsewhere).
 
 # The only valid values for PlanWith's own `algorithm` port. astar/
 # straight/voronoi take a `goal` port and become a BARE Prolog atom;
 # follow_boarder takes `obstacle_id`/`offset` instead and becomes the
 # COMPOUND term follow_boarder(ObstacleId,Offset) plan_call/8's own
 # follow_boarder clauses dispatch on (see basic_action_theory.pl).
-_PLAN_ALGORITHMS = {"astar", "straight", "voronoi", "follow_boarder"}
+# dastar ALSO takes a `goal` port (like astar/straight/voronoi) but
+# ADDITIONALLY an optional `step` port, becoming the COMPOUND term
+# dastar(Step) -- same "extra parameter riding along inside Algorithm"
+# shape as follow_boarder, just alongside a real goal instead of in
+# place of one.
+_PLAN_ALGORITHMS = {"astar", "straight", "voronoi", "follow_boarder", "dastar"}
+# dastar's own `step` port default (metres) when omitted -- matches
+# schema.yaml's own documented default for that port.
+_DASTAR_DEFAULT_STEP = 2.0
+# PlanWithWaypoints' own algorithm port only supports these two -- see
+# schema.yaml's own entry for why (voronoi has no natural per-leg
+# chaining, follow_boarder has no goal point at all).
+_PLAN_WAYPOINTS_ALGORITHMS = {"astar", "straight"}
 # "single_float_port": the shared shape of every cond(Functor(Value))
 # condition whose one port is a plain float -- ObstacleInBound and
 # BatteryBelow/Equal/Over all reduce to this, just with different
@@ -175,6 +399,31 @@ _CONDITION_DISPATCH = {
     "BatteryBelow": {"kind": "single_float_port", "functor": "battery_below", "port": "threshold"},
     "BatteryEqual": {"kind": "single_float_port", "functor": "battery_equal", "port": "threshold"},
     "BatteryOver": {"kind": "single_float_port", "functor": "battery_over", "port": "threshold"},
+    # sample_value_below/equal/over(SampleId,Threshold) -- a SECOND
+    # 2-port condition shape (like distance_cond above), but the first
+    # port is the tree author's own TakeSample id (a string, validated
+    # the same way InstallTool/UninstallTool's own tool="..." port
+    # already is -- see _VALID_PROLOG_ATOM_RE), not a Point. See
+    # basic_action_theory.pl's own holds(sample_value_below(...)) and
+    # its Below/Equal siblings, near distance_below/3.
+    "SampleValueBelow": {"kind": "sample_value_cond", "functor": "sample_value_below"},
+    "SampleValueEqual": {"kind": "sample_value_cond", "functor": "sample_value_equal"},
+    "SampleValueOver": {"kind": "sample_value_cond", "functor": "sample_value_over"},
+    # hitched / hitched(Kind) -- see basic_action_theory.pl's own
+    # holds(hitched,S)/holds(hitched(Kind),S) note, near distance_below/3.
+    "Hitched": {"kind": "hitched_cond"},
+    # deployed -- see basic_action_theory.pl's own holds(deployed,S)
+    # note, right below hitched's own.
+    "Deployed": {"kind": "deployed_cond"},
+    # ploughed_at(GX,GY) / ploughed_between(X1,Y1,X2,Y2) -- see
+    # basic_action_theory.pl's own holds(ploughed_at(...))/holds(
+    # ploughed_between(...)) note, right below hitched/deployed's own.
+    # PloughedAt takes ONE Point port (goal, like DistanceBelow's own);
+    # PloughedBetween takes TWO (p1, p2 -- the box's corners, either
+    # order), so each gets its own dispatch kind rather than sharing
+    # distance_cond's shape (which also carries a Threshold).
+    "PloughedAt": {"kind": "ploughed_at_cond"},
+    "PloughedBetween": {"kind": "ploughed_between_cond"},
     "HaltedWith": {"kind": "halted_with_cond"},
     # line_of_sight_clear(ObstacleId,GX,GY) -- obstacle_id verbatim
     # Prolog text (like HaltedWith's reason), goal a Point literal.
@@ -195,6 +444,42 @@ _CONTROL_FLOW = {"Sequence": "seq_node", "Fallback": "fallback_node"}
 # branch in _translate_node, not via _CONTROL_FLOW's simple lookup.
 _REACTIVE_CONTROL_FLOW = {"ReactiveSequence": "reactivesequence", "ReactiveFallback": "reactivefallback"}
 
+# RetryUntilSuccessful(num_attempts="n") / Repeat(num_cycles="n") --
+# BT.cpp's built-in bounded-retry decorators. Both are translated by
+# literal XML unrolling: duplicate the ONE child subtree n times under
+# a plain Fallback (Retry) or Sequence (Repeat) -- NOT a new reactive
+# scope, exactly like Sequence/Fallback themselves (reactive_code and
+# guard_stack pass through unchanged). This is a sound 1:1 semantic
+# match, not an approximation: RetryUntilSuccessful's own "first
+# SUCCESS stops, n FAILUREs give up" IS Fallback's semantics over n
+# identical children, and Repeat's own "keep going while SUCCEEDING,
+# bail on the first FAILURE" IS Sequence's -- both hold here because
+# nothing about this project's own do_node/poss encoding attaches
+# state to a node's IDENTITY: every occurrence already gets its own
+# fresh action_code/condition_code from _VarPool regardless of whether
+# it came from "the same node ticked again" or "a separate unrolled
+# copy", and all REAL state (position, battery, time) is threaded
+# through the situation term, not the node -- so n copies and "the
+# same node retried n times" produce IDENTICAL Prolog terms. The ONE
+# thing that does NOT come for free from action/condition codes alone:
+# each copy's own BLACKBOARD keys (control_points="{cp}", a goal
+# wired from another node's output, ...) -- see _translate_node's own
+# "RetryUntilSuccessful"/"Repeat" branch for why those get the SAME
+# "{key}__subN" per-copy isolation a SubTree instantiation's own
+# private ports already get, and what breaks without it.
+#
+# num_attempts/num_cycles MUST be a literal, non-negative integer known
+# at translation time -- unrolling happens ONCE, statically, before any
+# Prolog term (let alone a situation) exists, so unlike every other
+# port in this file it can NEVER be a "{blackboard_key}" reference (see
+# _RETRY_DECORATORS's own use in _translate_node, which rejects one
+# with a hard BTValidationError rather than silently misreading the
+# literal string "{...}" as a malformed integer).
+_RETRY_DECORATORS = {
+    "RetryUntilSuccessful": {"functor": "fallback_node", "count_attr": "num_attempts"},
+    "Repeat": {"functor": "seq_node", "count_attr": "num_cycles"},
+}
+
 # Condition ids that are HISTORY-based rather than a live, continuous
 # fluent -- they cannot change WHILE a leg is running (nothing appends
 # to the situation history until the CURRENT leg itself halts), so
@@ -208,8 +493,14 @@ _REACTIVE_CONTROL_FLOW = {"ReactiveSequence": "reactivesequence", "ReactiveFallb
 # exclusion also prevents a missing-clause silently reading as "already
 # false at T0" there. A future condition added to schema.yaml that is
 # similarly history-based (not a function of the CURRENT leg's own
-# position/battery) belongs here too.
-_NON_CONTINUOUS_CONDITIONS = {"HaltedWith"}
+# position/battery) belongs here too. SampleValueBelow/Equal/Over join
+# HaltedWith for exactly this reason -- a take_sample's own value is
+# fixed the instant it's drawn (an INSTANTANEOUS action, no Duration to
+# elapse), so there is nothing for a mid-leg crossing-search to watch.
+_NON_CONTINUOUS_CONDITIONS = {
+    "HaltedWith", "SampleValueBelow", "SampleValueEqual", "SampleValueOver",
+    "Hitched", "Deployed", "PloughedAt", "PloughedBetween",
+}
 
 # Trigger-list functors that are REACTIVE-classified in leg_status/9
 # (basic_action_theory.pl) -- i.e. everything except the two original,
@@ -233,6 +524,14 @@ _ALWAYS_ALLOWED_ATTRS = {"name"}
 
 _BLACKBOARD_RE = re.compile(r"^\{(\w+)\}$")
 _VALID_PROLOG_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# A valid unquoted Prolog atom (lowercase-start) -- used to sanity-check
+# InstallTool/UninstallTool's own tool="..." port, which names a tool
+# instance id this translator can't otherwise validate (see _ACTION_
+# DISPATCH's own InstallTool/UninstallTool note). Independent copy of
+# config_to_prolog.py's own identically-named regex, same "small,
+# stable check, not worth a cross-file import for" reasoning as this
+# file's other tiny shared vocabularies.
+_VALID_PROLOG_ATOM_RE = re.compile(r"^[a-z][a-zA-Z0-9_]*$")
 
 
 class BTValidationError(Exception):
@@ -260,6 +559,45 @@ def _is_blackboard_ref(value):
 
 def _blackboard_key(value):
     return _BLACKBOARD_RE.match(value).group(1)
+
+
+def _apply_subtree_remap(root_elem, remap, suffix):
+    """Rewrites every "{key}" attribute value throughout root_elem's own
+    subtree (root_elem itself plus every descendant) IN PLACE, giving one
+    <SubTree ID="..." port1="..." port2="..."/> call site full BT.cpp-
+    style port remapping -- see _translate_node's own "SubTree" branch,
+    the only caller.
+
+    remap is {internal_port_name: raw_caller_text}, built straight from
+    that ONE <SubTree> element's own attributes (minus ID/name) -- for
+    an element inside the cloned body whose attribute value is exactly
+    "{key}" and key IS in remap, the value becomes remap[key] VERBATIM
+    (itself either another "{parent_key}" blackboard reference or a
+    literal) -- exactly BT.cpp's own "the subtree's internal blackboard
+    key IS the parent's key, right here" semantics, composing correctly
+    through nested SubTrees for free (this substitution happens, then
+    normal recursive translation continues into the result, so a
+    doubly-nested SubTree's own remap sees whatever text THIS
+    substitution already wrote).
+
+    A "{key}" NOT in remap is instead PRIVATE/LOCAL to this one subtree
+    INSTANCE (BT.cpp's own default for an un-remapped port) -- renamed
+    to a fresh, call-site-unique "{key__sub7}" (suffix from var_pool's
+    own next_subtree_suffix()) so two instantiations of the SAME
+    subtree (or an unrelated tree that happens to reuse a common local
+    key name, e.g. "cp") never collide into ONE shared Prolog variable
+    -- see the module docstring's own warning against reusing one CP
+    across two independent PlanWith calls; identical reasoning, just
+    across subtree instances rather than fallback_node branches."""
+    for elem in root_elem.iter():
+        for attr_name, value in list(elem.attrib.items()):
+            if not _is_blackboard_ref(value):
+                continue
+            key = _blackboard_key(value)
+            if key in remap:
+                elem.attrib[attr_name] = remap[key]
+            else:
+                elem.attrib[attr_name] = f"{{{key}__{suffix}}}"
 
 
 class _VarPool:
@@ -298,6 +636,26 @@ class _VarPool:
         self.condition_labels = {}   # condition_code -> human-readable "what/where" label,
                                       # e.g. "DistanceBelow(2.275,2.075,0.3) [GoHome]" --
                                       # see next_condition_code()'s own note.
+        self.tree_defs = {}    # <SubTree ID="..."> lookup: id -> <BehaviorTree> element,
+                                # populated ONCE by translate_tree (via _collect_tree_
+                                # registry) before the root node is ever translated --
+                                # see that function's own note.
+        self.expanding = []    # stack of <BehaviorTree> IDs currently being expanded,
+                                # innermost last -- SubTree's own cycle-detection guard
+                                # (a SubTree including itself, directly or through a
+                                # chain of others, would otherwise unroll forever, since
+                                # expansion happens statically at translation time, not
+                                # lazily at runtime the way real BT.cpp's own SubTree does).
+        self._subtree_counter = 0
+
+    def next_subtree_suffix(self):
+        """A fresh, unique suffix for renaming one <SubTree> call site's
+        own UNREMAPPED (private/local) blackboard keys -- see
+        _apply_subtree_remap's own note for why this is needed at all.
+        Same per-occurrence-counter idiom as next_reactive_code()/
+        next_action_code() above, just for SubTree instantiations."""
+        self._subtree_counter += 1
+        return f"sub{self._subtree_counter}"
 
     def var_for(self, key):
         if key not in self._map:
@@ -390,6 +748,25 @@ def _point_xy(text, tag, port_name):
             f"X/Y -- expected \"X;Y\" with two floats.")
 
 
+def _point_list_literal(text, tag, port_name):
+    """PlanWithWaypoints' own waypoints port encoding: "|"-separated
+    "X;Y" points (e.g. "5;27|41;27|0;0") -- "|" because Point itself
+    already uses ";" internally (see this module's own docstring's
+    encoding list). Returns (prolog_list_text, [(x,y), ...]) -- the
+    raw float pairs are ALSO returned since the caller needs them both
+    for the real Prolog term (a point(X,Y) list) and this occurrence's
+    own human-readable action label."""
+    segments = [s for s in text.split("|") if s != ""]
+    if not segments:
+        raise BTValidationError(
+            f"<{tag}>'s '{port_name}' port ('{text}') is empty -- "
+            f"expected at least one \"X;Y\" waypoint, \"|\"-separated "
+            f"for more than one.")
+    pairs = [_point_xy(seg, tag, port_name) for seg in segments]
+    prolog_list = "[" + ",".join(f"point({x},{y})" for x, y in pairs) + "]"
+    return prolog_list, pairs
+
+
 def _is_battery_trigger(token):
     """True for a Triggers-list token that's battery-related -- the
     bare atom 'battery' or any battery_<whatever>(...) functor
@@ -411,6 +788,27 @@ def _is_battery_trigger(token):
 
 
 _BATTERY_CONDITION_RE = re.compile(r"\bbattery_(below|equal|over)\(")
+
+
+def _guard_condition_is_battery_only(cond_term):
+    """True if cond_term (an already-reduced guard condition -- see
+    _reduce_guard_condition, which only ever emits a bare leaf term or
+    one neg(...) wrapped around it, e.g. "battery_over(70.0)" or
+    "neg(battery_over(70.0))") IS a battery_below/equal/over term and
+    NOTHING else. The guard-derivation counterpart of _is_battery_
+    trigger above, but checking the FULL reduced term (a single leaf,
+    optionally neg-wrapped) rather than a bare trigger token's own
+    functor prefix -- used by install_tool/uninstall_tool's own
+    _translate_leaf branch to enforce the SAME restriction its manual
+    triggers port already enforces (see _is_battery_trigger's own call
+    site there): {tag} never moves, so a left-sibling Condition testing
+    robot position/obstacles has no meaningful geometry for a guard
+    here to watch, same reasoning as the motion-trigger rejection."""
+    inner = cond_term
+    if inner.startswith("neg(") and inner.endswith(")"):
+        inner = inner[len("neg("):-1]
+    functor = inner.split("(", 1)[0].strip()
+    return functor in ("battery_below", "battery_equal", "battery_over")
 
 
 def _guard_condition_mentions_battery(cond_term):
@@ -514,14 +912,19 @@ def _reason_pattern_for_manual_trigger(token):
         f"_reason_pattern_for_manual_trigger.")
 
 
-def _leaf_condition_term(tag, attrs):
+def _leaf_condition_term(tag, attrs, var_pool=None, reactive_code=None):
     """The BARE Prolog condition term for a <Condition> leaf (e.g.
     "battery_over(70.0)"), WITHOUT the cond(...) wrapper -- shared by
     _translate_leaf (which wraps it in cond(...) for a genuine, one-
     shot cond() leaf) and _reduce_guard_condition below (which wraps
     it in neg(...) instead, or leaves it bare, depending on the
     required guard polarity). attrs must already be validated (see
-    _validate_ports) against tag's own port_specs."""
+    _validate_ports) against tag's own port_specs. var_pool/
+    reactive_code are only consulted by the "distance_cond" branch
+    below, for a blackboard-ref goal -- both call sites already have
+    them in scope, so this is always None,None only if a future caller
+    genuinely doesn't (which would then correctly reject a blackboard
+    goal instead of crashing)."""
     info = _CONDITION_DISPATCH[tag]
     if info["kind"] == "single_float_port":
         value = float(attrs[info["port"]])
@@ -534,13 +937,69 @@ def _leaf_condition_term(tag, attrs):
         gx, gy = _point_xy(attrs["goal"], tag, "goal")
         return f"line_of_sight_clear({obstacle_id},{gx},{gy})"
     if info["kind"] == "distance_cond":
-        gx, gy = _point_xy(attrs["goal"], tag, "goal")
+        goal_attr = attrs["goal"]
         threshold = float(attrs["threshold"])
+        if _is_blackboard_ref(goal_attr):
+            # A Point goal WIRED from another node's own output port
+            # (e.g. PlanWith's own goal, NearestToolOfKind's own
+            # position, a SubTree's own p1/p2 input) -- same "bare
+            # Prolog VARIABLE that port's own producer binds to a
+            # point(GX,GY) term at runtime" treatment PlanWith's own
+            # goal port already gets (see that branch's own note,
+            # above in _translate_leaf's moveto/planWith handling).
+            # Emits a 2-arg distance_below/equal/over(Point,Threshold)
+            # term rather than the literal case's flat 3-arg
+            # (GX,GY,Threshold) -- basic_action_theory.pl's own
+            # holds/2 (and holds_leg/11, for the auto-derived-guard
+            # path) carry a matching point(GX,GY) adapter clause that
+            # unifies against whatever this variable is bound to and
+            # delegates to the existing flat-arg clause, so the
+            # literal case above is completely unchanged.
+            if var_pool is None:
+                raise BTValidationError(
+                    f"<{tag}>'s goal port ('{goal_attr}') is a "
+                    f"blackboard reference, but this condition wasn't "
+                    f"reached in a context that can resolve one.")
+            goal_key = _blackboard_key(goal_attr)
+            var_pool.consumers.add(goal_key)
+            var_pool.note_key_scope(goal_key, reactive_code)
+            goal_term = var_pool.var_for(goal_key)
+            return f"{info['functor']}({goal_term},{threshold})"
+        gx, gy = _point_xy(goal_attr, tag, "goal")
         return f"{info['functor']}({gx},{gy},{threshold})"
+    if info["kind"] == "sample_value_cond":
+        sample_id = attrs["id"].strip()
+        if not _VALID_PROLOG_ATOM_RE.match(sample_id):
+            raise BTValidationError(
+                f"<{tag}>'s id port ('{sample_id}') is not a valid Prolog "
+                f"atom -- must start with a lowercase letter, then "
+                f"letters/digits/underscores only. Must match the id= "
+                f"some earlier <TakeSample> in this tree used.")
+        threshold = float(attrs["threshold"])
+        return f"{info['functor']}({sample_id},{threshold})"
+    if info["kind"] == "hitched_cond":
+        kind_value = attrs.get("kind", "").strip()
+        if not kind_value:
+            return "hitched"
+        if not _VALID_PROLOG_ATOM_RE.match(kind_value):
+            raise BTValidationError(
+                f"<{tag}>'s kind port ('{kind_value}') is not a valid "
+                f"Prolog atom -- must start with a lowercase letter, then "
+                f"letters/digits/underscores only.")
+        return f"hitched({kind_value})"
+    if info["kind"] == "deployed_cond":
+        return "deployed"
+    if info["kind"] == "ploughed_at_cond":
+        gx, gy = _point_xy(attrs["goal"], tag, "goal")
+        return f"ploughed_at({gx},{gy})"
+    if info["kind"] == "ploughed_between_cond":
+        x1, y1 = _point_xy(attrs["p1"], tag, "p1")
+        x2, y2 = _point_xy(attrs["p2"], tag, "p2")
+        return f"ploughed_between({x1},{y1},{x2},{y2})"
     raise BTValidationError(f"Unhandled condition kind for <{tag}>.")
 
 
-def _reduce_guard_condition(elem, required_polarity, schema_ports):
+def _reduce_guard_condition(elem, required_polarity, schema_ports, var_pool, reactive_code):
     """A left sibling (under a ReactiveSequence/ReactiveFallback) of
     the branch leading to some reactively-guarded Action, reduced to
     the SINGLE Prolog condition term that must stay TRUE for the guard
@@ -575,11 +1034,11 @@ def _reduce_guard_condition(elem, required_polarity, schema_ports):
             raise BTValidationError(
                 f"<Inverter> must have exactly one child (found "
                 f"{len(children)}).")
-        return _reduce_guard_condition(children[0], not required_polarity, schema_ports)
+        return _reduce_guard_condition(children[0], not required_polarity, schema_ports, var_pool, reactive_code)
     if tag in _NON_CONTINUOUS_CONDITIONS or tag not in _CONDITION_DISPATCH:
         return None
     attrs = _validate_ports(tag, elem, schema_ports[tag])
-    cond_term = _leaf_condition_term(tag, attrs)
+    cond_term = _leaf_condition_term(tag, attrs, var_pool, reactive_code)
     return cond_term if required_polarity else f"neg({cond_term})"
 
 
@@ -753,32 +1212,482 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
                         f"<{tag}> has algorithm=\"{algorithm}\", which takes "
                         f"no obstacle_id/offset port -- unexpected "
                         f"{sorted(extraneous)}.")
+                if algorithm == "dastar":
+                    # Step is dastar's own ADDITIONAL parameter, carried
+                    # INSIDE Algorithm as a compound term (dastar(Step)),
+                    # same "extra parameter riding along in Algorithm
+                    # itself" shape as follow_boarder(ObstacleId,Offset)
+                    # above -- see basic_action_theory.pl's own
+                    # plan_call(dastar(Step),...) clause pair and
+                    # schema.yaml's own step port note. Optional, default
+                    # 2.0 (schema.yaml's own documented default).
+                    step = float(attrs["step"]) if "step" in attrs else _DASTAR_DEFAULT_STEP
+                    algorithm_term = f"dastar({step})"
+                else:
+                    if "step" in attrs:
+                        raise BTValidationError(
+                            f"<{tag}> has algorithm=\"{algorithm}\", which "
+                            f"takes no step port -- unexpected step "
+                            f"(step is only valid for algorithm=\"dastar\").")
+                    algorithm_term = algorithm
                 if "goal" not in attrs:
                     raise BTValidationError(
                         f"<{tag}> has algorithm=\"{algorithm}\", which "
                         f"requires a goal port.")
-                algorithm_term = algorithm
-                goal_term = _point_literal(attrs["goal"], tag, "goal")
-                reason_goal_text = goal_term
+                goal_attr = attrs["goal"]
+                if _is_blackboard_ref(goal_attr):
+                    # A Point goal WIRED from another node's own output
+                    # port (e.g. NearestToolOfKind's own position) --
+                    # goal_term becomes the bare Prolog VARIABLE that
+                    # port's own producer binds to a point(GX,GY) term at
+                    # runtime, exactly like control_points/cp_var above
+                    # (same var_pool.var_for/consumers/note_key_scope
+                    # bookkeeping). The concrete point is then genuinely
+                    # unknown at TRANSLATION time -- unlike a literal
+                    # goal, there is no fixed (GX,GY) to bake into this
+                    # PlanWith's own Reason universe, so reason_goal_text
+                    # becomes the ground atom 'wild' (see _reason_
+                    # pattern_for_manual_trigger's own note on this
+                    # convention) rather than a real point(...) term;
+                    # goal_label_text keeps the ORIGINAL "{key}" text for
+                    # the cosmetic action-code legend, since 'wild' alone
+                    # would be a less useful label than naming which key.
+                    goal_key = _blackboard_key(goal_attr)
+                    var_pool.consumers.add(goal_key)
+                    var_pool.note_key_scope(goal_key, reactive_code)
+                    goal_term = var_pool.var_for(goal_key)
+                    reason_goal_text = "wild"
+                    goal_label_text = goal_attr
+                else:
+                    goal_term = _point_literal(goal_attr, tag, "goal")
+                    reason_goal_text = goal_term
+                    goal_label_text = reason_goal_text
 
             action_code = var_pool.next_action_code()
             # See do_node(planWith(...))'s own note in basic_action_
             # theory.pl for why ActionCode is fully concrete here too
             # (never 'wild'): unlike an argmin ObstacleId, ActionCode/
-            # Algorithm/Goal are ALL already known at translation time
-            # for a given PlanWith occurrence -- there's nothing
-            # runtime-random about which occurrence this is, only
-            # whether it actually succeeds, which the by-action query
-            # already reports as a probability regardless.
+            # Algorithm are ALWAYS known at translation time for a given
+            # PlanWith occurrence -- there's nothing runtime-random about
+            # which occurrence this is, only whether it actually
+            # succeeds, which the by-action query already reports as a
+            # probability regardless. Goal is the ONE exception, and
+            # only when wired from another node's own output port (see
+            # this branch's own goal_attr handling above) -- there,
+            # reason_goal_text is already 'wild', for the same "known
+            # only at runtime" reason an argmin ObstacleId is.
             var_pool.reason_patterns_by_action[action_code] = [
                 f"completed({algorithm_term},{reason_goal_text})",
                 f"no_path({algorithm_term},{reason_goal_text})",
             ]
             plan_label = (f"PlanWith({algorithm_term})" if algorithm == "follow_boarder"
-                          else f"PlanWith({algorithm_term}, goal={reason_goal_text})")
+                          else f"PlanWith({algorithm_term}, goal={goal_label_text})")
             var_pool.action_labels[action_code] = _with_branch_suffix(plan_label, branch_name)
 
             return f"planWith({algorithm_term},{goal_term},{cp_var},{action_code})"
+
+        if info["kind"] == "planWithWaypoints":
+            algorithm = attrs["algorithm"].strip()
+            if algorithm not in _PLAN_WAYPOINTS_ALGORITHMS:
+                raise BTValidationError(
+                    f"<{tag}>'s algorithm port ('{algorithm}') is not one "
+                    f"of {sorted(_PLAN_WAYPOINTS_ALGORITHMS)} -- "
+                    f"PlanWithWaypoints only supports astar/straight for "
+                    f"now (see schema.yaml's own note); use PlanWith "
+                    f"directly for voronoi/follow_boarder.")
+
+            cp_value = attrs["control_points"]
+            if not _is_blackboard_ref(cp_value):
+                raise BTValidationError(
+                    f"<{tag}>'s control_points port ('{cp_value}') must be "
+                    f"a blackboard reference like \"{{cp}}\" -- it is this "
+                    f"node's own OUTPUT, never a literal.")
+            key = _blackboard_key(cp_value)
+            var_pool.producers.add(key)
+            var_pool.note_key_scope(key, reactive_code)
+            cp_var = var_pool.var_for(key)
+
+            waypoints_term, waypoint_pairs = _point_list_literal(
+                attrs["waypoints"], tag, "waypoints")
+
+            action_code = var_pool.next_action_code()
+            # Waypoints is always fully concrete here (this port has no
+            # blackboard-ref form -- see schema.yaml's own note), so
+            # reason_goal_text is the literal list term itself, the
+            # same "no wild needed, always known at translation time"
+            # treatment PlanWith's own literal-goal branch gets above.
+            reason_goal_text = waypoints_term
+            var_pool.reason_patterns_by_action[action_code] = [
+                f"completed({algorithm},{reason_goal_text})",
+                f"no_path({algorithm},{reason_goal_text})",
+            ]
+            waypoints_label = ",".join(f"({x},{y})" for x, y in waypoint_pairs)
+            plan_label = f"PlanWithWaypoints({algorithm}, waypoints=[{waypoints_label}])"
+            var_pool.action_labels[action_code] = _with_branch_suffix(plan_label, branch_name)
+
+            return f"planWithWaypoints({algorithm},{waypoints_term},{cp_var},{action_code})"
+
+        if info["kind"] == "take_sample":
+            # id is the ONE port (schema.yaml's own TakeSample entry) --
+            # the tree author's own name for THIS occurrence (e.g.
+            # "soil1"), NOT the auto-generated ActionCode just below --
+            # see basic_action_theory.pl's own poss(take_sample(...))
+            # note for why both exist and what each is for. A LATER
+            # SampleValueBelow/Equal/Over condition node references this
+            # SAME id to point back at this specific sample's own drawn
+            # value -- same validation as InstallTool/UninstallTool's
+            # own tool="..." port (a plain Prolog atom, not otherwise
+            # checked against a fixed set here; an id that was never
+            # actually sampled just makes the referencing condition
+            # false forever, the same "unsatisfied lookup, not a
+            # translator error" shape tool_instance/2 already has).
+            sample_id = attrs["id"].strip()
+            if not _VALID_PROLOG_ATOM_RE.match(sample_id):
+                raise BTValidationError(
+                    f"<{tag}>'s id port ('{sample_id}') is not a valid "
+                    f"Prolog atom -- must start with a lowercase letter, "
+                    f"then letters/digits/underscores only.")
+            # The reason universe is otherwise FIXED, the same two
+            # patterns for every occurrence, unlike MoveTo (depends on
+            # Triggers) or PlanWith (depends on algorithm/goal). 'wild'
+            # for X,Y,V -- all three are only ever known at RUNTIME (the
+            # robot's actual position when this action ran, and the
+            # drawn value itself), same "known only at runtime -> wild,
+            # not a genuine variable" rule _reason_pattern_for_manual_
+            # trigger's own note documents for an argmin ObstacleId.
+            # sample_id itself is NOT wild -- known at translation time,
+            # like Tool was for install_tool's own reason patterns.
+            action_code = var_pool.next_action_code()
+            var_pool.reason_patterns_by_action[action_code] = [
+                f"sample_success(wild,wild,wild,{sample_id})",
+                f"sample_failure(wild,wild,{sample_id})",
+            ]
+            var_pool.action_labels[action_code] = _with_branch_suffix(
+                f"TakeSample({sample_id})", branch_name)
+            return f"take_sample({sample_id},{action_code})"
+
+        if info["kind"] == "tool_position_query":
+            # id is a LITERAL tool instance id (same validation/
+            # convention as InstallTool's own tool="..." port -- NOT
+            # blackboard-wireable yet; feeding it from a NearestToolOfKind
+            # node's own output id would need this port relaxed the same
+            # way control_points already is, a follow-up not built here).
+            # position is this node's own OUTPUT -- like control_points,
+            # ALWAYS a blackboard reference, never a literal.
+            tool_id = attrs["id"].strip()
+            if not _VALID_PROLOG_ATOM_RE.match(tool_id):
+                raise BTValidationError(
+                    f"<{tag}>'s id port ('{tool_id}') is not a valid Prolog "
+                    f"atom -- must start with a lowercase letter, then "
+                    f"letters/digits/underscores only.")
+            pos_value = attrs["position"]
+            if not _is_blackboard_ref(pos_value):
+                raise BTValidationError(
+                    f"<{tag}>'s position port ('{pos_value}') must be a "
+                    f"blackboard reference like \"{{pos}}\" -- it is this "
+                    f"node's own OUTPUT, never a literal.")
+            pos_key = _blackboard_key(pos_value)
+            var_pool.producers.add(pos_key)
+            var_pool.note_key_scope(pos_key, reactive_code)
+            pos_var = var_pool.var_for(pos_key)
+
+            action_code = var_pool.next_action_code()
+            # Both Id and the RESULT are already known at translation
+            # time (Id is literal) except which one it actually finds
+            # (found vs unavailable) -- no 'wild' needed, same reasoning
+            # install_tool's own reason_patterns already has for a
+            # translation-time-known Tool.
+            var_pool.reason_patterns_by_action[action_code] = [
+                f"tool_position_found({tool_id})",
+                f"tool_position_unavailable({tool_id})",
+            ]
+            var_pool.action_labels[action_code] = _with_branch_suffix(
+                f"ToolPosition({tool_id})", branch_name)
+            return f"tool_position_query({tool_id},{pos_var},{action_code})"
+
+        if info["kind"] == "tools_of_kind_query":
+            # kind is a bare Prolog atom (cart/plow, or any future kind)
+            # -- same "syntax-only check, let tool_instance/2 fail closed
+            # for an unknown one" philosophy install_tool's own tool=
+            # port already has (this translator never parses config.yaml,
+            # so it can't validate kind against a real fixed set either).
+            # tools is this node's own OUTPUT -- a blackboard reference
+            # bound to a Prolog LIST of tool(Id,point(GX,GY)) terms, one
+            # per matching, currently-free instance.
+            kind = attrs["kind"].strip()
+            if not _VALID_PROLOG_ATOM_RE.match(kind):
+                raise BTValidationError(
+                    f"<{tag}>'s kind port ('{kind}') is not a valid Prolog "
+                    f"atom -- must start with a lowercase letter, then "
+                    f"letters/digits/underscores only.")
+            tools_value = attrs["tools"]
+            if not _is_blackboard_ref(tools_value):
+                raise BTValidationError(
+                    f"<{tag}>'s tools port ('{tools_value}') must be a "
+                    f"blackboard reference like \"{{tools}}\" -- it is this "
+                    f"node's own OUTPUT, never a literal.")
+            tools_key = _blackboard_key(tools_value)
+            var_pool.producers.add(tools_key)
+            var_pool.note_key_scope(tools_key, reactive_code)
+            tools_var = var_pool.var_for(tools_key)
+
+            action_code = var_pool.next_action_code()
+            var_pool.reason_patterns_by_action[action_code] = [
+                f"tools_of_kind_found({kind})",
+                f"tools_of_kind_empty({kind})",
+            ]
+            var_pool.action_labels[action_code] = _with_branch_suffix(
+                f"ToolsOfKind({kind})", branch_name)
+            return f"tools_of_kind_query({kind},{tools_var},{action_code})"
+
+        if info["kind"] == "nearest_tool_of_kind_query":
+            # kind is validated the same way as ToolsOfKind's own kind
+            # port just above. id/position are this node's own OUTPUTS
+            # -- both blackboard references, same "always a var, never a
+            # literal" requirement control_points already has.
+            kind = attrs["kind"].strip()
+            if not _VALID_PROLOG_ATOM_RE.match(kind):
+                raise BTValidationError(
+                    f"<{tag}>'s kind port ('{kind}') is not a valid Prolog "
+                    f"atom -- must start with a lowercase letter, then "
+                    f"letters/digits/underscores only.")
+            id_value = attrs["id"]
+            if not _is_blackboard_ref(id_value):
+                raise BTValidationError(
+                    f"<{tag}>'s id port ('{id_value}') must be a blackboard "
+                    f"reference like \"{{chosen}}\" -- it is this node's own "
+                    f"OUTPUT, never a literal.")
+            id_key = _blackboard_key(id_value)
+            var_pool.producers.add(id_key)
+            var_pool.note_key_scope(id_key, reactive_code)
+            id_var = var_pool.var_for(id_key)
+
+            pos_value = attrs["position"]
+            if not _is_blackboard_ref(pos_value):
+                raise BTValidationError(
+                    f"<{tag}>'s position port ('{pos_value}') must be a "
+                    f"blackboard reference like \"{{pos}}\" -- it is this "
+                    f"node's own OUTPUT, never a literal.")
+            pos_key = _blackboard_key(pos_value)
+            var_pool.producers.add(pos_key)
+            var_pool.note_key_scope(pos_key, reactive_code)
+            pos_var = var_pool.var_for(pos_key)
+
+            action_code = var_pool.next_action_code()
+            # WHICH instance turns out closest is only known at RUNTIME
+            # (it depends on the robot's own noisy position, see
+            # nearest_tool_of_kind/6's own note) -- 'wild' for Id, same
+            # "known only at runtime -> wild" rule an argmin ObstacleId
+            # already follows elsewhere; Kind itself IS known here.
+            var_pool.reason_patterns_by_action[action_code] = [
+                f"nearest_tool_found({kind},wild)",
+                f"no_tool_of_kind({kind})",
+            ]
+            var_pool.action_labels[action_code] = _with_branch_suffix(
+                f"NearestToolOfKind({kind})", branch_name)
+            return f"nearest_tool_of_kind_query({kind},{id_var},{pos_var},{action_code})"
+
+        if info["kind"] == "hitched_id_query":
+            # NO input port at all -- unlike ToolPosition/ToolsOfKind/
+            # NearestToolOfKind, HitchedId takes nothing to look UP,
+            # only reports whatever's already hitched. id is this
+            # node's own OUTPUT -- always a blackboard reference, same
+            # "always a var, never a literal" requirement control_points
+            # already has.
+            id_value = attrs["id"]
+            if not _is_blackboard_ref(id_value):
+                raise BTValidationError(
+                    f"<{tag}>'s id port ('{id_value}') must be a blackboard "
+                    f"reference like \"{{tool}}\" -- it is this node's own "
+                    f"OUTPUT, never a literal.")
+            id_key = _blackboard_key(id_value)
+            var_pool.producers.add(id_key)
+            var_pool.note_key_scope(id_key, reactive_code)
+            id_var = var_pool.var_for(id_key)
+
+            action_code = var_pool.next_action_code()
+            # WHICH instance (if any) is hitched is only known at
+            # RUNTIME -- 'wild' for Id, same "known only at runtime"
+            # rule NearestToolOfKind's own Id already follows; there is
+            # no Kind (or anything else) known at translation time here
+            # at all, unlike NearestToolOfKind.
+            var_pool.reason_patterns_by_action[action_code] = [
+                "hitched_id_found(wild)",
+                "hitched_id_unavailable",
+            ]
+            var_pool.action_labels[action_code] = _with_branch_suffix(
+                "HitchedId", branch_name)
+            return f"hitched_id_query({id_var},{action_code})"
+
+        if info["kind"] in ("install_tool", "uninstall_tool", "deploy_tool", "retract_tool"):
+            # Shared shape for InstallTool/UninstallTool/DeployTool/
+            # RetractTool -- they differ ONLY in which functor prefix
+            # everything gets (info["kind"] IS that prefix, e.g.
+            # "install_tool"), never in structure -- see basic_action_
+            # theory.pl's own do_node(install_tool_leg(...))/do_node
+            # (uninstall_tool_leg(...))/do_node(deploy_tool_leg(...))/
+            # do_node(retract_tool_leg(...)) for why they're all genuine
+            # mirror images.
+            functor_prefix = info["kind"]
+
+            # tool may ALSO now be wired from another node's own output
+            # port (e.g. HitchedId's own id, or NearestToolOfKind's own
+            # id) instead of a literal -- same "blackboard ref OR
+            # literal" treatment PlanWith's own goal port gets above.
+            # Blackboard-sourced: tool becomes the bare Prolog VARIABLE
+            # that port's own producer binds at runtime; the concrete id
+            # is unknown at TRANSLATION time, so tool_reason_text (fed
+            # into this action's own Reason universe below) becomes the
+            # ground atom 'wild', same convention reason_goal_text uses
+            # above -- tool_label_text keeps the original "{key}" text
+            # for the cosmetic action-code legend instead.
+            tool_attr = attrs["tool"].strip()
+            if _is_blackboard_ref(tool_attr):
+                tool_key = _blackboard_key(tool_attr)
+                var_pool.consumers.add(tool_key)
+                var_pool.note_key_scope(tool_key, reactive_code)
+                tool = var_pool.var_for(tool_key)
+                tool_reason_text = "wild"
+                tool_label_text = tool_attr
+            else:
+                tool = tool_attr
+                if not _VALID_PROLOG_ATOM_RE.match(tool):
+                    raise BTValidationError(
+                        f"<{tag}>'s tool port ('{tool}') is not a valid Prolog "
+                        f"atom -- must start with a lowercase letter, then "
+                        f"letters/digits/underscores only. This names a tool "
+                        f"INSTANCE id from this problem's own config.yaml "
+                        f"tool.instances (e.g. 'cart1'), not a kind -- see "
+                        f"basic_action_theory.pl's own tool_instance/2.")
+                tool_reason_text = tool
+                tool_label_text = tool
+
+            # triggers is OPTIONAL, same as MoveTo's own port -- but
+            # RESTRICTED to battery-related names only (reusing
+            # _is_battery_trigger's own functor check): {tag} never
+            # moves the robot, so a motion-based trigger name has no
+            # meaningful geometry to check here at all -- see this
+            # file's own _ACTION_DISPATCH note above (InstallTool/
+            # UninstallTool entries) for the full rationale (and
+            # basic_action_theory.pl's own tool_trigger_crossing_time/8
+            # for the theory-side defense
+            # in depth this validation is backed by, not a substitute
+            # for).
+            manual_tokens = [t.strip() for t in attrs.get("triggers", "").split(";") if t.strip()]
+            non_battery = [t for t in manual_tokens if not _is_battery_trigger(t)]
+            if non_battery:
+                raise BTValidationError(
+                    f"<{tag}>'s triggers port includes {non_battery} -- "
+                    f"{tag} never moves the robot, so only battery-related "
+                    f"triggers (battery, battery_below(...), "
+                    f"battery_equal(...), battery_over(...)) are accepted "
+                    f"here; see schema.yaml's own {tag} entry.")
+            if not battery_enabled:
+                manual_tokens = [t for t in manual_tokens if not _is_battery_trigger(t)]
+
+            # Reactive tagging -- the SAME mechanism/error MoveTo's own
+            # manual-trigger loop above uses, just over a battery-only
+            # token set (so _REACTIVE_TRIGGER_FUNCTORS only ever matches
+            # battery_below/battery_equal/battery_over here -- collision
+            # and every obstacle_*/line_of_sight_clear/crosses_segment
+            # functor in that set can simply never appear, having
+            # already been rejected above).
+            tagged_manual = []
+            for t in manual_tokens:
+                functor = t.split("(", 1)[0].strip()
+                if functor == "battery":
+                    # Backward-compatible with a tree that spells this
+                    # out explicitly -- covered by default_tokens below
+                    # either way, so skip rather than duplicate (same
+                    # convention as MoveTo's own collision/battery skip).
+                    continue
+                if functor in _REACTIVE_TRIGGER_FUNCTORS:
+                    if reactive_code is None:
+                        raise BTValidationError(
+                            f"<{tag}>'s triggers port includes '{t}', a "
+                            f"reactive-classified trigger, but this {tag} "
+                            f"is not enclosed by any <ReactiveSequence>/"
+                            f"<ReactiveFallback> -- there is nowhere for "
+                            f"its reactive(_) halt to ever be caught. Wrap "
+                            f"this {tag} (or an ancestor of it) in a "
+                            f"ReactiveSequence/ReactiveFallback, or drop "
+                            f"'{t}' from triggers.")
+                    tagged_manual.append(_append_reactive_code(t, reactive_code))
+                else:
+                    tagged_manual.append(t)
+
+            # Structural guards, auto-derived from every enclosing
+            # ReactiveSequence/ReactiveFallback's own left siblings --
+            # the SAME guard_stack MoveTo's own moveto_leg branch above
+            # reads (it's built identically for every leaf by
+            # _translate_node's ReactiveSequence/ReactiveFallback
+            # branch, not specially for MoveTo), RESTRICTED to battery-
+            # only conditions for the SAME reason manual triggers are
+            # restricted above: {tag} never moves, so a left-sibling
+            # Condition testing robot position/obstacles has no
+            # meaningful "does it still hold at time T" question to ask
+            # here. This is a HARD error (unlike the battery_enabled
+            # filter just below it), independent of battery_enabled --
+            # a motion-based guard can never be supported here, whereas
+            # a battery-based one merely goes unused while battery
+            # modeling is off, same as MoveTo's own guards do. Reuses
+            # basic_action_theory.pl's own guard_break(Cond,Code)
+            # trigger, backed by tool_holds_leg/tool_first_becomes_
+            # false_time -- the battery-only twin of holds_leg/first_
+            # becomes_false_time the moving phase uses (see that file's
+            # own note on why they can't just be the same predicate).
+            non_battery_guards = [
+                cond_term for cond_term, _code in guard_stack
+                if not _guard_condition_is_battery_only(cond_term)
+            ]
+            if non_battery_guards:
+                raise BTValidationError(
+                    f"<{tag}> sits under a ReactiveSequence/ReactiveFallback "
+                    f"whose left sibling(s) reduce to {non_battery_guards} -- "
+                    f"{tag} never moves the robot, so an auto-derived guard "
+                    f"here must be battery-related (battery_below(...), "
+                    f"battery_equal(...), battery_over(...), optionally "
+                    f"negated via <Inverter>), same restriction as its own "
+                    f"triggers port. Move this {tag} out from under that "
+                    f"left sibling, or replace the sibling with a "
+                    f"battery-only Condition.")
+            derived_tokens = [
+                f"guard_break({cond_term},{code})"
+                for cond_term, code in guard_stack
+                if battery_enabled or not _guard_condition_mentions_battery(cond_term)
+            ]
+
+            # Universal hazard -- ALWAYS battery (the fixed 0%-depletion
+            # one), only when this problem models battery at all -- the
+            # SAME "not something the tree author has to write" default
+            # MoveTo's own collision/battery gets, minus collision
+            # (never meaningful here).
+            default_tokens = ["battery"] if battery_enabled else []
+
+            triggers = "[" + ",".join(default_tokens + tagged_manual + derived_tokens) + "]"
+            action_code = var_pool.next_action_code()
+
+            # Tool is LITERAL here (known at translation time, like
+            # PlanWith's own Algorithm) UNLESS wired from a blackboard
+            # ref (see tool_attr's own handling above), in which case
+            # tool_reason_text is already 'wild' -- only success-or-
+            # failure is ALWAYS genuinely runtime-random, tool sometimes
+            # additionally is.
+            reason_patterns = [
+                f"{functor_prefix}_success({tool_reason_text})",
+                f"{functor_prefix}_failure({tool_reason_text})",
+            ]
+            reason_patterns += [_reason_pattern_for_manual_trigger(t) for t in default_tokens]
+            reason_patterns += [_reason_pattern_for_manual_trigger(t) for t in manual_tokens
+                                 if t.split("(", 1)[0].strip() != "battery"]
+            # guard_break's own pattern, same treatment as MoveTo's own
+            # moveto_leg branch above -- see that one's own note.
+            reason_patterns += [f"guard_break({cond_term})" for cond_term, _code in guard_stack
+                                 if battery_enabled or not _guard_condition_mentions_battery(cond_term)]
+            var_pool.reason_patterns_by_action[action_code] = reason_patterns
+            var_pool.action_labels[action_code] = _with_branch_suffix(f"{tag}({tool_label_text})", branch_name)
+
+            return f"{functor_prefix}_leg({tool},{triggers},{action_code})"
 
     if tag in _CONDITION_DISPATCH:
         condition_code = var_pool.next_condition_code()
@@ -789,7 +1698,7 @@ def _translate_leaf(tag, elem, dispatch, port_specs, var_pool, battery_enabled, 
         port_text = ",".join(f"{k}={v}" for k, v in attrs.items() if k != "name")
         var_pool.condition_labels[condition_code] = _with_branch_suffix(
             f"{tag}({port_text})", branch_name)
-        return f"cond({_leaf_condition_term(tag, attrs)},{condition_code})"
+        return f"cond({_leaf_condition_term(tag, attrs, var_pool, reactive_code)},{condition_code})"
 
     raise BTValidationError(f"Unhandled schema entry '{tag}' -- add it to "
                              f"_ACTION_DISPATCH/_CONDITION_DISPATCH.")
@@ -826,6 +1735,158 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
         child_term = _translate_node(children[0], schema_ports, var_pool, battery_enabled,
                                       reactive_code, guard_stack, branch_name)
         return f"inverter({child_term})"
+
+    if tag == "SubTree":
+        # Real BT.cpp v4 tree composition -- <SubTree ID="Foo" port1=
+        # "..." port2="..."/> instantiates the <BehaviorTree ID="Foo">
+        # registered by _collect_tree_registry (this file or its own,
+        # or any <include>d file's own) and splices its body in HERE,
+        # with FULL port remapping (see _apply_subtree_remap's own
+        # note): every attribute on THIS element (other than ID/name)
+        # is a remap "internal_port_name=caller_value" pair. Expanded
+        # INLINE, exactly where this <SubTree> sits -- like
+        # RetryUntilSuccessful/Repeat's own unrolling (_RETRY_DECORATORS'
+        # own note), this is a sound 1:1 semantic match, not an
+        # approximation: nothing about this project's own do_node/poss
+        # encoding attaches state to a node's IDENTITY, every leaf still
+        # gets its own fresh action_code/condition_code regardless of
+        # whether it was written inline or pulled in via a SubTree, and
+        # port remapping already gives this instance its own
+        # independent blackboard keys -- so the resulting Prolog term
+        # is IDENTICAL to hand-pasting the subtree's own body here with
+        # the substitutions already applied. reactive_code/guard_stack
+        # pass through UNCHANGED -- a SubTree call is not itself a new
+        # reactive scope (same as plain Sequence/Fallback); anything
+        # reactive INSIDE its own body is handled normally, the instant
+        # _translate_node redescends into the substituted clone.
+        subtree_id = elem.attrib.get("ID")
+        if not subtree_id:
+            raise BTValidationError(
+                "<SubTree> requires an 'ID' attribute naming which "
+                "<BehaviorTree ID=\"...\"> to instantiate.")
+        if "_autoremap" in elem.attrib:
+            raise BTValidationError(
+                "<SubTree>'s BT.cpp '_autoremap' attribute is not "
+                "supported by this translator -- every port this "
+                "instance needs must be remapped EXPLICITLY, as its "
+                "own attribute=\"...\" on this <SubTree> element (same "
+                "'explicit port, never implicit' convention this "
+                "project already uses elsewhere, e.g. DeployTool/"
+                "RetractTool's own tool= port).")
+        if subtree_id not in var_pool.tree_defs:
+            raise BTValidationError(
+                f"<SubTree ID=\"{subtree_id}\"> references an unknown "
+                f"tree -- no <BehaviorTree ID=\"{subtree_id}\"> found "
+                f"in this file or any <include>d file.")
+        if subtree_id in var_pool.expanding:
+            raise BTValidationError(
+                f"<SubTree ID=\"{subtree_id}\"> recursion detected "
+                f"({' -> '.join(var_pool.expanding + [subtree_id])}) "
+                f"-- a SubTree can never (directly or indirectly) "
+                f"include itself; every SubTree is expanded "
+                f"STATICALLY, at translation time (see this branch's "
+                f"own note), so a cycle here would unroll forever.")
+        remap = {k: v for k, v in elem.attrib.items() if k not in ("ID", "name")}
+        body = _single_child(
+            var_pool.tree_defs[subtree_id],
+            f"<BehaviorTree ID=\"{subtree_id}\"> (referenced by this <SubTree>)")
+        clone = copy.deepcopy(body)
+        _apply_subtree_remap(clone, remap, var_pool.next_subtree_suffix())
+        own_branch_name = elem.attrib.get("name", branch_name)
+        var_pool.expanding.append(subtree_id)
+        try:
+            return _translate_node(clone, schema_ports, var_pool, battery_enabled,
+                                    reactive_code, guard_stack, own_branch_name)
+        finally:
+            var_pool.expanding.pop()
+
+    if tag in _RETRY_DECORATORS:
+        info = _RETRY_DECORATORS[tag]
+        count_attr = info["count_attr"]
+        allowed_attrs = _ALWAYS_ALLOWED_ATTRS | {count_attr}
+        if elem.attrib.keys() - allowed_attrs:
+            raise BTValidationError(
+                f"<{tag}> only takes a '{count_attr}' port (plus BT.cpp's "
+                f"own `name`) -- unexpected attribute(s) "
+                f"{sorted(elem.attrib.keys() - allowed_attrs)}.")
+        if count_attr not in elem.attrib:
+            raise BTValidationError(f"<{tag}> requires a '{count_attr}' attribute.")
+        raw_count = elem.attrib[count_attr]
+        # POINT 1's verification: num_attempts/num_cycles is unrolled
+        # ONCE, statically, at translation time -- there is no situation
+        # yet for a blackboard variable to be bound in, so (unlike every
+        # other port in this file) it can never be wired from another
+        # node's output port. Checked BEFORE the int() parse below so
+        # the error names the real problem instead of just "not an
+        # integer".
+        if _is_blackboard_ref(raw_count):
+            raise BTValidationError(
+                f"<{tag}>'s '{count_attr}' is a blackboard reference "
+                f"('{raw_count}') -- this translator unrolls <{tag}> into "
+                f"{count_attr} literal copies of its child ONCE, at "
+                f"translation time, so '{count_attr}' must be a literal "
+                f"integer written directly in the XML, not wired from "
+                f"another node's output port.")
+        try:
+            count = int(raw_count)
+        except ValueError:
+            raise BTValidationError(
+                f"<{tag}>'s '{count_attr}' must be a literal (base-10) "
+                f"integer -- got '{raw_count}'.")
+        if count < 1:
+            raise BTValidationError(
+                f"<{tag}>'s '{count_attr}' must be >= 1 -- got {count}.")
+        children = list(elem)
+        if len(children) != 1:
+            raise BTValidationError(
+                f"<{tag}> must have exactly one child (found {len(children)}).")
+        # Same treatment as plain Sequence/Fallback: NOT a new reactive
+        # scope, reactive_code/guard_stack pass through unchanged (see
+        # _RETRY_DECORATORS's own note above for why n unrolled copies
+        # are a sound match for real retry/repeat semantics here).
+        #
+        # EACH COPY GETS ITS OWN BLACKBOARD-KEY SCOPE -- the SAME "{key}
+        # __subN" isolation _apply_subtree_remap already gives every
+        # SubTree instantiation (see that function's own note: "two
+        # instantiations of the SAME subtree... never collide into ONE
+        # shared Prolog variable... identical reasoning, just across
+        # subtree instances rather than fallback_node branches"). This
+        # was the ONE place that reasoning didn't already apply: without
+        # it, count copies of a child using control_points="{cp}" (or
+        # any other local key) would all resolve "{cp}" to the SAME
+        # var_pool entry, i.e. ONE shared Prolog variable across every
+        # unrolled attempt -- exactly the do_node(planWith(...))'s own
+        # documented "give EACH branch its OWN CP variable" gotcha, just
+        # triggered by RetryUntilSuccessful's own automatic unrolling
+        # instead of a hand-written fallback_node. Concretely: attempt
+        # 1's own planWith binds CP to attempt 1's own control points;
+        # if attempt 1 fails and fallback_node tries attempt 2 (from
+        # wherever attempt 1 actually left the robot), attempt 2's own
+        # planWith call tries to unify that SAME CP against a NEW control
+        # -points list computed from a DIFFERENT current position --
+        # unification fails outright (not a modeled false/no_path/
+        # crashed Reason, a genuine Prolog dead end), and since this
+        # happens on EVERY branch of the grounded search that reaches a
+        # second attempt, it can make the WHOLE plan's own do_node/4
+        # have literally NO solution at all (verified directly: a tree
+        # using this pattern inside RetryUntilSuccessful had 0% on every
+        # single query, including plan_outcome's own four categories,
+        # which should always sum to 100%). remap={} (empty) because a
+        # retry copy has no caller-supplied ports to preserve the way a
+        # SubTree instance's own remap dict does -- EVERY key here is
+        # "private, un-remapped" in _apply_subtree_remap's own sense, so
+        # every one of them gets a fresh per-copy suffix, deliberately
+        # including keys that also appear OUTSIDE this <RetryUntilSuccessful>
+        # (an attempt's own control_points, condition goals, etc. were
+        # never meant to be shared past its own subtree either way).
+        own_branch_name = elem.attrib.get("name", branch_name)
+        child_terms = []
+        for _ in range(count):
+            clone = copy.deepcopy(children[0])
+            _apply_subtree_remap(clone, {}, var_pool.next_subtree_suffix())
+            child_terms.append(_translate_node(clone, schema_ports, var_pool, battery_enabled,
+                                                reactive_code, guard_stack, own_branch_name))
+        return f"{info['functor']}([{','.join(child_terms)}])"
 
     if tag in _CONTROL_FLOW:
         if elem.attrib.keys() - _ALWAYS_ALLOWED_ATTRS:
@@ -897,7 +1958,7 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
         for i, child in enumerate(children):
             own_level_guards = []
             for sibling in children[:i]:
-                cond_term = _reduce_guard_condition(sibling, required_polarity, schema_ports)
+                cond_term = _reduce_guard_condition(sibling, required_polarity, schema_ports, var_pool, own_code)
                 if cond_term is not None:
                     own_level_guards.append((cond_term, own_code))
             child_terms.append(_translate_node(
@@ -910,10 +1971,142 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
     if tag not in schema_ports:
         raise BTValidationError(
             f"<{tag}> is not a recognized node -- not Sequence/Fallback/"
-            f"ReactiveSequence/ReactiveFallback/Inverter and not an "
-            f"action/condition 'id' in module/contracts/schema.yaml.")
+            f"ReactiveSequence/ReactiveFallback/Inverter/"
+            f"RetryUntilSuccessful/Repeat and not an action/condition "
+            f"'id' in module/contracts/schema.yaml.")
 
     return _translate_leaf(tag, elem, None, schema_ports[tag], var_pool, battery_enabled, reactive_code, guard_stack, branch_name)
+
+
+def _single_child(bt_elem, label):
+    """A <BehaviorTree>'s own single root child node -- shared by
+    _find_tree_root (the MAIN tree's own entry point) and the SubTree
+    branch of _translate_node (a called tree's own body); both need the
+    exact same "exactly one child" validation. label is the already-
+    formatted "<BehaviorTree ID=...>" text to name in the error."""
+    children = list(bt_elem)
+    if len(children) != 1:
+        raise BTValidationError(
+            f"{label} must have EXACTLY ONE root child node (found "
+            f"{len(children)}).")
+    return children[0]
+
+
+def _is_mergeable_leg(elem):
+    """True (returning (algorithm, goal_text)) iff elem is a
+    <Sequence> with EXACTLY two children -- <PlanWith algorithm=
+    "astar"|"straight" goal="X;Y" control_points="{key}"/> then
+    <MoveTo control_points="{key}"/>, no other attributes on either,
+    no explicit triggers on the MoveTo -- the exact shape
+    _merge_plan_moveto_runs looks for (see this module's own
+    "AUTOMATIC PLAN+MOVETO MERGING" docstring section). Returns None
+    for anything else -- a translation-time SKIP, never an error;
+    plenty of legitimate trees have other shapes here, and full port
+    validation still happens normally, later, on whatever this pass
+    leaves behind (merged or not)."""
+    if elem.tag != "Sequence":
+        return None
+    children = list(elem)
+    if len(children) != 2:
+        return None
+    plan_elem, move_elem = children
+    if plan_elem.tag != "PlanWith" or move_elem.tag != "MoveTo":
+        return None
+    algorithm = plan_elem.attrib.get("algorithm", "").strip()
+    if algorithm not in _PLAN_WAYPOINTS_ALGORITHMS:
+        return None
+    goal = plan_elem.attrib.get("goal")
+    if goal is None or _is_blackboard_ref(goal):
+        return None
+    plan_cp = plan_elem.attrib.get("control_points")
+    move_cp = move_elem.attrib.get("control_points")
+    if not plan_cp or not move_cp or plan_cp != move_cp or not _is_blackboard_ref(plan_cp):
+        return None
+    if "triggers" in move_elem.attrib:
+        return None
+    if set(plan_elem.attrib) - _ALWAYS_ALLOWED_ATTRS - {"algorithm", "goal", "control_points"}:
+        return None
+    if set(move_elem.attrib) - _ALWAYS_ALLOWED_ATTRS - {"control_points"}:
+        return None
+    return algorithm, goal.strip()
+
+
+def _build_merged_leg(algorithm, goals, merge_counter):
+    """One synthetic <Sequence><PlanWithWaypoints .../><MoveTo .../>
+    </Sequence>, replacing a whole matched run -- a REAL tree fragment,
+    indistinguishable from one a human hand-wrote (see this module's
+    own "AUTOMATIC PLAN+MOVETO MERGING" section for why that matters).
+    merge_counter is a single itertools.count shared across the WHOLE
+    translation unit (every <BehaviorTree> in the main file AND every
+    <include>d file's own -- see translate_tree's/_collect_tree_
+    registry's own threading of it), so two merges anywhere in the
+    same translation can never invent the same synthetic control_
+    points key even if they happen to live in different files spliced
+    together via <SubTree>. The leading double underscore signals
+    "generated" -- vanishingly unlikely to collide with a human-chosen
+    blackboard key either way."""
+    cp_key = f"{{__merged_cp_{next(merge_counter)}}}"
+    wrapper = ET.Element("Sequence")
+    plan_elem = ET.SubElement(wrapper, "PlanWithWaypoints")
+    plan_elem.set("algorithm", algorithm)
+    plan_elem.set("waypoints", "|".join(goals))
+    plan_elem.set("control_points", cp_key)
+    move_elem = ET.SubElement(wrapper, "MoveTo")
+    move_elem.set("control_points", cp_key)
+    return wrapper
+
+
+def _merge_children_of(seq_elem, merge_counter):
+    """Rewrites seq_elem's OWN direct children in place, collapsing
+    every maximal run of >= 2 consecutive _is_mergeable_leg matches
+    that share one algorithm into one synthetic merged leg (see
+    _build_merged_leg). Non-matching children, and a run of exactly 1
+    (nothing to merge with), pass through completely unchanged."""
+    children = list(seq_elem)
+    new_children = []
+    i, n = 0, len(children)
+    while i < n:
+        match = _is_mergeable_leg(children[i])
+        if match is None:
+            new_children.append(children[i])
+            i += 1
+            continue
+        algorithm, goal = match
+        goals = [goal]
+        j = i + 1
+        while j < n:
+            next_match = _is_mergeable_leg(children[j])
+            if next_match is None or next_match[0] != algorithm:
+                break
+            goals.append(next_match[1])
+            j += 1
+        if len(goals) >= 2:
+            new_children.append(_build_merged_leg(algorithm, goals, merge_counter))
+        else:
+            new_children.append(children[i])
+        i = j
+    seq_elem[:] = new_children
+
+
+def _merge_plan_moveto_runs(xml_root, merge_counter):
+    """Entry point -- see this module's own "AUTOMATIC PLAN+MOVETO
+    MERGING" docstring section for the full rationale/scope. Mutates
+    every <BehaviorTree> found DIRECTLY under xml_root IN PLACE (NOT
+    reaching inside any <include>d file -- translate_tree/_collect_
+    tree_registry call this separately, with the SAME merge_counter,
+    on each included file's own root right after parsing it, so every
+    file gets this treatment exactly once, on its own un-merged body).
+
+    Snapshots every <Sequence> element first (list(), not a live
+    iterator) since _merge_children_of mutates children lists as it
+    goes; this is safe regardless of visiting order or whether a
+    later-visited element is still reachable from xml_root by the time
+    it's processed (each call only ever reads/replaces ITS OWN
+    element's direct children, never depending on the element's own
+    position in the wider tree)."""
+    for bt in xml_root.findall("BehaviorTree"):
+        for seq in list(bt.iter("Sequence")):
+            _merge_children_of(seq, merge_counter)
 
 
 def _find_tree_root(xml_root):
@@ -937,12 +2130,87 @@ def _find_tree_root(xml_root):
                 "Multiple <BehaviorTree> elements but no "
                 "main_tree_to_execute attribute on <root> to disambiguate.")
         chosen = bt_elems[0]
-    children = list(chosen)
-    if len(children) != 1:
-        raise BTValidationError(
-            f"<BehaviorTree ID=\"{chosen.attrib.get('ID')}\"> must have "
-            f"EXACTLY ONE root child node (found {len(children)}).")
-    return children[0]
+    return _single_child(chosen, f"<BehaviorTree ID=\"{chosen.attrib.get('ID')}\">")
+
+
+def _collect_tree_registry(xml_root, file_dir, visited_files, registry, source_label, merge_counter):
+    """Populates registry ({tree_id: <BehaviorTree> element}) with
+    every ID'd <BehaviorTree> found in xml_root PLUS every <include
+    path="..."/> it references (real BT.cpp v4 tree-composition syntax
+    -- <include> elements sit alongside <BehaviorTree> ones, direct
+    children of <root>), recursing into each included file the SAME
+    way, so a chain of includes (A includes B, B includes C) all merge
+    into ONE flat registry <SubTree ID="..."> can look up regardless of
+    which file actually defines it.
+
+    Also runs _merge_plan_moveto_runs on EACH included file's own root,
+    right after parsing it and before recursing further -- xml_root
+    itself is NOT merged here (translate_tree already did that for the
+    main file before this function's own first call), only files
+    reached via <include>. merge_counter is threaded through
+    UNCHANGED, all the way down, so a synthetic control_points key
+    invented while merging one file can never collide with one from
+    another -- see _build_merged_leg's own note.
+
+    path must be a BARE FILENAME -- no '/', no '..' -- resolved in the
+    SAME DIRECTORY as the file it appears in (file_dir): this project
+    keeps every subtree file alongside its own problem's main behavior_
+    tree.xml, per this feature's own request, rather than supporting
+    BT.cpp's fuller (relative-path/ros_pkg-based) include resolution.
+
+    visited_files (a set of os.path.realpath'd absolute paths, seeded
+    by translate_tree with the MAIN file's own path before the first
+    call) makes re-<include>ing an already-processed file a silent
+    no-op (a legitimate diamond -- A includes B and C, both include D)
+    rather than infinite recursion or a duplicate-ID error; a genuine
+    duplicate <BehaviorTree ID="..."> across two DIFFERENT files is
+    still a hard error, same as within one file.
+
+    A <BehaviorTree> with NO ID at all is simply not added to the
+    registry (not an error here) -- <SubTree> can only ever reference
+    an ID'd tree, and _find_tree_root already separately allows a
+    single ID-less <BehaviorTree> as an unambiguous entry point when
+    main_tree_to_execute is omitted."""
+    for bt in xml_root.findall("BehaviorTree"):
+        tree_id = bt.attrib.get("ID")
+        if not tree_id:
+            continue
+        if tree_id in registry:
+            raise BTValidationError(
+                f"Duplicate <BehaviorTree ID=\"{tree_id}\"> -- already "
+                f"defined elsewhere (this file or an earlier <include>); "
+                f"every tree ID must be unique across the main file and "
+                f"all <include>d files.")
+        registry[tree_id] = bt
+    for inc in xml_root.findall("include"):
+        rel_path = inc.attrib.get("path")
+        if not rel_path:
+            raise BTValidationError(
+                f"<include> in {source_label} requires a 'path' attribute.")
+        if ("/" in rel_path or "\\" in rel_path or os.path.isabs(rel_path)
+                or ".." in rel_path.replace("\\", "/").split("/")):
+            raise BTValidationError(
+                f"<include path=\"{rel_path}\"> in {source_label} must be "
+                f"a bare filename in the SAME directory as {source_label} "
+                f"-- no path separators or '..' segments (this project "
+                f"keeps every subtree file alongside its own problem's "
+                f"main behavior_tree.xml).")
+        inc_path = os.path.join(file_dir, rel_path)
+        inc_path_real = os.path.realpath(inc_path)
+        if inc_path_real in visited_files:
+            continue
+        if not os.path.isfile(inc_path):
+            raise BTValidationError(
+                f"<include path=\"{rel_path}\"> in {source_label} -- no "
+                f"such file '{inc_path}'.")
+        visited_files.add(inc_path_real)
+        try:
+            inc_root = ET.parse(inc_path).getroot()
+        except ET.ParseError as e:
+            raise BTValidationError(f"Malformed XML in {inc_path}: {e}")
+        _merge_plan_moveto_runs(inc_root, merge_counter)
+        _collect_tree_registry(inc_root, os.path.dirname(inc_path), visited_files,
+                                registry, inc_path, merge_counter)
 
 
 def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
@@ -981,8 +2249,34 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
     except ET.ParseError as e:
         raise BTValidationError(f"Malformed XML in {xml_path}: {e}")
 
+    # See this module's own "AUTOMATIC PLAN+MOVETO MERGING" docstring
+    # section. merge_counter is shared for the REST of this call too
+    # (threaded through _collect_tree_registry into every <include>d
+    # file's own merge pass below), so a synthetic control_points key
+    # invented anywhere in this whole translation unit is always
+    # globally unique. Runs BEFORE _find_tree_root/_collect_tree_
+    # registry so every downstream step (SubTree registry, translation
+    # itself) only ever sees the ALREADY-merged tree, never the
+    # original per-leg one.
+    merge_counter = itertools.count(1)
+    _merge_plan_moveto_runs(xml_root, merge_counter)
+
     tree_root_elem = _find_tree_root(xml_root)
     var_pool = _VarPool()
+    # <SubTree ID="..."> lookup registry -- every ID'd <BehaviorTree> in
+    # THIS file plus every one reachable through an <include path="..."/>
+    # (recursively) -- see _collect_tree_registry's own note. Built
+    # ONCE, before translation starts, since a <SubTree> can reference a
+    # tree defined ANYWHERE in this set, not just ones already seen by
+    # the time _translate_node reaches it (real BT.cpp resolves every
+    # <SubTree> against the whole registered set, not just earlier
+    # siblings). visited_files is seeded with xml_path's own realpath so
+    # a (pathological) self-<include> is a silent no-op, not infinite
+    # recursion, the same "diamond include" tolerance applied to every
+    # other repeated <include> below.
+    visited_files = {os.path.realpath(xml_path)}
+    _collect_tree_registry(xml_root, os.path.dirname(os.path.abspath(xml_path)),
+                            visited_files, var_pool.tree_defs, xml_path, merge_counter)
     node_text = _translate_node(tree_root_elem, schema_ports, var_pool, battery_enabled, None, [])
 
     # A MoveTo whose control_points key has no PlanWith

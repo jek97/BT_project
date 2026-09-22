@@ -22,6 +22,9 @@ same underlying A*/spline computation and neither should reimplement it:
          plan_straight(+SX,+SY,+GX,+GY, -ControlPoints)
          plan_voronoi(+SX,+SY,+GX,+GY, -ControlPoints)
          follow_boarder(+SX,+SY,+ObstacleId,+Offset, -ControlPoints)
+         plan_astar_waypoints(+SX,+SY,+Waypoints, -ControlPoints)
+         plan_straight_waypoints(+SX,+SY,+Waypoints, -ControlPoints)
+         plan_dastar(+SX,+SY,+GX,+GY,+Step, -ControlPoints)
      ControlPoints = [point(X0,Y0), ...] ProbLog terms, length 3k+1, in
      EXACTLY the format basic_action_theory.pl's spline_point/4 expects.
      plan_voronoi is a generalized-Voronoi-diagram planner, SAME
@@ -468,8 +471,10 @@ def _strip_prolog_comments(text):
 
 
 def _parse_obstacle_polygons(text):
-    """Returns [(id, [(x,y),...]), ...] -- see collision_geometry.py's
-    own identical function for the full rationale."""
+    """Returns [(id, [(x,y),...]), ...] (each obstacle's own OUTER
+    boundary only) -- see collision_geometry.py's own identical
+    function for the full rationale, and _parse_obstacle_holes below
+    for how a hole (if any) gets folded back in."""
     polys = []
     for m in re.finditer(r"obstacle_polygon\(([^,]+),\s*\[(.*?)\]\s*\)\s*\.", text, re.S):
         obstacle_id = m.group(1).strip()
@@ -479,9 +484,28 @@ def _parse_obstacle_polygons(text):
     return polys
 
 
+def _parse_obstacle_holes(text):
+    """Returns {id: [hole_points, ...]} -- see collision_geometry.py's
+    own identical function for the full rationale."""
+    holes = {}
+    for m in re.finditer(r"obstacle_hole\(([^,]+),\s*\[(.*?)\]\s*\)\s*\.", text, re.S):
+        obstacle_id = m.group(1).strip()
+        pts = [(float(x), float(y)) for x, y in _POINT_RE.findall(m.group(2))]
+        if len(pts) >= 3:
+            holes.setdefault(obstacle_id, []).append(pts)
+    return holes
+
+
 try:
     with open(_OBSTACLES_PATH) as f:
-        _OBSTACLE_POLYGONS = _parse_obstacle_polygons(_strip_prolog_comments(f.read()))
+        _obstacles_text = _strip_prolog_comments(f.read())
+    # _OBSTACLE_POLYGONS is [(id, rings), ...], rings = [outer_points,
+    # hole1_points, ...] -- rings[0] is ALWAYS the outer boundary, see
+    # collision_geometry.py's own OBSTACLE_POLYGONS note for the full
+    # rationale (identical representation, independent copy).
+    _holes_by_id = _parse_obstacle_holes(_obstacles_text)
+    _OBSTACLE_POLYGONS = [(obstacle_id, [outer_points] + _holes_by_id.get(obstacle_id, []))
+                           for obstacle_id, outer_points in _parse_obstacle_polygons(_obstacles_text)]
 except FileNotFoundError:
     _OBSTACLE_POLYGONS = []
 
@@ -566,8 +590,18 @@ def _astar_control_points(sx, sy, gx, gy):
 # no special-casing needed downstream.
 # =====================================================================
 def _polygon_edges(points):
+    """ONE ring's own closed edge list -- see collision_geometry.py's
+    own identical function; _all_edges below is the multi-ring
+    combinator built on top of it."""
     closed = list(points) + [points[0]]
     return list(zip(closed[:-1], closed[1:]))
+
+
+def _all_edges(rings):
+    """rings: [outer_points, hole1_points, ...] -- see
+    collision_geometry.py's own identical function for the full
+    rationale (independent copy)."""
+    return [edge for ring in rings for edge in _polygon_edges(ring)]
 
 
 def _edge_crosses(px, py, ax, ay, bx, by):
@@ -577,13 +611,27 @@ def _edge_crosses(px, py, ax, ay, bx, by):
     return False
 
 
-def _inside_polygon(px, py, points):
-    count = sum(1 for (ax, ay), (bx, by) in _polygon_edges(points)
+def _inside_polygon(px, py, rings):
+    """TRUE iff (px,py) is inside the obstacle's own solid material --
+    see collision_geometry.py's own identical function for the full
+    even-odd-over-combined-rings argument (independent copy, same
+    math). rings is normally an obstacle's own FULL [outer, hole1,
+    ...] list (from _OBSTACLE_POLYGONS) -- but _offset_boundary_
+    clockwise below also calls this with a SINGLE ring wrapped in its
+    own one-element list ([vertices]), to test containment against
+    just the ONE boundary currently being offset, deliberately
+    ignoring any sibling holes/outer boundary that ring's own obstacle
+    might additionally have."""
+    count = sum(1 for (ax, ay), (bx, by) in _all_edges(rings)
                 if _edge_crosses(px, py, ax, ay, bx, by))
     return count % 2 == 1
 
 
 def _signed_polygon_area(points):
+    """ONE ring's own signed area (winding-direction test) -- takes a
+    single flat point list, same as _polygon_edges above, never a
+    multi-ring list (an obstacle's own winding direction is a
+    per-ring property, not something to combine across rings)."""
     return sum(ax*by - bx*ay for (ax, ay), (bx, by) in _polygon_edges(points)) / 2.0
 
 
@@ -629,7 +677,7 @@ def _offset_boundary_clockwise(polygon, offset):
         n2 = (edy, -edx)
         mx, my = (ax+bx)/2.0, (ay+by)/2.0
         probe_x, probe_y = mx + n1[0]*_NORMAL_PROBE_EPS, my + n1[1]*_NORMAL_PROBE_EPS
-        outward = n1 if not _inside_polygon(probe_x, probe_y, vertices) else n2
+        outward = n1 if not _inside_polygon(probe_x, probe_y, [vertices]) else n2
         for k in range(_BOUNDARY_SAMPLES_PER_EDGE):
             frac = k / _BOUNDARY_SAMPLES_PER_EDGE
             px, py = ax + edx*elen*frac, ay + edy*elen*frac
@@ -637,10 +685,22 @@ def _offset_boundary_clockwise(polygon, offset):
     return samples
 
 
+def _nearest_ring_distance(px, py, ring):
+    """Nearest-edge distance from (px,py) to ONE boundary ring -- used
+    by _follow_boarder_control_points below to pick WHICH of an
+    obstacle's own rings (its outer boundary, or a specific hole) to
+    trace, when it has more than one."""
+    return min(math.hypot(px-cx, py-cy)
+               for (ax, ay), (bx, by) in _polygon_edges(ring)
+               for cx, cy in [_closest_point_on_segment(px, py, ax, ay, bx, by)])
+
+
 def _follow_boarder_control_points(sx, sy, obstacle_id, offset):
     """Core computation -- see follow_boarder_points below for the
-    full contract. Looks up obstacle_id's own polygon, builds its
-    offset boundary, and starts from whichever sample is closest to
+    full contract. Looks up obstacle_id's own ring(s), builds an
+    offset boundary around WHICHEVER ring the robot's own current
+    position (sx,sy) is actually closest to right now (see below), and
+    starts from whichever sample on THAT offset curve is closest to
     the robot's ACTUAL current position -- NOT assumed to already sit
     exactly on the offset curve (it generally won't, by a small
     bisection-tolerance residual -- see this project's own discussion
@@ -650,12 +710,24 @@ def _follow_boarder_control_points(sx, sy, obstacle_id, offset):
     FULL clockwise loop back to that same starting sample -- no
     stopping condition of its own; see this section's own header for
     why. Returns [(x,y), ...] control points, or None if obstacle_id
-    names no known obstacle or its polygon is degenerate.
+    names no known obstacle or its own chosen ring is degenerate.
 
     obstacle_id is looked up in _OBSTACLE_POLYGONS -- it always came
     FROM collision detection (recover_obstacle/1, built on
     last_halt/1 -- see basic_action_theory.pl's own note there), so it
     can only ever be a valid Id there.
+
+    WHICH RING: an ordinary, hole-less obstacle has exactly one
+    (rings[0], its outer boundary) -- nothing to choose. An obstacle
+    WITH a hole (e.g. a perimeter fence's own inner face) has no
+    single "the" boundary to trace: approaching it from OUTSIDE the
+    property means the outer boundary is the one actually blocking the
+    robot, so that's the one to loop around; approaching from INSIDE
+    the fenced yard means the HOLE's own inner face is the one
+    actually blocking it instead. Picking whichever ring (px,py) is
+    currently nearest (_nearest_ring_distance) gets this right in
+    both directions without needing to separately track which side an
+    approach came from.
 
     offset ITSELF gets corrected before use: _OBSTACLE_POLYGONS is
     already inflated by SAFETY_MARGIN_M (see this file's own module
@@ -675,12 +747,15 @@ def _follow_boarder_control_points(sx, sy, obstacle_id, offset):
     safety_margin" caveat basic_action_theory.pl's own
     clearance_adjusted_threshold/2 already documents for
     obstacle_in_bound/obstacle_on_path."""
-    polygon = None
-    for oid, pts in _OBSTACLE_POLYGONS:
+    rings = None
+    for oid, r in _OBSTACLE_POLYGONS:
         if oid == obstacle_id:
-            polygon = pts
+            rings = r
             break
-    if polygon is None or len(polygon) < 3:
+    if not rings:
+        return None
+    polygon = min(rings, key=lambda ring: _nearest_ring_distance(sx, sy, ring))
+    if len(polygon) < 3:
         return None
 
     adjusted_offset = offset - SAFETY_MARGIN_M
@@ -750,8 +825,8 @@ def _voronoi_sites():
     _offset_boundary_clockwise above, just without any further outward
     offset."""
     sites = []
-    for _oid, poly in _OBSTACLE_POLYGONS:
-        for (ax, ay), (bx, by) in _polygon_edges(poly):
+    for _oid, rings in _OBSTACLE_POLYGONS:
+        for (ax, ay), (bx, by) in _all_edges(rings):
             for k in range(_VORONOI_SAMPLES_PER_EDGE):
                 frac = k / _VORONOI_SAMPLES_PER_EDGE
                 sites.append((ax + (bx-ax)*frac, ay + (by-ay)*frac))
@@ -761,14 +836,14 @@ def _voronoi_sites():
 def _segment_crosses_any_obstacle(ax, ay, bx, by):
     """True iff the segment (ax,ay)-(bx,by), sampled at
     _VORONOI_EDGE_CHECK_SAMPLES points, passes through ANY (already
-    safety_margin-inflated) obstacle's interior -- the filter that
-    turns a plain Voronoi tessellation into a roadmap using only
-    free-space edges."""
+    safety_margin-inflated) obstacle's own solid material -- the
+    filter that turns a plain Voronoi tessellation into a roadmap
+    using only free-space edges."""
     for k in range(_VORONOI_EDGE_CHECK_SAMPLES + 1):
         frac = k / _VORONOI_EDGE_CHECK_SAMPLES
         x, y = ax + (bx-ax)*frac, ay + (by-ay)*frac
-        for _oid, poly in _OBSTACLE_POLYGONS:
-            if _inside_polygon(x, y, poly):
+        for _oid, rings in _OBSTACLE_POLYGONS:
+            if _inside_polygon(x, y, rings):
                 return True
     return False
 
@@ -920,6 +995,182 @@ def plan_straight_points(sx, sy, gx, gy):
     return _straight_control_points(float(sx), float(sy), float(gx), float(gy))
 
 
+# =====================================================================
+# MULTI-WAYPOINT MERGING -- for astar/straight ONLY (voronoi/
+# follow_boarder have no multi-waypoint form; see schema.yaml's own
+# PlanWithWaypoints entry for why). Plans (sx,sy) -> waypoints[0] ->
+# waypoints[1] -> ... -> waypoints[-1] as N independent per-leg calls
+# to the SAME single-goal planner already above, then CONCATENATES
+# each leg's own chained-Bezier control_points into ONE combined
+# chain spanning the whole route.
+#
+# WHY this exists: this project's own FUTUREWORK.md documents that the
+# compiled ProbLog formula's size is driven by how many stochastic
+# noise variables (z/2, zt/2 -- one fresh pair PER MoveTo leg) stay
+# simultaneously "live" through Reiter regression across the whole,
+# never-forgotten action history. A tree with N independent PlanWith/
+# MoveTo legs draws N independent (z,zt) pairs; collapsing those same
+# N legs into ONE PlanWithWaypoints+MoveTo pair (see bt_to_prolog.py's
+# own automatic merge pass) draws exactly ONE (z,zt) pair for the
+# whole route instead -- directly shrinking the grounded/compiled
+# formula's size by removing (N-1) noise-variable pairs, at the cost
+# of a real, deliberate change to the probabilistic model: positional
+# noise is no longer independently reset at each original waypoint,
+# since there is now only ONE walk, not N. See PlanWithWaypoints'
+# own schema.yaml entry for that tradeoff stated in full.
+#
+# CONCATENATION: each leg's own control_points is a chained-cubic-
+# Bezier list, length 3k+1 for that leg's own k -- and leg i+1 always
+# STARTS exactly where leg i ENDED (by construction: leg i+1's own
+# start point is leg i's own goal point). So concatenating N such
+# lists into ONE combined chain is just "append every list, but drop
+# each list's own FIRST point except the very first list's" -- that
+# first point is otherwise an exact duplicate of the previous list's
+# own last point, and dropping exactly one point per seam (N-1 seams
+# for N legs) preserves the "length 3k+1" invariant for the combined
+# chain's own k = sum of every leg's own k (verified directly: sum(3*
+# k_i + 1) - (N-1) = 3*sum(k_i) + 1).
+#
+# FAILS OUTRIGHT (returns None) if ANY single leg has no path -- there
+# is no partial-credit result; this matches PlanWithWaypoints' own
+# "reaches the last one, or doesn't complete at all" contract.
+# =====================================================================
+def _chain_multi_leg_control_points(sx, sy, waypoints, leg_planner):
+    """Shared core for plan_astar_waypoints_points/plan_straight_
+    waypoints_points below -- leg_planner is _astar_control_points or
+    _straight_control_points (same (sx,sy,gx,gy)->control_points|None
+    shape as the single-goal planners already above). waypoints is
+    [(x,y), ...], at least one point. Returns the combined chain, or
+    None if ANY leg fails (see this section's own header)."""
+    points = [(float(sx), float(sy))] + [(float(x), float(y)) for x, y in waypoints]
+    combined = None
+    for (ax, ay), (bx, by) in zip(points, points[1:]):
+        leg_cp = leg_planner(ax, ay, bx, by)
+        if leg_cp is None:
+            return None
+        if combined is None:
+            combined = list(leg_cp)
+        else:
+            combined.extend(leg_cp[1:])
+    return combined
+
+
+def plan_astar_waypoints_points(sx, sy, waypoints):
+    """Plain-Python multi-waypoint A* planner -- see this section's
+    own header. Returns None if waypoints is empty or if ANY leg
+    between consecutive points (including the very first, from
+    (sx,sy) to waypoints[0]) has no path."""
+    if not waypoints:
+        return None
+    return _chain_multi_leg_control_points(sx, sy, waypoints, _astar_control_points)
+
+
+def plan_straight_waypoints_points(sx, sy, waypoints):
+    """Plain-Python multi-waypoint straight-line planner -- see this
+    section's own header. Returns None only if waypoints is empty
+    (straight legs themselves never fail)."""
+    if not waypoints:
+        return None
+    return _chain_multi_leg_control_points(sx, sy, waypoints, _straight_control_points)
+
+
+
+# =====================================================================
+# DASTAR -- "discretized A*": plans the SAME raw A* grid path
+# _astar_control_points itself searches (before that function's own
+# spline-fit step), but instead of fitting one smooth curve through
+# every raw grid cell, first DISCRETIZES that raw path -- one waypoint
+# every `step` metres of ARC LENGTH walked along it
+# (_resample_path_every_step below) -- then reuses PlanWithWaypoints'
+# own multi-leg STRAIGHT-LINE chaining (_chain_multi_leg_control_points,
+# above) to connect those waypoints, exactly mirroring
+# plan_straight_waypoints_points' own contract except the waypoints
+# are CHOSEN by A* itself (following the free-space corridor it found)
+# rather than supplied by the caller. Same "add one more plan_astar-
+# style function plus one more plan_call/8 clause pair" recipe every
+# other planner in this file already follows -- see basic_action_
+# theory.pl's own plan_call(dastar(Step), ...) clause pair.
+# =====================================================================
+def _resample_path_every_step(path_xy, step_m):
+    """Resample a polyline path_xy=[(x,y), ...] BY ARC LENGTH, taking
+    one point every step_m metres walked along it, plus ALWAYS the
+    final point (the goal) even if it doesn't land on an exact
+    multiple of step_m -- same "reaches the last one" contract as
+    PlanWithWaypoints. Returns waypoints EXCLUDING path_xy[0] (the
+    start point) -- i.e. a list directly usable as the `waypoints`
+    argument of _chain_multi_leg_control_points above. path_xy must
+    have at least 2 points; a degenerate (zero-length) path returns
+    just its own last point."""
+    cumulative = [0.0]
+    for (ax, ay), (bx, by) in zip(path_xy[:-1], path_xy[1:]):
+        cumulative.append(cumulative[-1] + math.hypot(bx - ax, by - ay))
+    total = cumulative[-1]
+    if total <= 1.0e-9:
+        return [path_xy[-1]]
+
+    def point_at(dist):
+        for i in range(1, len(cumulative)):
+            if cumulative[i] >= dist - 1.0e-9:
+                seg_len = cumulative[i] - cumulative[i - 1]
+                if seg_len <= 1.0e-12:
+                    return path_xy[i]
+                frac = (dist - cumulative[i - 1]) / seg_len
+                ax, ay = path_xy[i - 1]
+                bx, by = path_xy[i]
+                return (ax + (bx - ax) * frac, ay + (by - ay) * frac)
+        return path_xy[-1]
+
+    waypoints = []
+    dist = step_m
+    while dist < total:
+        waypoints.append(point_at(dist))
+        dist += step_m
+    waypoints.append(path_xy[-1])
+    return waypoints
+
+
+def _dastar_control_points(sx, sy, gx, gy, step_m):
+    """Core computation -- see this section's own header. Returns
+    None under exactly the same conditions _astar_control_points
+    itself would (map not loaded, start/goal out of bounds or on an
+    obstacle cell, or A* finds no path at all); a degenerate same-
+    cell start/goal returns the same 4-identical-point Bezier
+    _astar_control_points itself returns for that case."""
+    if _PLANNING_MAP is None:
+        return None
+
+    start_rc = _PLANNING_MAP.world_to_grid(sx, sy)
+    goal_rc = _PLANNING_MAP.world_to_grid(gx, gy)
+
+    if not _PLANNING_MAP.in_bounds(*start_rc) or not _PLANNING_MAP.in_bounds(*goal_rc):
+        return None
+
+    if start_rc == goal_rc:
+        return [(sx, sy)] * 4
+
+    path_rc = astar(_PLANNING_MAP, start_rc, goal_rc,
+                     occ_thresh=OCC_THRESH, connectivity=CONNECTIVITY,
+                     unknown_is_occupied=True)
+    if path_rc is None:
+        return None  # no path found
+
+    path_xy = [_PLANNING_MAP.grid_to_world(r, c) for r, c in path_rc]
+    if len(path_xy) < 2:
+        return [(sx, sy)] * 4
+
+    waypoints = _resample_path_every_step(path_xy, step_m)
+    return _chain_multi_leg_control_points(sx, sy, waypoints, _straight_control_points)
+
+
+def plan_dastar_points(sx, sy, gx, gy, step=2.0):
+    """Plain-Python dastar planner -- see _dastar_control_points
+    above. step is the arc-length spacing (metres) between
+    discretized waypoints along A*'s own raw grid path; defaults to
+    2.0m. Returns None under the same conditions plan_astar_points
+    itself would."""
+    return _dastar_control_points(float(sx), float(sy), float(gx), float(gy), float(step))
+
+
 def plan_voronoi_points(sx, sy, gx, gy):
     """Plain-Python generalized-Voronoi-diagram planner. Returns
     [(x,y), ...] control points routed along the free-space Voronoi
@@ -1001,6 +1252,49 @@ if _HAVE_PROBLOG:
         """Black-box straight-line planner (ProbLog predicate) -- no map
         lookup at all, always succeeds for any finite (sx,sy),(gx,gy)."""
         control_points = _straight_control_points(sx, sy, gx, gy)
+        return [_control_points_to_terms(control_points)]
+
+    @problog_export_nondet("+float", "+float", "+float", "+float", "+float", "-list")
+    def plan_dastar(sx, sy, gx, gy, step):
+        """Black-box discretized-A* planner (ProbLog predicate) -- see
+        _dastar_control_points above for the actual computation. Fails
+        (returns []) under exactly the same conditions plan_astar
+        itself would."""
+        control_points = _dastar_control_points(sx, sy, gx, gy, step)
+        if control_points is None:
+            return []
+        return [_control_points_to_terms(control_points)]
+
+    def _term_list_to_points(waypoints):
+        """[point(X,Y), ...] ProbLog Term objects -> [(x,y), ...] plain
+        floats -- the "+list" input type spec (problog.extern's own
+        term2list) only unwraps the OUTER Prolog list, leaving each
+        element as a raw point(X,Y) Term still needing this."""
+        return [(float(w.args[0]), float(w.args[1])) for w in waypoints]
+
+    @problog_export_nondet("+float", "+float", "+list", "-list")
+    def plan_astar_waypoints(sx, sy, waypoints):
+        """Black-box multi-waypoint A* planner (ProbLog predicate) --
+        see plan_astar_waypoints_points above for the actual
+        computation. waypoints arrives as a Prolog list of point(X,Y)
+        terms (basic_action_theory.pl's own planWithWaypoints/4 own
+        Waypoints argument, unchanged from how bt_to_prolog.py's merge
+        pass -- or a hand-written PlanWithWaypoints -- wrote it).
+        Fails (returns []) if waypoints is empty, or if ANY leg has no
+        path -- no partial-credit result."""
+        control_points = plan_astar_waypoints_points(sx, sy, _term_list_to_points(waypoints))
+        if control_points is None:
+            return []
+        return [_control_points_to_terms(control_points)]
+
+    @problog_export_nondet("+float", "+float", "+list", "-list")
+    def plan_straight_waypoints(sx, sy, waypoints):
+        """Black-box multi-waypoint straight-line planner (ProbLog
+        predicate) -- see plan_straight_waypoints_points above. Fails
+        (returns []) only if waypoints is empty."""
+        control_points = plan_straight_waypoints_points(sx, sy, _term_list_to_points(waypoints))
+        if control_points is None:
+            return []
         return [_control_points_to_terms(control_points)]
 
     @problog_export_nondet("+float", "+float", "+float", "+float", "-list")

@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+
+
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <ReactiveFallback name="MainTree">
+      <Sequence>
+        <BatteryBelow threshold="50"/>
+        <Fallback>
+          <DistanceBelow goal="9.0;27.0" threshold="1.0"/>
+          <Sequence>
+            <PlanWith algorithm="dastar" goal="9.0;27.0" control_points="{cp1}"/>
+            <MoveTo control_points="{cp1}"/>
+            <DistanceBelow goal="9.0;27.0" threshold="1.0"/>
+          </Sequence>
+        </Fallback>
+      </Sequence>
+      <Sequence>
+        <Fallback>
+          <DistanceBelow goal="15.0;-9.0" threshold="1.0"/>
+          <Sequence>
+            <PlanWithWaypoints algorithm="straight" waypoints="0.5;27.0|0.5;-9.0|15.0;-9.0" control_points="{cp2}"/>
+            <MoveTo control_points="{cp2}"/>
+            <DistanceBelow goal="15.0;-9.0" threshold="1.0"/>
+          </Sequence>
+        </Fallback>
+        <TakeSample id="sample_tree_11"/>
+        <Fallback>
+          <DistanceBelow goal="15.0;-18.0" threshold="1.0"/>
+          <Sequence>
+            <PlanWithWaypoints algorithm="straight" waypoints="29.5;-9.0|29.5;-18.0|15.0;-18.0" control_points="{cp3}"/>
+            <MoveTo control_points="{cp3}"/>
+            <DistanceBelow goal="15.0;-18.0" threshold="1.0"/>
+          </Sequence>
+        </Fallback>
+      </Sequence>
+    </ReactiveFallback>
+  </BehaviorTree>
+</root>

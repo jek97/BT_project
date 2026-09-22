@@ -115,6 +115,22 @@ THEORY_PATH = os.path.join(THEORY_DIR, "basic_action_theory.pl")
 OUTPUT_DIR = os.path.join(_THIS_DIR, "output")
 
 
+def _str2bool(value):
+    """argparse type= for --approximate: accepts a BARE flag (argparse's
+    own nargs="?"/const=True handles that before this is ever called)
+    as well as --approximate=true/false/1/0/yes/no (any case) -- plain
+    action="store_true" would reject the "=true" spelling outright."""
+    if isinstance(value, bool):
+        return value
+    lowered = value.strip().lower()
+    if lowered in ("true", "1", "yes", "y"):
+        return True
+    if lowered in ("false", "0", "no", "n"):
+        return False
+    raise argparse.ArgumentTypeError(
+        f"--approximate expects true/false (or 1/0, yes/no) -- got '{value}'.")
+
+
 # -----------------------------------------------------------------------
 # Run ProbLog via its PYTHON API (not the CLI/subprocess) and return a
 # results dict directly. str(term) for a query like plan_outcome(true)
@@ -131,8 +147,11 @@ OUTPUT_DIR = os.path.join(_THIS_DIR, "output")
 # per-stage breakdown is already visible in the [STAGE] lines
 # run_staged_inference logs as it goes.
 # -----------------------------------------------------------------------
-def run_problog_api(plan_file, tee, phase_timeout=300):
-    results, timings = run_staged_inference(plan_file, tee, phase_timeout=phase_timeout)
+def run_problog_api(plan_file, tee, phase_timeout=300, approximate=False,
+                     approximate_convergence=1e-2):
+    results, timings = run_staged_inference(
+        plan_file, tee, phase_timeout=phase_timeout, approximate=approximate,
+        approximate_convergence=approximate_convergence)
     return results, sum(timings.values())
 
 
@@ -503,11 +522,68 @@ def main():
                           "goal_formula.pl, and map.yaml (default: "
                           "problem0).")
     ap.add_argument("--phase-timeout", type=int, default=300,
-                     help="Per-stage timeout in seconds for the ProbLog "
-                          "resolution pipeline -- parse/ground/compile/"
-                          "evaluate each get their own budget (default: "
-                          "300 = 5 minutes). See pipeline_stages.py.")
+                     help="Timeout in seconds applied to every stage of "
+                          "the ProbLog resolution pipeline (parse/ground/"
+                          "compile/evaluate) that isn't given its own "
+                          "override below (default: 300 = 5 minutes). "
+                          "See pipeline_stages.py.")
+    ap.add_argument("--parse-timeout", type=int, default=None,
+                     help="Override just the Parse stage's timeout "
+                          "(seconds). Defaults to --phase-timeout.")
+    ap.add_argument("--ground-timeout", type=int, default=None,
+                     help="Override just the Ground stage's timeout "
+                          "(seconds) -- the stage most likely to need "
+                          "more headroom on a large obstacle set. "
+                          "Defaults to --phase-timeout.")
+    ap.add_argument("--compile-timeout", type=int, default=None,
+                     help="Override just the Compile stage's timeout "
+                          "(seconds). Defaults to --phase-timeout.")
+    ap.add_argument("--evaluate-timeout", type=int, default=None,
+                     help="Override just the Evaluate stage's timeout "
+                          "(seconds). Defaults to --phase-timeout.")
+    ap.add_argument("--approximate", nargs="?", const=True, default=False,
+                     type=_str2bool,
+                     help="Use ProbLog's own k-best ANYTIME evaluator "
+                          "(problog.kbest) for Compile+Evaluate instead of "
+                          "exact knowledge compilation (SDD/DSharp) -- "
+                          "trades an EXACT probability for a LOWER BOUND "
+                          "that gets tighter the longer it runs. NOT "
+                          "confirmed to be faster on this project's own "
+                          "theory -- measured directly against problem4 "
+                          "(where exact compilation takes 0.04s), kbest's "
+                          "own evaluate() did not finish within 2 minutes "
+                          "even at a very loose convergence; see "
+                          "pipeline_stages.py's own run_staged_inference "
+                          "note for the full finding. Safely bounded by "
+                          "--evaluate-timeout/--compile-timeout either "
+                          "way (confirmed). Parse/Ground are UNCHANGED. "
+                          "Bare --approximate or --approximate=true/"
+                          "false/1/0 (default: false).")
+    ap.add_argument("--approximate-convergence", type=float, default=1e-2,
+                     help="Only used with --approximate: stop once the "
+                          "k-best evaluator's own reported lower bound is "
+                          "within this much of its own upper bound (e.g. "
+                          "0.01 = within 1 percentage point) -- smaller is "
+                          "slower but tighter. Default: 0.01. ProbLog's "
+                          "own internal default (1e-9) is tight enough to "
+                          "take as long as exact compilation, defeating "
+                          "the point of approximate mode.")
     args = ap.parse_args()
+
+    # Only build a per-stage dict when at least one override was given,
+    # so the common case (no overrides) keeps passing a plain int
+    # straight through, exactly as before.
+    _overrides = {
+        "parse": args.parse_timeout,
+        "ground": args.ground_timeout,
+        "compile": args.compile_timeout,
+        "evaluate": args.evaluate_timeout,
+    }
+    if any(v is not None for v in _overrides.values()):
+        phase_timeout_arg = {k: (v if v is not None else args.phase_timeout)
+                              for k, v in _overrides.items()}
+    else:
+        phase_timeout_arg = args.phase_timeout
 
     problem_dir = os.path.join(PROBLEMS_DIR, args.problem)
 
@@ -681,13 +757,26 @@ def main():
                                run_label=f"main.py --problem {args.problem}, run {ts}",
                                tee=tee)
 
-        tee(f"\n  Started : {datetime.now():%H:%M:%S}  "
-            f"(phase timeout: {args.phase_timeout}s per stage)")
+        if isinstance(phase_timeout_arg, dict):
+            _timeout_desc = ", ".join(f"{k}={v}s" for k, v in phase_timeout_arg.items())
+        else:
+            _timeout_desc = f"{phase_timeout_arg}s per stage"
+        if args.approximate:
+            tee(f"\n  Started : {datetime.now():%H:%M:%S}  "
+                f"(phase timeout: {_timeout_desc}; APPROXIMATE mode: "
+                f"k-best anytime lower bound, "
+                f"convergence={args.approximate_convergence})")
+        else:
+            tee(f"\n  Started : {datetime.now():%H:%M:%S}  "
+                f"(phase timeout: {_timeout_desc})")
         try:
-            results, elapsed = run_problog_api(THEORY_PATH, tee, args.phase_timeout)
+            results, elapsed = run_problog_api(
+                THEORY_PATH, tee, phase_timeout_arg,
+                approximate=args.approximate,
+                approximate_convergence=args.approximate_convergence)
         except StageTimeout:
             tee(f"\n  [ERROR] Aborting -- a pipeline stage exceeded its "
-                f"{args.phase_timeout}s timeout (see [STAGE] line above for which).")
+                f"own timeout ({_timeout_desc}; see [STAGE] line above for which).")
             sys.exit(1)
         except ProbLogError as e:
             tee(f"\n  [ERROR] ProbLog error: {e}")
@@ -701,6 +790,14 @@ def main():
             tee("\n  [warn] No results returned from ProbLog -- check the "
                 "file has query(...) declarations.")
             sys.exit(1)
+
+        if args.approximate:
+            tee(f"\n  [APPROXIMATE] Every probability below is a LOWER "
+                f"BOUND (k-best anytime evaluator, "
+                f"convergence={args.approximate_convergence}), NOT the "
+                f"exact value -- the true probability is somewhere in "
+                f"[shown value, shown value + ~{args.approximate_convergence}]. "
+                f"Re-run without --approximate for an exact answer.")
 
         print_compact_summary(tee, results, goal_formula_path, action_labels, condition_labels)
 

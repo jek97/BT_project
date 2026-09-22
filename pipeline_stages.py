@@ -71,6 +71,8 @@ from problog.program import PrologFile
 from problog.formula import LogicFormula
 from problog import get_evaluatable
 
+from module.theory.graph_export import export_ground_graph, export_compiled_graph
+
 
 class StageTimeout(Exception):
     """Raised when a single pipeline stage exceeds its own phase_timeout."""
@@ -112,7 +114,8 @@ def run_stage(tee, label, func, timeout_seconds):
 
 
 def run_staged_inference(plan_file, tee, phase_timeout=300,
-                          approximate=False, approximate_convergence=1e-2):
+                          approximate=False, approximate_convergence=1e-2,
+                          save_graphs_dir=None):
     """
     Runs the ProbLog resolution pipeline against plan_file as FOUR
     separate, logged, individually-timed-out stages (parse / ground /
@@ -191,6 +194,16 @@ def run_staged_inference(plan_file, tee, phase_timeout=300,
     which stage is already named in the [STAGE] line logged just
     before the exception propagates, so a hang's location is known
     even though the run itself has to be aborted.
+
+    save_graphs_dir: if not None, dumps the ground LogicFormula (right
+    after the Ground stage) and the compiled circuit (right after the
+    Compile stage) to this directory via module/theory/graph_export.py --
+    ground.dot/ground_nodes.json and compiled.dot/compiled_nodes.json
+    respectively (see that module's own header for exactly what each
+    sidecar contains and why the two graphs carry different amounts of
+    per-node provenance). Skipped entirely (zero overhead) when None,
+    the default -- this is diagnostic/visualization tooling, not part of
+    the actual inference result.
     """
     if isinstance(phase_timeout, dict):
         timeouts = {"parse": 300, "ground": 300, "compile": 300, "evaluate": 300}
@@ -210,6 +223,11 @@ def run_staged_inference(plan_file, tee, phase_timeout=300,
     timings["ground"] = t
     tee(f"    -> {len(lf)} ground node(s)")
 
+    if save_graphs_dir is not None:
+        export_ground_graph(lf, save_graphs_dir)
+        tee(f"    -> ground graph saved to {save_graphs_dir} "
+            f"(ground.dot / ground_nodes.json)")
+
     compile_label = ("Compile (k-best anytime lower bound, "
                       f"convergence={approximate_convergence})" if approximate
                       else "Compile (knowledge compilation)")
@@ -218,6 +236,12 @@ def run_staged_inference(plan_file, tee, phase_timeout=300,
                              lambda: get_evaluatable(name=evaluatable_name).create_from(lf),
                              timeouts["compile"])
     timings["compile"] = t
+
+    if save_graphs_dir is not None:
+        export_compiled_graph(compiled, save_graphs_dir)
+        tee(f"    -> compiled graph saved to {save_graphs_dir} "
+            f"(compiled.dot / compiled_nodes.json, backend="
+            f"{type(compiled).__name__})")
 
     evaluate_call = ((lambda: compiled.evaluate(lower_only=True,
                                                  convergence=approximate_convergence))

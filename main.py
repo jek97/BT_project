@@ -148,10 +148,11 @@ def _str2bool(value):
 # run_staged_inference logs as it goes.
 # -----------------------------------------------------------------------
 def run_problog_api(plan_file, tee, phase_timeout=300, approximate=False,
-                     approximate_convergence=1e-2):
+                     approximate_convergence=1e-2, save_graphs_dir=None):
     results, timings = run_staged_inference(
         plan_file, tee, phase_timeout=phase_timeout, approximate=approximate,
-        approximate_convergence=approximate_convergence)
+        approximate_convergence=approximate_convergence,
+        save_graphs_dir=save_graphs_dir)
     return results, sum(timings.values())
 
 
@@ -559,6 +560,22 @@ def main():
                           "way (confirmed). Parse/Ground are UNCHANGED. "
                           "Bare --approximate or --approximate=true/"
                           "false/1/0 (default: false).")
+    ap.add_argument("--save-graphs", nargs="?", const=True, default=True,
+                     type=_str2bool,
+                     help="Also dump the ground LogicFormula and the "
+                          "compiled circuit (SDD or DSharp d-DNNF, "
+                          "whichever this environment's own "
+                          "get_evaluatable() resolves to) as GraphViz "
+                          ".dot files plus a per-node JSON sidecar, into "
+                          "this run's own output/<problem>/graphs/ -- see "
+                          "module/theory/graph_export.py's own header for "
+                          "exactly what each sidecar records (which node "
+                          "is a declared query, which is a do_node(...)/"
+                          "cond(...)/... call, which is a bare AD fact) "
+                          "and why the ground graph carries richer "
+                          "per-node provenance than the compiled one. "
+                          "Bare --save-graphs or --save-graphs=true/false/"
+                          "1/0 (default: true).")
     ap.add_argument("--approximate-convergence", type=float, default=1e-2,
                      help="Only used with --approximate: stop once the "
                           "k-best evaluator's own reported lower bound is "
@@ -769,11 +786,14 @@ def main():
         else:
             tee(f"\n  Started : {datetime.now():%H:%M:%S}  "
                 f"(phase timeout: {_timeout_desc})")
+        graphs_dir = (os.path.join(problem_output_dir, "graphs")
+                      if args.save_graphs else None)
         try:
             results, elapsed = run_problog_api(
                 THEORY_PATH, tee, phase_timeout_arg,
                 approximate=args.approximate,
-                approximate_convergence=args.approximate_convergence)
+                approximate_convergence=args.approximate_convergence,
+                save_graphs_dir=graphs_dir)
         except StageTimeout:
             tee(f"\n  [ERROR] Aborting -- a pipeline stage exceeded its "
                 f"own timeout ({_timeout_desc}; see [STAGE] line above for which).")

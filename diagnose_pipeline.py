@@ -168,7 +168,7 @@ def main():
 
     tee("")
     try:
-        results, timings = run_staged_inference(
+        results, timings, _sizes = run_staged_inference(
             THEORY_PATH, tee, phase_timeout=args.phase_timeout)
     except StageTimeout:
         tee(f"\n  [ERROR] Aborting -- a pipeline stage exceeded its "

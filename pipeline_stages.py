@@ -70,6 +70,7 @@ import time
 from problog.program import PrologFile
 from problog.formula import LogicFormula
 from problog import get_evaluatable
+from problog.evaluator import SemiringLogProbability
 
 
 class StageTimeout(Exception):
@@ -112,7 +113,8 @@ def run_stage(tee, label, func, timeout_seconds):
 
 
 def run_staged_inference(plan_file, tee, phase_timeout=300,
-                          approximate=False, approximate_convergence=1e-2):
+                          approximate=False, approximate_convergence=1e-2,
+                          knowledge_name=None, propagate_weights=False):
     """
     Runs the ProbLog resolution pipeline against plan_file as FOUR
     separate, logged, individually-timed-out stages (parse / ground /
@@ -179,13 +181,40 @@ def run_staged_inference(plan_file, tee, phase_timeout=300,
     value, reported value + roughly approximate_convergence]; main.py
     prints a one-line reminder of this whenever --approximate is used.
 
-    Returns (results, timings):
+    knowledge_name: which ProbLog knowledge-compilation backend to pass
+    to get_evaluatable(name=...) for the Compile stage -- e.g. "sdd",
+    "sddx", "bdd", "nnf"/"ddnnf", "fsdd", "fbdd". None (the default)
+    lets ProbLog auto-pick (SDD if pysdd is installed, DSharp d-DNNF
+    otherwise -- see get_evaluatable's own resolution logic). IGNORED
+    when approximate=True, since that always forces "kbest" instead
+    (an anytime evaluator, not a knowledge-compilation backend choice).
+
+    propagate_weights: mirrors ProbLog's own CLI --propagate-weights
+    flag EXACTLY -- confirmed directly against problog/tasks/
+    probability.py's own execute(): the CLI turns that boolean flag
+    into passing the SAME semiring instance used for evaluation as
+    LogicFormula.create_from(...)'s own propagate_weights= keyword, so
+    that's what this does too (SemiringLogProbability -- ProbLog's own
+    default semiring, matching this project's prior unconfigured
+    behavior exactly when propagate_weights=False). Lets the grounding
+    engine fold away deterministic/weight-trivial sub-structure as the
+    ground graph is built, which can shrink both the ground and
+    compiled graph -- see the ablation_study branch's own README note
+    for why this is being measured here.
+
+    Returns (results, timings, sizes):
       - results: {str(query_term): float(probability)} -- EXACTLY the
         same shape the old single-call run_problog_api always
         returned, so nothing downstream needs to change (a LOWER BOUND
         in place of the exact value when approximate=True, per above,
         but still always a plain float).
       - timings: {"parse"|"ground"|"compile"|"evaluate": elapsed_seconds}
+      - sizes: {"ground_nodes": int, "compiled_nodes": int} -- node
+        counts of the ground LogicFormula and the compiled circuit
+        respectively (len() of each -- the SAME number the existing
+        "-> N ground node(s)" [STAGE] log line already reports for the
+        ground side), for exactly this kind of before/after backend
+        comparison.
 
     Raises StageTimeout if any single stage exceeds ITS OWN budget --
     which stage is already named in the [STAGE] line logged just
@@ -199,36 +228,42 @@ def run_staged_inference(plan_file, tee, phase_timeout=300,
         timeouts = {k: phase_timeout for k in ("parse", "ground", "compile", "evaluate")}
 
     timings = {}
+    semiring = SemiringLogProbability()
 
     model, t = run_stage(tee, "Parse (plan.pl formed)",
                           lambda: PrologFile(plan_file), timeouts["parse"])
     timings["parse"] = t
 
     lf, t = run_stage(tee, "Ground (plan unrolled, regressed to s0)",
-                       lambda: LogicFormula.create_from(model, label_all=True),
+                       lambda: LogicFormula.create_from(
+                           model, label_all=True,
+                           propagate_weights=(semiring if propagate_weights else None)),
                        timeouts["ground"])
     timings["ground"] = t
     tee(f"    -> {len(lf)} ground node(s)")
 
     compile_label = ("Compile (k-best anytime lower bound, "
                       f"convergence={approximate_convergence})" if approximate
-                      else "Compile (knowledge compilation)")
-    evaluatable_name = "kbest" if approximate else None
+                      else f"Compile (knowledge compilation, backend="
+                           f"{knowledge_name or 'auto'})")
+    evaluatable_name = "kbest" if approximate else knowledge_name
     compiled, t = run_stage(tee, compile_label,
                              lambda: get_evaluatable(name=evaluatable_name).create_from(lf),
                              timeouts["compile"])
     timings["compile"] = t
+    tee(f"    -> {len(compiled)} compiled node(s)")
 
     evaluate_call = ((lambda: compiled.evaluate(lower_only=True,
                                                  convergence=approximate_convergence))
-                      if approximate else (lambda: compiled.evaluate()))
+                      if approximate else (lambda: compiled.evaluate(semiring=semiring)))
     raw_result, t = run_stage(
         tee, "Evaluate (weighted model count against the initial database)",
         evaluate_call, timeouts["evaluate"])
     timings["evaluate"] = t
 
     results = {str(term): float(prob) for term, prob in raw_result.items()}
-    return results, timings
+    sizes = {"ground_nodes": len(lf), "compiled_nodes": len(compiled)}
+    return results, timings, sizes
 
 
 def write_problem_data_pl(problem_data_path, problem_dir, goal_formula_path,

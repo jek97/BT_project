@@ -90,18 +90,75 @@ Requires: `problog` importable/runnable on PATH.
 
 Saves a timestamped log file with a compact query-result summary --
 no image/plot is produced (see print_compact_summary).
+
+ABLATION-STUDY BRANCH: this copy of main.py, unlike the version on
+main/visual, does NOT run the selected problem once -- it sweeps EVERY
+combination of ProbLog knowledge-compilation backend (sdd, sddx, bdd,
+nnf/ddnnf, fsdd, fbdd -- see _ABLATION_BACKENDS below; kbest is
+deliberately excluded, it's an anytime approximate evaluator, not a
+knowledge-compilation backend, and already has its own --approximate
+flag) crossed with --propagate-weights on/off, using the EXACT SAME
+CLI arguments as before (no new required flags) -- see main()'s own
+note for why. The one-time, backend-independent setup (regenerate
+obstacles/config/plan/goal/queries, write problem_data.pl) runs ONCE,
+not once per combination -- its own log lines are captured and
+replayed verbatim into each combination's own log file (see
+RecordingConsole/FileWriter below), so each combination's log still
+reads as a complete, standalone report, just without 12x redundant
+regeneration or console spam. A backend that isn't installed in this
+environment (see _backend_available) is skipped with a clear note
+instead of crashing the whole sweep; every other real error (timeout,
+ProbLog error, unexpected exception) is caught PER COMBINATION so one
+broken combination doesn't abort the rest. Writes one
+<problem>_<ts>_<backend>_<0|1>.log per combination (0/1 = propagate-
+weights off/on) PLUS one <problem>_<ts>_ablation_summary.csv with,
+per combination: ground/compiled node counts, per-stage timings, total
+time, and status -- all into the SAME output/<problem>/ directory the
+single-run version already used.
 """
 
 import argparse
+import csv
 import os
 import re
 import shutil
 import sys
 from datetime import datetime
 
+from problog import get_evaluatable, system_info
 from problog.errors import ProbLogError
 
 from pipeline_stages import run_staged_inference, write_problem_data_pl, StageTimeout
+
+# ProbLog knowledge-compilation backends this ablation sweeps over (via
+# get_evaluatable(name=...)) -- deliberately EXCLUDES "kbest": that's
+# an anytime APPROXIMATE evaluator (already exposed separately as
+# --approximate), not a knowledge-compilation backend choice, so it
+# doesn't fit "compare backends" the same way. "nnf" and "ddnnf" are
+# the SAME class (problog.ddnnf_formula.DDNNF, via dsharp or c2d) --
+# only "nnf" is listed here to avoid running that one twice under two
+# names.
+_ABLATION_BACKENDS = ["sdd", "sddx", "bdd", "nnf", "fsdd", "fbdd"]
+
+_SUMMARY_FIELDS = [
+    "problem", "knowledge", "propagate_weights", "status",
+    "ground_nodes", "compiled_nodes",
+    "parse_s", "ground_s", "compile_s", "evaluate_s", "total_s",
+    "log_file", "note",
+]
+
+
+def _backend_available(knowledge_name):
+    """True if this backend can actually be instantiated right now in
+    THIS environment -- checked the same way ProbLog itself would,
+    not by guessing from what's pip-installed. sdd/sddx/bdd/fsdd/fbdd
+    each define their own is_available() classmethod (confirmed
+    directly); "nnf"/"ddnnf" (problog.ddnnf_formula.DDNNF) has none, so
+    system_info's own dsharp/c2d detection is used instead (see
+    problog/setup.py -- the same flags ProbLog's own installer checks)."""
+    if knowledge_name in ("nnf", "ddnnf"):
+        return bool(system_info.get("dsharp") or system_info.get("c2d"))
+    return get_evaluatable(name=knowledge_name).is_available()
 
 W = 68
 
@@ -144,15 +201,31 @@ def _str2bool(value):
 # rather than the single opaque call this function used to make
 # directly. elapsed here is the SUM of the four stage timings, kept
 # for the "Finished: ...(elapsed)" line further down in main(); the
-# per-stage breakdown is already visible in the [STAGE] lines
-# run_staged_inference logs as it goes.
+# per-stage breakdown (timings) and node counts (sizes) are returned
+# alongside it for the ablation summary CSV -- see write_ablation_
+# summary below.
 # -----------------------------------------------------------------------
 def run_problog_api(plan_file, tee, phase_timeout=300, approximate=False,
-                     approximate_convergence=1e-2):
-    results, timings = run_staged_inference(
+                     approximate_convergence=1e-2, knowledge_name=None,
+                     propagate_weights=False):
+    results, timings, sizes = run_staged_inference(
         plan_file, tee, phase_timeout=phase_timeout, approximate=approximate,
-        approximate_convergence=approximate_convergence)
-    return results, sum(timings.values())
+        approximate_convergence=approximate_convergence,
+        knowledge_name=knowledge_name, propagate_weights=propagate_weights)
+    return results, sum(timings.values()), timings, sizes
+
+
+def write_ablation_summary(summary_path, rows):
+    """rows: list of dicts, one per (backend, propagate_weights)
+    combination, each already matching _SUMMARY_FIELDS' own keys (see
+    run_one_combination below) -- written as a plain CSV since this is
+    inherently tabular data meant for further analysis (pandas/Excel/a
+    quick sort by total_s), not prose."""
+    with open(summary_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=_SUMMARY_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
 
 
 # -----------------------------------------------------------------------
@@ -163,6 +236,33 @@ class Tee:
         self._log = log_fh
     def __call__(self, text=""):
         print(text)
+        self._log.write(text + "\n")
+        self._log.flush()
+
+
+class RecordingConsole:
+    """Like Tee, but with no log file -- prints to the console AND
+    records every line, so the ONE-TIME, backend-independent setup
+    (regenerate obstacles/config/plan/goal/queries, write
+    problem_data.pl) can run ONCE, printed to the console ONCE, while
+    still being replayed verbatim into every combination's own log
+    file afterwards (see FileWriter below) -- each combination's log
+    still reads as a complete, standalone report."""
+    def __init__(self):
+        self.lines = []
+    def __call__(self, text=""):
+        print(text)
+        self.lines.append(text)
+
+
+class FileWriter:
+    """Writes ONLY to a log file, no console print -- used to replay a
+    RecordingConsole's captured lines into one combination's own log
+    file without reprinting that shared preamble to the console once
+    per combination (see RecordingConsole above)."""
+    def __init__(self, log_fh):
+        self._log = log_fh
+    def __call__(self, text=""):
         self._log.write(text + "\n")
         self._log.flush()
 
@@ -585,224 +685,255 @@ def main():
     else:
         phase_timeout_arg = args.phase_timeout
 
+    if args.approximate:
+        print("[warn] --approximate is not part of this ablation sweep "
+              "(kbest is an anytime evaluator, not a knowledge-compilation "
+              "backend) -- ignored; every combination below runs EXACT "
+              "compilation under its own backend.")
+
     problem_dir = os.path.join(PROBLEMS_DIR, args.problem)
+
+    if not os.path.isdir(problem_dir):
+        print(f"[ERROR] No such problem directory: {problem_dir}")
+        sys.exit(1)
+    if not os.path.isfile(THEORY_PATH):
+        print(f"[ERROR] File not found: {THEORY_PATH}")
+        sys.exit(1)
 
     # Each run's own report lives in output/<problem>/, wiped and
     # recreated fresh every time -- this is a REPORT of the run, not an
     # input any other file depends on, so there's no reason to keep
     # stale runs around the way problems/<name>/'s own generated
     # Prolog facts are (those get committed; this doesn't -- see
-    # .gitignore).
+    # .gitignore). Wiped/recreated ONCE for the WHOLE sweep (not once
+    # per combination), since every combination's own log/CSV output
+    # lands together in here.
     problem_output_dir = os.path.join(OUTPUT_DIR, args.problem)
     if os.path.isdir(problem_output_dir):
         shutil.rmtree(problem_output_dir)
     os.makedirs(problem_output_dir)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = os.path.join(problem_output_dir, f"{args.problem}_{ts}.log")
 
-    with open(log_path, "w", encoding="utf-8") as fh:
-        tee = Tee(fh)
-        banner(tee, f"ProbLog Continuous-Space Safety Verification - {datetime.now():%Y-%m-%d %H:%M:%S}")
-        tee(f"  Log file    : {log_path}")
-        tee(f"  Problem     : {args.problem} ({problem_dir})")
-        tee(f"  Theory file : {THEORY_PATH}")
+    # Every Python black box basic_action_theory.pl :- use_module()s
+    # (planners.py, collision_geometry.py) reads BT_PROBLEM_DIR at
+    # IMPORT time to find this problem's own map.yaml/config.yaml/
+    # obstacles_generated.pl -- must be set before ProbLog ever loads
+    # the theory (see run_problog_api below).
+    os.environ["BT_PROBLEM_DIR"] = problem_dir
 
-        if not os.path.isdir(problem_dir):
-            tee(f"\n  [ERROR] No such problem directory: {problem_dir}")
-            sys.exit(1)
-        if not os.path.isfile(THEORY_PATH):
-            tee(f"\n  [ERROR] File not found: {THEORY_PATH}")
-            sys.exit(1)
+    # ---------------------------------------------------------------
+    # ONE-TIME, backend-independent setup -- regenerating obstacles/
+    # config/plan/goal/queries and writing problem_data.pl does not
+    # depend on which knowledge-compilation backend or propagate-
+    # weights setting a given combination uses, so this runs ONCE
+    # (not once per combination) and is recorded via RecordingConsole
+    # so its own lines can be replayed into EVERY combination's own
+    # log file afterwards (see FileWriter) -- each combination's log
+    # still reads as a complete, standalone report, just without 12x
+    # redundant regeneration or console spam.
+    # ---------------------------------------------------------------
+    setup = RecordingConsole()
+    banner(setup, f"ProbLog Continuous-Space Safety Verification (ablation sweep) - "
+                  f"{datetime.now():%Y-%m-%d %H:%M:%S}")
+    setup(f"  Problem     : {args.problem} ({problem_dir})")
+    setup(f"  Theory file : {THEORY_PATH}")
 
-        # Every Python black box basic_action_theory.pl :- use_module()s
-        # (planners.py, collision_geometry.py) reads BT_PROBLEM_DIR at
-        # IMPORT time to find this problem's own map.yaml/config.yaml/
-        # obstacles_generated.pl -- must be set before ProbLog ever
-        # loads the theory (see run_problog_api below).
-        os.environ["BT_PROBLEM_DIR"] = problem_dir
+    if TRANSLATORS_DIR not in sys.path:
+        sys.path.insert(0, TRANSLATORS_DIR)
+    try:
+        from occgrid_to_problog import generate as generate_obstacles
+        from config_to_prolog import load_config
+        _robot_config = load_config(config_path=os.path.join(problem_dir, "config.yaml"))
+        clearance_m = (float(_robot_config["robot"]["radius"])
+                        + float(_robot_config["robot"]["safety_buffer"]))
+        generated_obstacles_path = generate_obstacles(
+            yaml_path=os.path.join(problem_dir, "map.yaml"),
+            output_path=os.path.join(problem_dir, "obstacles_generated.pl"),
+            clearance_m=clearance_m)
+        setup(f"  Obstacles   : {generated_obstacles_path} (regenerated from "
+              f"{os.path.join(problem_dir, 'map.yaml')}, inflated by "
+              f"{clearance_m:.3f}m robot clearance)")
+    except Exception as e:
+        setup(f"\n  [ERROR] Could not regenerate obstacles_generated.pl: {e}")
+        sys.exit(1)
 
-        # Regenerate <problem>/obstacles_generated.pl from
-        # <problem>/map.yaml BEFORE anything reads the theory --
-        # map.yaml is the single source of truth for the obstacle
-        # layout (see module/translators/occgrid_to_problog.py), same
-        # automatic-every-run treatment config.yaml/behavior_tree.xml
-        # already get. clearance_m (robot_radius+safety_buffer, read
-        # straight from THIS SAME problem's own config.yaml -- exactly
-        # safety_margin/1's own formula in basic_action_theory.pl) is
-        # passed through so the extracted obstacle_polygon/2 facts are
-        # ALREADY inflated by the robot's full safety clearance -- the
-        # ONLY obstacle geometry generated; collision_geometry.py AND
-        # every planner in module/theory/planners.py read this SAME
-        # set (see that module's own docstring for how follow_boarder
-        # corrects for the inflation already baked in here).
-        if TRANSLATORS_DIR not in sys.path:
-            sys.path.insert(0, TRANSLATORS_DIR)
-        try:
-            from occgrid_to_problog import generate as generate_obstacles
-            from config_to_prolog import load_config
-            _robot_config = load_config(config_path=os.path.join(problem_dir, "config.yaml"))
-            clearance_m = (float(_robot_config["robot"]["radius"])
-                            + float(_robot_config["robot"]["safety_buffer"]))
-            generated_obstacles_path = generate_obstacles(
-                yaml_path=os.path.join(problem_dir, "map.yaml"),
-                output_path=os.path.join(problem_dir, "obstacles_generated.pl"),
-                clearance_m=clearance_m)
-            tee(f"  Obstacles   : {generated_obstacles_path} (regenerated from "
-                f"{os.path.join(problem_dir, 'map.yaml')}, inflated by "
-                f"{clearance_m:.3f}m robot clearance)")
-        except Exception as e:
-            tee(f"\n  [ERROR] Could not regenerate obstacles_generated.pl: {e}")
-            sys.exit(1)
+    try:
+        from config_to_prolog import generate as generate_config, load_config
+        generated_config_path = generate_config(
+            config_path=os.path.join(problem_dir, "config.yaml"),
+            output_path=os.path.join(problem_dir, "config_generated.pl"))
+        battery_enabled = load_config(
+            os.path.join(problem_dir, "config.yaml")
+        ).get("battery", {}).get("enabled", True)
+        setup(f"  Config      : {generated_config_path} (regenerated from "
+              f"{os.path.join(problem_dir, 'config.yaml')})")
+    except Exception as e:
+        setup(f"\n  [ERROR] Could not regenerate config_generated.pl: {e}")
+        sys.exit(1)
 
-        # Regenerate <problem>/config_generated.pl from
-        # <problem>/config.yaml BEFORE anything reads the theory --
-        # config.yaml is the single source of truth for every tunable
-        # constant (see module/translators/config_to_prolog.py), so
-        # every run picks up whatever is currently there with no
-        # separate step.
-        try:
-            from config_to_prolog import generate as generate_config, load_config
-            generated_config_path = generate_config(
-                config_path=os.path.join(problem_dir, "config.yaml"),
-                output_path=os.path.join(problem_dir, "config_generated.pl"))
-            battery_enabled = load_config(
-                os.path.join(problem_dir, "config.yaml")
-            ).get("battery", {}).get("enabled", True)
-            tee(f"  Config      : {generated_config_path} (regenerated from "
-                f"{os.path.join(problem_dir, 'config.yaml')})")
-        except Exception as e:
-            tee(f"\n  [ERROR] Could not regenerate config_generated.pl: {e}")
-            sys.exit(1)
+    try:
+        from bt_to_prolog import generate_plan_pl, BTValidationError
+        generated_plan_path, reason_patterns_by_action, action_labels, condition_labels = generate_plan_pl(
+            xml_path=os.path.join(problem_dir, "behavior_tree.xml"),
+            schema_path=os.path.join(CONTRACTS_DIR, "schema.yaml"),
+            output_path=os.path.join(problem_dir, "plan_generated.pl"),
+            battery_enabled=battery_enabled)
+        setup(f"  Plan (BT)   : {generated_plan_path} (translated + validated "
+              f"from {os.path.join(problem_dir, 'behavior_tree.xml')})")
+    except BTValidationError as e:
+        setup(f"\n  [ERROR] behavior_tree.xml failed validation: {e}")
+        sys.exit(1)
+    except Exception as e:
+        setup(f"\n  [ERROR] Could not translate behavior_tree.xml: {e}")
+        sys.exit(1)
 
-        # Translate <problem>/behavior_tree.xml (the real BT.cpp v4
-        # tree that is now the single source of truth for the POLICY'S
-        # SHAPE) into <problem>/plan_generated.pl, validating it
-        # against module/contracts/schema.yaml on the way -- see
-        # module/translators/bt_to_prolog.py's own header. Any
-        # structural problem (unknown node, missing/unrecognized port,
-        # a control_points blackboard key with no producer) is a hard
-        # failure here, same as a missing config fact above; there is
-        # no sensible way to run inference against a tree that doesn't
-        # actually match its own schema. battery_enabled (this
-        # problem's own config.yaml battery.enabled, read above) is
-        # threaded through so a disabled problem gets every battery-
-        # related trigger name stripped from its own Triggers lists --
-        # see bt_to_prolog.py's own generate_plan_pl/_is_battery_trigger.
-        try:
-            from bt_to_prolog import generate_plan_pl, BTValidationError
-            generated_plan_path, reason_patterns_by_action, action_labels, condition_labels = generate_plan_pl(
-                xml_path=os.path.join(problem_dir, "behavior_tree.xml"),
-                schema_path=os.path.join(CONTRACTS_DIR, "schema.yaml"),
-                output_path=os.path.join(problem_dir, "plan_generated.pl"),
-                battery_enabled=battery_enabled)
-            tee(f"  Plan (BT)   : {generated_plan_path} (translated + validated "
-                f"from {os.path.join(problem_dir, 'behavior_tree.xml')})")
-        except BTValidationError as e:
-            tee(f"\n  [ERROR] behavior_tree.xml failed validation: {e}")
-            sys.exit(1)
-        except Exception as e:
-            tee(f"\n  [ERROR] Could not translate behavior_tree.xml: {e}")
-            sys.exit(1)
+    if CONTRACTS_DIR not in sys.path:
+        sys.path.insert(0, CONTRACTS_DIR)
+    try:
+        from goal_formula_check import (validate_goal_formula, generate_safety_queries,
+                                         GoalFormulaValidationError)
+        goal_formula_path = os.path.join(problem_dir, "goal_formula.pl")
+        validate_goal_formula(
+            goal_formula_path=goal_formula_path,
+            vocab_path=os.path.join(CONTRACTS_DIR, "vocabulary.yaml"))
+        setup(f"  Goal formula: {goal_formula_path} (validated against "
+              f"{os.path.join(CONTRACTS_DIR, 'vocabulary.yaml')})")
+    except GoalFormulaValidationError as e:
+        setup(f"\n  [ERROR] goal_formula.pl failed validation: {e}")
+        sys.exit(1)
+    except Exception as e:
+        setup(f"\n  [ERROR] Could not validate goal_formula.pl: {e}")
+        sys.exit(1)
 
-        # Validate <problem>/goal_formula.pl against
-        # module/contracts/vocabulary.yaml -- same "structural
-        # validation is a hard failure, not a warning" posture as
-        # behavior_tree.xml's own validation just above; see
-        # module/contracts/goal_formula_check.py's own header.
-        if CONTRACTS_DIR not in sys.path:
-            sys.path.insert(0, CONTRACTS_DIR)
-        try:
-            from goal_formula_check import (validate_goal_formula, generate_safety_queries,
-                                             GoalFormulaValidationError)
-            goal_formula_path = os.path.join(problem_dir, "goal_formula.pl")
-            validate_goal_formula(
-                goal_formula_path=goal_formula_path,
-                vocab_path=os.path.join(CONTRACTS_DIR, "vocabulary.yaml"))
-            tee(f"  Goal formula: {goal_formula_path} (validated against "
-                f"{os.path.join(CONTRACTS_DIR, 'vocabulary.yaml')})")
-        except GoalFormulaValidationError as e:
-            tee(f"\n  [ERROR] goal_formula.pl failed validation: {e}")
-            sys.exit(1)
-        except Exception as e:
-            tee(f"\n  [ERROR] Could not validate goal_formula.pl: {e}")
-            sys.exit(1)
+    try:
+        generated_queries_path = generate_safety_queries(
+            reason_patterns_by_action,
+            output_path=os.path.join(problem_dir, "queries_generated.pl"),
+            condition_codes=condition_labels.keys())
+        setup(f"  Queries     : {generated_queries_path} (auto-generated from "
+              f"this tree's own per-action Reason universe)")
+    except Exception as e:
+        setup(f"\n  [ERROR] Could not generate queries_generated.pl: {e}")
+        sys.exit(1)
 
-        # Generate <problem>/queries_generated.pl -- every safety
-        # query this problem's own tree can actually produce, derived
-        # from reason_patterns_by_action above (see bt_to_prolog.py's
-        # own generate_plan_pl) -- called right after goal_formula.pl's
-        # own validation since the two always run back-to-back (see
-        # module/contracts/goal_formula_check.py's own header).
-        try:
-            generated_queries_path = generate_safety_queries(
-                reason_patterns_by_action,
-                output_path=os.path.join(problem_dir, "queries_generated.pl"),
-                condition_codes=condition_labels.keys())
-            tee(f"  Queries     : {generated_queries_path} (auto-generated from "
-                f"this tree's own per-action Reason universe)")
-        except Exception as e:
-            tee(f"\n  [ERROR] Could not generate queries_generated.pl: {e}")
-            sys.exit(1)
+    problem_data_path = os.path.join(THEORY_DIR, "problem_data.pl")
+    write_problem_data_pl(problem_data_path, problem_dir, goal_formula_path,
+                           run_label=f"main.py --problem {args.problem}, "
+                                     f"ablation sweep {ts}",
+                           tee=setup)
 
-        # Rewrite module/theory/problem_data.pl -- the small bootstrap
-        # file basic_action_theory.pl itself :- consult()s (see that
-        # file's Section 0) to find the four problem-specific files
-        # above. Written with ABSOLUTE paths since problems/<name>/ is
-        # nowhere near module/theory/ on disk, and regenerated fresh
-        # every run so basic_action_theory.pl never has to change to
-        # serve a different --problem.
-        problem_data_path = os.path.join(THEORY_DIR, "problem_data.pl")
-        write_problem_data_pl(problem_data_path, problem_dir, goal_formula_path,
-                               run_label=f"main.py --problem {args.problem}, run {ts}",
-                               tee=tee)
+    if isinstance(phase_timeout_arg, dict):
+        _timeout_desc = ", ".join(f"{k}={v}s" for k, v in phase_timeout_arg.items())
+    else:
+        _timeout_desc = f"{phase_timeout_arg}s per stage"
 
-        if isinstance(phase_timeout_arg, dict):
-            _timeout_desc = ", ".join(f"{k}={v}s" for k, v in phase_timeout_arg.items())
-        else:
-            _timeout_desc = f"{phase_timeout_arg}s per stage"
-        if args.approximate:
-            tee(f"\n  Started : {datetime.now():%H:%M:%S}  "
-                f"(phase timeout: {_timeout_desc}; APPROXIMATE mode: "
-                f"k-best anytime lower bound, "
-                f"convergence={args.approximate_convergence})")
-        else:
+    combinations = [(backend, pw) for backend in _ABLATION_BACKENDS
+                     for pw in (False, True)]
+    print(f"\n[info] running {len(combinations)} combinations "
+          f"({len(_ABLATION_BACKENDS)} backends x 2 propagate_weights "
+          f"settings) against --problem {args.problem} ...")
+
+    summary_rows = []
+    for knowledge_name, propagate_weights in combinations:
+        pw_suffix = "1" if propagate_weights else "0"
+        log_path = os.path.join(
+            problem_output_dir,
+            f"{args.problem}_{ts}_{knowledge_name}_{pw_suffix}.log")
+        row = {
+            "problem": args.problem, "knowledge": knowledge_name,
+            "propagate_weights": int(propagate_weights),
+            "status": "", "ground_nodes": "", "compiled_nodes": "",
+            "parse_s": "", "ground_s": "", "compile_s": "", "evaluate_s": "",
+            "total_s": "", "log_file": log_path, "note": "",
+        }
+
+        with open(log_path, "w", encoding="utf-8") as fh:
+            tee = Tee(fh)
+            file_writer = FileWriter(fh)
+            banner(tee, f"ProbLog Continuous-Space Safety Verification - "
+                        f"{datetime.now():%Y-%m-%d %H:%M:%S}")
+            tee(f"  Log file    : {log_path}")
+            tee(f"  Backend     : {knowledge_name}  (propagate_weights="
+                f"{propagate_weights})")
+            for line in setup.lines:
+                file_writer(line)
+
+            if not _backend_available(knowledge_name):
+                note = (f"backend {knowledge_name!r} is not available in this "
+                        f"environment (missing dependency -- see README.md's "
+                        f"own install instructions for pysdd/pyeda)")
+                tee(f"\n  [SKIPPED] {note}")
+                print(f"  [SKIPPED] {knowledge_name}_{pw_suffix}: {note}")
+                row["status"] = "skipped"
+                row["note"] = note
+                summary_rows.append(row)
+                continue
+
             tee(f"\n  Started : {datetime.now():%H:%M:%S}  "
                 f"(phase timeout: {_timeout_desc})")
-        try:
-            results, elapsed = run_problog_api(
-                THEORY_PATH, tee, phase_timeout_arg,
-                approximate=args.approximate,
-                approximate_convergence=args.approximate_convergence)
-        except StageTimeout:
-            tee(f"\n  [ERROR] Aborting -- a pipeline stage exceeded its "
-                f"own timeout ({_timeout_desc}; see [STAGE] line above for which).")
-            sys.exit(1)
-        except ProbLogError as e:
-            tee(f"\n  [ERROR] ProbLog error: {e}")
-            sys.exit(1)
-        except Exception as e:
-            tee(f"\n  [ERROR] Unexpected error running the model: {e}")
-            sys.exit(1)
-        tee(f"  Finished: {datetime.now():%H:%M:%S}  ({elapsed:.3f}s)")
+            try:
+                results, elapsed, timings, sizes = run_problog_api(
+                    THEORY_PATH, tee, phase_timeout_arg,
+                    knowledge_name=knowledge_name,
+                    propagate_weights=propagate_weights)
+            except StageTimeout:
+                note = (f"a pipeline stage exceeded its own timeout "
+                        f"({_timeout_desc}; see [STAGE] line above for which)")
+                tee(f"\n  [ERROR] Aborting this combination -- {note}.")
+                print(f"  [ERROR] {knowledge_name}_{pw_suffix}: {note}")
+                row["status"] = "timeout"
+                row["note"] = note
+                summary_rows.append(row)
+                continue
+            except ProbLogError as e:
+                tee(f"\n  [ERROR] ProbLog error: {e}")
+                print(f"  [ERROR] {knowledge_name}_{pw_suffix}: ProbLog error: {e}")
+                row["status"] = "error"
+                row["note"] = str(e)
+                summary_rows.append(row)
+                continue
+            except Exception as e:
+                tee(f"\n  [ERROR] Unexpected error running the model: {e}")
+                print(f"  [ERROR] {knowledge_name}_{pw_suffix}: {e}")
+                row["status"] = "error"
+                row["note"] = str(e)
+                summary_rows.append(row)
+                continue
+            tee(f"  Finished: {datetime.now():%H:%M:%S}  ({elapsed:.3f}s)")
 
-        if not results:
-            tee("\n  [warn] No results returned from ProbLog -- check the "
-                "file has query(...) declarations.")
-            sys.exit(1)
+            row["ground_nodes"] = sizes["ground_nodes"]
+            row["compiled_nodes"] = sizes["compiled_nodes"]
+            row["parse_s"] = f"{timings['parse']:.6f}"
+            row["ground_s"] = f"{timings['ground']:.6f}"
+            row["compile_s"] = f"{timings['compile']:.6f}"
+            row["evaluate_s"] = f"{timings['evaluate']:.6f}"
+            row["total_s"] = f"{elapsed:.6f}"
 
-        if args.approximate:
-            tee(f"\n  [APPROXIMATE] Every probability below is a LOWER "
-                f"BOUND (k-best anytime evaluator, "
-                f"convergence={args.approximate_convergence}), NOT the "
-                f"exact value -- the true probability is somewhere in "
-                f"[shown value, shown value + ~{args.approximate_convergence}]. "
-                f"Re-run without --approximate for an exact answer.")
+            if not results:
+                tee("\n  [warn] No results returned from ProbLog -- check "
+                    "the file has query(...) declarations.")
+                row["status"] = "no_results"
+                summary_rows.append(row)
+                continue
 
-        print_compact_summary(tee, results, goal_formula_path, action_labels, condition_labels)
+            print_compact_summary(tee, results, goal_formula_path, action_labels, condition_labels)
 
-        tee("")
-        banner(tee, f"Log : {log_path}")
+            tee("")
+            banner(tee, f"Log : {log_path}")
+
+            row["status"] = "ok"
+            summary_rows.append(row)
+            print(f"  [OK] {knowledge_name}_{pw_suffix}: "
+                  f"{sizes['ground_nodes']} ground / {sizes['compiled_nodes']} "
+                  f"compiled node(s), {elapsed:.3f}s total")
+
+    summary_path = os.path.join(problem_output_dir, f"{args.problem}_{ts}_ablation_summary.csv")
+    write_ablation_summary(summary_path, summary_rows)
+    print(f"\n[info] ablation summary written to {summary_path}")
+    ok_count = sum(1 for r in summary_rows if r["status"] == "ok")
+    print(f"[info] {ok_count}/{len(summary_rows)} combination(s) completed successfully "
+          f"-- see individual log files in {problem_output_dir}/ for details.")
 
 
 if __name__ == "__main__":

@@ -50,14 +50,38 @@ assumed:
     prebuilt wheel installed cleanly when this was tested).
   - `bdd`, `fbdd`: need `pyeda`. Check first with
     `python3 -c "from problog.bdd_formula import BDD; print(BDD.is_available())"`;
-    if `False`, `pip install pyeda`. Fair warning, confirmed directly
-    on this same setup: `pyeda`'s own build FAILED here (an old package
-    incompatible with modern setuptools/Python 3.11 -- `AttributeError:
-    install_layout` from its `setup.py`). If that happens on your side
-    too, `bdd`/`fbdd` will just show up as `skipped` in the summary CSV
-    rather than block the rest of the sweep -- not something this
-    project's own code can work around, since it's `pyeda`'s own
-    packaging that's broken on newer Python.
+    if `False`, `pip install pyeda`. Fair warning, confirmed directly:
+    `pyeda`'s own plain `pip install` FAILS on a modern Python/
+    setuptools (it's an old, unmaintained package). If that happens,
+    `bdd`/`fbdd` just show up as `skipped` in the summary CSV rather
+    than block the rest of the sweep -- not something this project's
+    own code can work around, it's `pyeda`'s own packaging.
+
+    Building it from source DOES work around this (confirmed):
+    ```
+    git clone https://github.com/cjdrake/pyeda.git
+    cd pyeda
+    python setup.py install --prefix /path/to/some/install/dir
+    ```
+    This installs into a NON-standard location Python won't find on
+    its own --
+    `/path/to/some/install/dir/local/lib/python3.X/dist-packages/`
+    (the exact `.../local/lib/pythonX.Y/dist-packages` suffix is a
+    Debian/Ubuntu distutils convention, confirmed directly -- adjust
+    `python3.X` to your own Python version). **Before running the
+    pipeline** (`main.py`, or any script that imports `problog`), put
+    that directory on `PYTHONPATH`:
+    ```
+    export PYTHONPATH=/path/to/some/install/dir/local/lib/python3.X/dist-packages:$PYTHONPATH
+    ```
+    Add that `export` line to `~/.bashrc` (or your shell's own profile)
+    to make it permanent, instead of retyping it every session. Also
+    avoid running any `python3 -c "import pyeda"` check FROM INSIDE the
+    `pyeda` source checkout itself -- Python puts the current directory
+    first on its import path, so it'll silently pick up the raw,
+    unbuilt source folder (no compiled `.so` files in it) instead of
+    the real installed copy, and `BDD.is_available()` will read `False`
+    even though the real install is fine; `cd` elsewhere first.
   - The translator pipeline itself (obstacles/config/plan translation,
     run regardless of backend) also needs `numpy`, `pillow` (PIL),
     `opencv-python` (`cv2`), and `scipy` -- none of this project's own

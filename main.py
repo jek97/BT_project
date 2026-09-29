@@ -127,8 +127,12 @@ from datetime import datetime
 
 from problog import get_evaluatable, system_info
 from problog.errors import ProbLogError
+from problog.program import PrologFile
+from problog.formula import LogicFormula
 
-from pipeline_stages import run_staged_inference, write_problem_data_pl, StageTimeout
+from pipeline_stages import run_staged_inference, write_problem_data_pl, StageTimeout, run_stage
+from module.theory.graph_export import export_ground_graph
+import visualize_interactive
 
 # ProbLog knowledge-compilation backends this ablation sweeps over (via
 # get_evaluatable(name=...)) -- deliberately EXCLUDES "kbest": that's
@@ -620,21 +624,40 @@ def main():
                           "of problems/ holding this problem's own "
                           "config.yaml, behavior_tree.xml, "
                           "goal_formula.pl, and map.yaml (default: "
-                          "problem0). Pass \"all\" to run the ablation "
-                          "sweep SEQUENTIALLY over every subdirectory of "
-                          "problems/ whose name starts with \"problem\" "
-                          "(problem0L, problem3S, ... -- discovered "
-                          "fresh each run via a directory listing, not "
-                          "hardcoded), one after another, in the SAME "
-                          "process -- every other flag (timeouts, "
-                          "--approximate, ...) still applies identically "
-                          "to each one. Each problem still gets its own "
-                          "output/<problem>/ log files + ablation_summary"
-                          ".csv exactly as a single-problem run would; "
-                          "\"all\" additionally writes ONE combined "
-                          "output/ablation_summary_all_<ts>.csv with "
-                          "every problem's own rows together, for a "
-                          "single cross-problem analysis table.")
+                          "problem0). Pass \"all\" to run SEQUENTIALLY "
+                          "over every subdirectory of problems/ whose "
+                          "name starts with \"problem\" (problem0L, "
+                          "problem3S, ... -- discovered fresh each run "
+                          "via a directory listing, not hardcoded), one "
+                          "after another, in the SAME process -- every "
+                          "other flag still applies identically to each "
+                          "one. Works with a plain single run or with "
+                          "--ablation-study; NOT supported with --visual "
+                          "(pick one problem for that). With "
+                          "--ablation-study, \"all\" additionally writes "
+                          "ONE combined output/ablation_summary_all_<ts>"
+                          ".csv with every problem's own rows together.")
+    ap.add_argument("--ablation-study", action="store_true",
+                     help="Instead of a single inference run with "
+                          "ProbLog's own auto-picked backend, sweep all "
+                          "6 knowledge-compilation backends (sdd, sddx, "
+                          "bdd, nnf/ddnnf, fsdd, fbdd) x --propagate-"
+                          "weights on/off (12 combinations) on --problem "
+                          "-- see run_ablation_for_problem's own "
+                          "docstring for exactly what this writes. "
+                          "Mutually exclusive with --visual.")
+    ap.add_argument("--visual", action="store_true",
+                     help="Instead of running inference, ground "
+                          "--problem's own theory and write an "
+                          "interactive 3D HTML visualization of its "
+                          "ground graph (nodes colored by clause "
+                          "functor, hover a node to highlight it and "
+                          "read its full clause at the bottom of the "
+                          "page) plus a plain-text file listing every "
+                          "clause grouped by derivation level -- see "
+                          "run_visual's own docstring. Mutually "
+                          "exclusive with --ablation-study; does not "
+                          "support --problem all (pick one problem).")
     ap.add_argument("--phase-timeout", type=int, default=300,
                      help="Timeout in seconds applied to every stage of "
                           "the ProbLog resolution pipeline (parse/ground/"
@@ -684,6 +707,11 @@ def main():
                           "the point of approximate mode.")
     args = ap.parse_args()
 
+    if args.visual and args.ablation_study:
+        print("[ERROR] --visual and --ablation-study are mutually "
+              "exclusive -- pick one.")
+        sys.exit(1)
+
     # Only build a per-stage dict when at least one override was given,
     # so the common case (no overrides) keeps passing a plain int
     # straight through, exactly as before.
@@ -699,13 +727,11 @@ def main():
     else:
         phase_timeout_arg = args.phase_timeout
 
-    if args.approximate:
-        print("[warn] --approximate is not part of this ablation sweep "
-              "(kbest is an anytime evaluator, not a knowledge-compilation "
-              "backend) -- ignored; every combination below runs EXACT "
-              "compilation under its own backend.")
-
     if args.problem == "all":
+        if args.visual:
+            print("[ERROR] --visual does not support --problem all -- "
+                  "pass a single problem name.")
+            sys.exit(1)
         problem_names = sorted(
             name for name in os.listdir(PROBLEMS_DIR)
             if name.startswith("problem")
@@ -719,42 +745,76 @@ def main():
     else:
         problem_names = [args.problem]
 
-    batch_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    all_rows = []
-    any_failure = False
-    for problem_name in problem_names:
-        rows = run_ablation_for_problem(args, problem_name, phase_timeout_arg)
-        if rows is None:
-            any_failure = True
-            continue
-        all_rows.extend(rows)
+    if args.visual:
+        ok = run_visual(problem_names[0], phase_timeout_arg)
+        if not ok:
+            sys.exit(1)
+        return
 
-    if len(problem_names) > 1:
-        combined_path = os.path.join(OUTPUT_DIR, f"ablation_summary_all_{batch_ts}.csv")
-        write_ablation_summary(combined_path, all_rows)
-        ok_count = sum(1 for r in all_rows if r["status"] == "ok")
-        print(f"\n[info] combined cross-problem summary written to {combined_path}")
-        print(f"[info] {ok_count}/{len(all_rows)} combination(s) across "
-              f"{len(problem_names)} problem(s) completed successfully.")
-    elif any_failure:
-        # Single-problem case: preserve the old exact behavior (a setup
-        # failure is a hard, immediate stop) -- run_ablation_for_problem
-        # itself already printed the specific error.
-        sys.exit(1)
+    if args.ablation_study:
+        if args.approximate:
+            print("[warn] --approximate is not part of the ablation sweep "
+                  "(kbest is an anytime evaluator, not a knowledge-"
+                  "compilation backend) -- ignored; every combination "
+                  "below runs EXACT compilation under its own backend.")
+
+        batch_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        all_rows = []
+        any_failure = False
+        for problem_name in problem_names:
+            rows = run_ablation_for_problem(args, problem_name, phase_timeout_arg)
+            if rows is None:
+                any_failure = True
+                continue
+            all_rows.extend(rows)
+
+        if len(problem_names) > 1:
+            combined_path = os.path.join(OUTPUT_DIR, f"ablation_summary_all_{batch_ts}.csv")
+            write_ablation_summary(combined_path, all_rows)
+            ok_count = sum(1 for r in all_rows if r["status"] == "ok")
+            print(f"\n[info] combined cross-problem summary written to {combined_path}")
+            print(f"[info] {ok_count}/{len(all_rows)} combination(s) across "
+                  f"{len(problem_names)} problem(s) completed successfully.")
+        elif any_failure:
+            # Single-problem case: preserve the old exact behavior (a
+            # setup failure is a hard, immediate stop) --
+            # run_ablation_for_problem itself already printed the error.
+            sys.exit(1)
+    else:
+        any_failure = False
+        for problem_name in problem_names:
+            ok = run_single(args, problem_name, phase_timeout_arg)
+            if not ok:
+                any_failure = True
+        if len(problem_names) == 1 and any_failure:
+            # Same reasoning as the ablation-sweep branch above.
+            sys.exit(1)
 
 
-def run_ablation_for_problem(args, problem_name, phase_timeout_arg):
-    """Runs the full backend x propagate_weights ablation sweep (see
-    main()'s own module docstring) for ONE problem, exactly as main()
-    used to do inline for args.problem -- factored out so --problem all
-    can call this once per discovered problem* directory, in sequence,
-    within the SAME process. Returns this problem's own list of summary
-    rows (one dict per combination, matching _SUMMARY_FIELDS), or None
-    if the one-time, backend-independent setup (regenerate obstacles/
-    config/plan/goal/queries) failed for this problem -- the caller
-    decides whether that's fatal (single-problem case) or just means
-    skipping to the next problem (--problem all case), which is why
-    this returns None instead of calling sys.exit(1) itself."""
+def run_shared_setup(problem_name, run_label_suffix):
+    """The one-time, mode-independent setup EVERY mode (single run,
+    ablation sweep, --visual) needs before touching ProbLog at all:
+    validate the problem directory/theory file exist, wipe+recreate
+    output/<problem>/, set BT_PROBLEM_DIR, then regenerate obstacles/
+    config/plan/goal/queries and (re)write problem_data.pl -- see
+    main()'s own module docstring, steps 1-5. Recorded via
+    RecordingConsole (prints to the console once) so its own lines can
+    be replayed verbatim into per-combination log files by modes that
+    need that (the ablation sweep -- see FileWriter) without redoing
+    the actual regeneration work or reprinting to the console once per
+    combination.
+
+    run_label_suffix: appended to the "main.py --problem X, ..." label
+    written into problem_data.pl's own header comment, so it's obvious
+    from that file alone which mode last touched it (e.g. "ablation
+    sweep 20260101_120000", "single run 20260101_120000", "--visual
+    20260101_120000").
+
+    Returns a dict (problem_dir, problem_output_dir, ts, setup,
+    goal_formula_path, action_labels, condition_labels,
+    reason_patterns_by_action) on success, or None if any step failed
+    (already printed/logged via setup) -- the caller decides whether
+    that's fatal for its own mode."""
     problem_dir = os.path.join(PROBLEMS_DIR, problem_name)
 
     if not os.path.isdir(problem_dir):
@@ -769,9 +829,9 @@ def run_ablation_for_problem(args, problem_name, phase_timeout_arg):
     # input any other file depends on, so there's no reason to keep
     # stale runs around the way problems/<name>/'s own generated
     # Prolog facts are (those get committed; this doesn't -- see
-    # .gitignore). Wiped/recreated ONCE for the WHOLE sweep (not once
-    # per combination), since every combination's own log/CSV output
-    # lands together in here.
+    # .gitignore). Wiped/recreated ONCE per invocation (not once per
+    # ablation combination), since every combination's own log/CSV
+    # output lands together in here.
     problem_output_dir = os.path.join(OUTPUT_DIR, problem_name)
     if os.path.isdir(problem_output_dir):
         shutil.rmtree(problem_output_dir)
@@ -786,19 +846,8 @@ def run_ablation_for_problem(args, problem_name, phase_timeout_arg):
     # the theory (see run_problog_api below).
     os.environ["BT_PROBLEM_DIR"] = problem_dir
 
-    # ---------------------------------------------------------------
-    # ONE-TIME, backend-independent setup -- regenerating obstacles/
-    # config/plan/goal/queries and writing problem_data.pl does not
-    # depend on which knowledge-compilation backend or propagate-
-    # weights setting a given combination uses, so this runs ONCE
-    # (not once per combination) and is recorded via RecordingConsole
-    # so its own lines can be replayed into EVERY combination's own
-    # log file afterwards (see FileWriter) -- each combination's log
-    # still reads as a complete, standalone report, just without 12x
-    # redundant regeneration or console spam.
-    # ---------------------------------------------------------------
     setup = RecordingConsole()
-    banner(setup, f"ProbLog Continuous-Space Safety Verification (ablation sweep) - "
+    banner(setup, f"ProbLog Continuous-Space Safety Verification - "
                   f"{datetime.now():%Y-%m-%d %H:%M:%S}")
     setup(f"  Problem     : {problem_name} ({problem_dir})")
     setup(f"  Theory file : {THEORY_PATH}")
@@ -884,8 +933,212 @@ def run_ablation_for_problem(args, problem_name, phase_timeout_arg):
     problem_data_path = os.path.join(THEORY_DIR, "problem_data.pl")
     write_problem_data_pl(problem_data_path, problem_dir, goal_formula_path,
                            run_label=f"main.py --problem {problem_name}, "
-                                     f"ablation sweep {ts}",
+                                     f"{run_label_suffix} {ts}",
                            tee=setup)
+
+    return {
+        "problem_dir": problem_dir,
+        "problem_output_dir": problem_output_dir,
+        "ts": ts,
+        "setup": setup,
+        "goal_formula_path": goal_formula_path,
+        "action_labels": action_labels,
+        "condition_labels": condition_labels,
+        "reason_patterns_by_action": reason_patterns_by_action,
+    }
+
+
+def run_single(args, problem_name, phase_timeout_arg):
+    """The plain, DEFAULT mode (neither --ablation-study nor --visual):
+    one inference call with ProbLog's own auto-picked backend
+    (get_evaluatable(name=None) -- SDD if pysdd is installed, DSharp
+    otherwise) and propagate_weights off, written to one
+    <problem>_<ts>.log -- this is the ORIGINAL, pre-ablation-study
+    main.py behavior (see git history), restored as the default so a
+    plain `python3 main.py --problem X` stays a single normal run; the
+    12-combination sweep is opt-in via --ablation-study. Returns True
+    on success, False on any failure (setup or inference) -- the
+    caller decides whether that's fatal."""
+    ctx = run_shared_setup(problem_name, "single run")
+    if ctx is None:
+        return False
+    problem_output_dir = ctx["problem_output_dir"]
+    ts = ctx["ts"]
+    setup = ctx["setup"]
+    goal_formula_path = ctx["goal_formula_path"]
+    action_labels = ctx["action_labels"]
+    condition_labels = ctx["condition_labels"]
+
+    if isinstance(phase_timeout_arg, dict):
+        _timeout_desc = ", ".join(f"{k}={v}s" for k, v in phase_timeout_arg.items())
+    else:
+        _timeout_desc = f"{phase_timeout_arg}s per stage"
+
+    log_path = os.path.join(problem_output_dir, f"{problem_name}_{ts}.log")
+    with open(log_path, "w", encoding="utf-8") as fh:
+        file_writer = FileWriter(fh)
+        for line in setup.lines:
+            file_writer(line)
+        tee = Tee(fh)
+
+        if args.approximate:
+            tee(f"\n  Started : {datetime.now():%H:%M:%S}  "
+                f"(phase timeout: {_timeout_desc}; APPROXIMATE mode: "
+                f"k-best anytime lower bound, "
+                f"convergence={args.approximate_convergence})")
+        else:
+            tee(f"\n  Started : {datetime.now():%H:%M:%S}  "
+                f"(phase timeout: {_timeout_desc})")
+        try:
+            results, elapsed, timings, sizes = run_problog_api(
+                THEORY_PATH, tee, phase_timeout_arg,
+                approximate=args.approximate,
+                approximate_convergence=args.approximate_convergence)
+        except StageTimeout:
+            tee(f"\n  [ERROR] Aborting -- a pipeline stage exceeded its "
+                f"own timeout ({_timeout_desc}; see [STAGE] line above for which).")
+            return False
+        except ProbLogError as e:
+            tee(f"\n  [ERROR] ProbLog error: {e}")
+            return False
+        except Exception as e:
+            tee(f"\n  [ERROR] Unexpected error running the model: {e}")
+            return False
+        tee(f"  Finished: {datetime.now():%H:%M:%S}  ({elapsed:.3f}s)")
+
+        if not results:
+            tee("\n  [warn] No results returned from ProbLog -- check the "
+                "file has query(...) declarations.")
+            return False
+
+        if args.approximate:
+            tee(f"\n  [APPROXIMATE] Every probability below is a LOWER "
+                f"BOUND (k-best anytime evaluator, "
+                f"convergence={args.approximate_convergence}), NOT the "
+                f"exact value -- the true probability is somewhere in "
+                f"[shown value, shown value + ~{args.approximate_convergence}]. "
+                f"Re-run without --approximate for an exact answer.")
+
+        print_compact_summary(tee, results, goal_formula_path, action_labels, condition_labels)
+
+        tee("")
+        banner(tee, f"Log : {log_path}")
+
+    print(f"\n[info] log written to {log_path}")
+    return True
+
+
+def run_visual(problem_name, phase_timeout_arg):
+    """--visual mode: grounds problem_name's own theory (Parse+Ground
+    ONLY -- Compile/Evaluate are skipped entirely, since a probability
+    isn't needed for this, just the ground graph itself) and writes:
+      - output/<problem>/<problem>_<ts>_ground_graph.html: an
+        interactive 3D visualization (see visualize_interactive.py's
+        own header for exactly what it draws -- functor-colored nodes,
+        depth-layered, hover-to-highlight-and-read-the-clause).
+      - output/<problem>/<problem>_<ts>_ground_graph_levels.txt: every
+        clause listed under its own derivation-depth level, levels
+        separated by a line.
+      - output/<problem>/<problem>_<ts>_graphs/ground.dot +
+        ground_nodes.json: the raw export (module/theory/
+        graph_export.py) both of the above are built from, kept
+        alongside for anyone who wants the raw data directly.
+    Also writes its own <problem>_<ts>_visual.log (Parse/Ground timing,
+    same [STAGE]-line convention as every other mode). Returns True on
+    success, False on any failure (already printed/logged)."""
+    ctx = run_shared_setup(problem_name, "--visual")
+    if ctx is None:
+        return False
+    problem_output_dir = ctx["problem_output_dir"]
+    ts = ctx["ts"]
+    setup = ctx["setup"]
+
+    if isinstance(phase_timeout_arg, dict):
+        timeouts = {"parse": 300, "ground": 300}
+        timeouts.update({k: v for k, v in phase_timeout_arg.items()
+                          if k in ("parse", "ground")})
+    else:
+        timeouts = {"parse": phase_timeout_arg, "ground": phase_timeout_arg}
+
+    log_path = os.path.join(problem_output_dir, f"{problem_name}_{ts}_visual.log")
+    with open(log_path, "w", encoding="utf-8") as fh:
+        file_writer = FileWriter(fh)
+        for line in setup.lines:
+            file_writer(line)
+        tee = Tee(fh)
+
+        tee(f"\n  Started : {datetime.now():%H:%M:%S}  (grounding only -- "
+            f"--visual doesn't compile/evaluate)")
+        try:
+            model, _t = run_stage(tee, "Parse (plan.pl formed)",
+                                   lambda: PrologFile(THEORY_PATH),
+                                   timeouts["parse"])
+            lf, _t = run_stage(tee, "Ground (plan unrolled, regressed to s0)",
+                                lambda: LogicFormula.create_from(model, label_all=True),
+                                timeouts["ground"])
+        except StageTimeout:
+            tee(f"\n  [ERROR] Aborting -- a pipeline stage exceeded its "
+                f"own timeout (parse={timeouts['parse']}s, "
+                f"ground={timeouts['ground']}s; see [STAGE] line above "
+                f"for which).")
+            return False
+        except ProbLogError as e:
+            tee(f"\n  [ERROR] ProbLog error: {e}")
+            return False
+        except Exception as e:
+            tee(f"\n  [ERROR] Unexpected error grounding the model: {e}")
+            return False
+        tee(f"    -> {len(lf)} ground node(s)")
+
+        graphs_dir = os.path.join(problem_output_dir, f"{problem_name}_{ts}_graphs")
+        try:
+            export_ground_graph(lf, graphs_dir)
+            tee(f"  Raw export  : {graphs_dir}/ (ground.dot, ground_nodes.json)")
+
+            nodes_by_index = visualize_interactive.load_ground_nodes(graphs_dir)
+
+            html_path = os.path.join(problem_output_dir, f"{problem_name}_{ts}_ground_graph.html")
+            visualize_interactive.build_interactive_html(
+                nodes_by_index, html_path, title=f"{problem_name} -- ground graph")
+            tee(f"  Interactive : {html_path}")
+
+            levels_path = os.path.join(problem_output_dir, f"{problem_name}_{ts}_ground_graph_levels.txt")
+            visualize_interactive.write_levels_file(nodes_by_index, levels_path)
+            tee(f"  Levels file : {levels_path}")
+        except Exception as e:
+            tee(f"\n  [ERROR] Could not build the visualization: {e}")
+            return False
+
+        tee(f"  Finished: {datetime.now():%H:%M:%S}")
+        tee("")
+        banner(tee, f"Log : {log_path}")
+
+    print(f"\n[info] open {html_path} in a browser to explore the graph.")
+    return True
+
+
+def run_ablation_for_problem(args, problem_name, phase_timeout_arg):
+    """Runs the full backend x propagate_weights ablation sweep (see
+    main()'s own module docstring) for ONE problem, exactly as main()
+    used to do inline for args.problem -- factored out so --problem all
+    can call this once per discovered problem* directory, in sequence,
+    within the SAME process. Returns this problem's own list of summary
+    rows (one dict per combination, matching _SUMMARY_FIELDS), or None
+    if the one-time, backend-independent setup (regenerate obstacles/
+    config/plan/goal/queries) failed for this problem -- the caller
+    decides whether that's fatal (single-problem case) or just means
+    skipping to the next problem (--problem all case), which is why
+    this returns None instead of calling sys.exit(1) itself."""
+    ctx = run_shared_setup(problem_name, "ablation sweep")
+    if ctx is None:
+        return None
+    problem_dir = ctx["problem_dir"]
+    problem_output_dir = ctx["problem_output_dir"]
+    ts = ctx["ts"]
+    setup = ctx["setup"]
+    goal_formula_path = ctx["goal_formula_path"]
+    action_labels = ctx["action_labels"]
+    condition_labels = ctx["condition_labels"]
 
     if isinstance(phase_timeout_arg, dict):
         _timeout_desc = ", ".join(f"{k}={v}s" for k, v in phase_timeout_arg.items())

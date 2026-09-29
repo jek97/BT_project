@@ -620,7 +620,21 @@ def main():
                           "of problems/ holding this problem's own "
                           "config.yaml, behavior_tree.xml, "
                           "goal_formula.pl, and map.yaml (default: "
-                          "problem0).")
+                          "problem0). Pass \"all\" to run the ablation "
+                          "sweep SEQUENTIALLY over every subdirectory of "
+                          "problems/ whose name starts with \"problem\" "
+                          "(problem0L, problem3S, ... -- discovered "
+                          "fresh each run via a directory listing, not "
+                          "hardcoded), one after another, in the SAME "
+                          "process -- every other flag (timeouts, "
+                          "--approximate, ...) still applies identically "
+                          "to each one. Each problem still gets its own "
+                          "output/<problem>/ log files + ablation_summary"
+                          ".csv exactly as a single-problem run would; "
+                          "\"all\" additionally writes ONE combined "
+                          "output/ablation_summary_all_<ts>.csv with "
+                          "every problem's own rows together, for a "
+                          "single cross-problem analysis table.")
     ap.add_argument("--phase-timeout", type=int, default=300,
                      help="Timeout in seconds applied to every stage of "
                           "the ProbLog resolution pipeline (parse/ground/"
@@ -691,14 +705,64 @@ def main():
               "backend) -- ignored; every combination below runs EXACT "
               "compilation under its own backend.")
 
-    problem_dir = os.path.join(PROBLEMS_DIR, args.problem)
+    if args.problem == "all":
+        problem_names = sorted(
+            name for name in os.listdir(PROBLEMS_DIR)
+            if name.startswith("problem")
+            and os.path.isdir(os.path.join(PROBLEMS_DIR, name)))
+        if not problem_names:
+            print(f"[ERROR] --problem all: no problem* directories found "
+                  f"under {PROBLEMS_DIR}")
+            sys.exit(1)
+        print(f"[info] --problem all: found {len(problem_names)} problem(s) "
+              f"-- {', '.join(problem_names)}")
+    else:
+        problem_names = [args.problem]
+
+    batch_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    all_rows = []
+    any_failure = False
+    for problem_name in problem_names:
+        rows = run_ablation_for_problem(args, problem_name, phase_timeout_arg)
+        if rows is None:
+            any_failure = True
+            continue
+        all_rows.extend(rows)
+
+    if len(problem_names) > 1:
+        combined_path = os.path.join(OUTPUT_DIR, f"ablation_summary_all_{batch_ts}.csv")
+        write_ablation_summary(combined_path, all_rows)
+        ok_count = sum(1 for r in all_rows if r["status"] == "ok")
+        print(f"\n[info] combined cross-problem summary written to {combined_path}")
+        print(f"[info] {ok_count}/{len(all_rows)} combination(s) across "
+              f"{len(problem_names)} problem(s) completed successfully.")
+    elif any_failure:
+        # Single-problem case: preserve the old exact behavior (a setup
+        # failure is a hard, immediate stop) -- run_ablation_for_problem
+        # itself already printed the specific error.
+        sys.exit(1)
+
+
+def run_ablation_for_problem(args, problem_name, phase_timeout_arg):
+    """Runs the full backend x propagate_weights ablation sweep (see
+    main()'s own module docstring) for ONE problem, exactly as main()
+    used to do inline for args.problem -- factored out so --problem all
+    can call this once per discovered problem* directory, in sequence,
+    within the SAME process. Returns this problem's own list of summary
+    rows (one dict per combination, matching _SUMMARY_FIELDS), or None
+    if the one-time, backend-independent setup (regenerate obstacles/
+    config/plan/goal/queries) failed for this problem -- the caller
+    decides whether that's fatal (single-problem case) or just means
+    skipping to the next problem (--problem all case), which is why
+    this returns None instead of calling sys.exit(1) itself."""
+    problem_dir = os.path.join(PROBLEMS_DIR, problem_name)
 
     if not os.path.isdir(problem_dir):
         print(f"[ERROR] No such problem directory: {problem_dir}")
-        sys.exit(1)
+        return None
     if not os.path.isfile(THEORY_PATH):
         print(f"[ERROR] File not found: {THEORY_PATH}")
-        sys.exit(1)
+        return None
 
     # Each run's own report lives in output/<problem>/, wiped and
     # recreated fresh every time -- this is a REPORT of the run, not an
@@ -708,7 +772,7 @@ def main():
     # .gitignore). Wiped/recreated ONCE for the WHOLE sweep (not once
     # per combination), since every combination's own log/CSV output
     # lands together in here.
-    problem_output_dir = os.path.join(OUTPUT_DIR, args.problem)
+    problem_output_dir = os.path.join(OUTPUT_DIR, problem_name)
     if os.path.isdir(problem_output_dir):
         shutil.rmtree(problem_output_dir)
     os.makedirs(problem_output_dir)
@@ -736,7 +800,7 @@ def main():
     setup = RecordingConsole()
     banner(setup, f"ProbLog Continuous-Space Safety Verification (ablation sweep) - "
                   f"{datetime.now():%Y-%m-%d %H:%M:%S}")
-    setup(f"  Problem     : {args.problem} ({problem_dir})")
+    setup(f"  Problem     : {problem_name} ({problem_dir})")
     setup(f"  Theory file : {THEORY_PATH}")
 
     if TRANSLATORS_DIR not in sys.path:
@@ -756,7 +820,7 @@ def main():
               f"{clearance_m:.3f}m robot clearance)")
     except Exception as e:
         setup(f"\n  [ERROR] Could not regenerate obstacles_generated.pl: {e}")
-        sys.exit(1)
+        return None
 
     try:
         from config_to_prolog import generate as generate_config, load_config
@@ -770,7 +834,7 @@ def main():
               f"{os.path.join(problem_dir, 'config.yaml')})")
     except Exception as e:
         setup(f"\n  [ERROR] Could not regenerate config_generated.pl: {e}")
-        sys.exit(1)
+        return None
 
     try:
         from bt_to_prolog import generate_plan_pl, BTValidationError
@@ -783,10 +847,10 @@ def main():
               f"from {os.path.join(problem_dir, 'behavior_tree.xml')})")
     except BTValidationError as e:
         setup(f"\n  [ERROR] behavior_tree.xml failed validation: {e}")
-        sys.exit(1)
+        return None
     except Exception as e:
         setup(f"\n  [ERROR] Could not translate behavior_tree.xml: {e}")
-        sys.exit(1)
+        return None
 
     if CONTRACTS_DIR not in sys.path:
         sys.path.insert(0, CONTRACTS_DIR)
@@ -801,10 +865,10 @@ def main():
               f"{os.path.join(CONTRACTS_DIR, 'vocabulary.yaml')})")
     except GoalFormulaValidationError as e:
         setup(f"\n  [ERROR] goal_formula.pl failed validation: {e}")
-        sys.exit(1)
+        return None
     except Exception as e:
         setup(f"\n  [ERROR] Could not validate goal_formula.pl: {e}")
-        sys.exit(1)
+        return None
 
     try:
         generated_queries_path = generate_safety_queries(
@@ -815,11 +879,11 @@ def main():
               f"this tree's own per-action Reason universe)")
     except Exception as e:
         setup(f"\n  [ERROR] Could not generate queries_generated.pl: {e}")
-        sys.exit(1)
+        return None
 
     problem_data_path = os.path.join(THEORY_DIR, "problem_data.pl")
     write_problem_data_pl(problem_data_path, problem_dir, goal_formula_path,
-                           run_label=f"main.py --problem {args.problem}, "
+                           run_label=f"main.py --problem {problem_name}, "
                                      f"ablation sweep {ts}",
                            tee=setup)
 
@@ -832,16 +896,16 @@ def main():
                      for pw in (False, True)]
     print(f"\n[info] running {len(combinations)} combinations "
           f"({len(_ABLATION_BACKENDS)} backends x 2 propagate_weights "
-          f"settings) against --problem {args.problem} ...")
+          f"settings) against --problem {problem_name} ...")
 
     summary_rows = []
     for knowledge_name, propagate_weights in combinations:
         pw_suffix = "1" if propagate_weights else "0"
         log_path = os.path.join(
             problem_output_dir,
-            f"{args.problem}_{ts}_{knowledge_name}_{pw_suffix}.log")
+            f"{problem_name}_{ts}_{knowledge_name}_{pw_suffix}.log")
         row = {
-            "problem": args.problem, "knowledge": knowledge_name,
+            "problem": problem_name, "knowledge": knowledge_name,
             "propagate_weights": int(propagate_weights),
             "status": "", "ground_nodes": "", "compiled_nodes": "",
             "parse_s": "", "ground_s": "", "compile_s": "", "evaluate_s": "",
@@ -928,12 +992,13 @@ def main():
                   f"{sizes['ground_nodes']} ground / {sizes['compiled_nodes']} "
                   f"compiled node(s), {elapsed:.3f}s total")
 
-    summary_path = os.path.join(problem_output_dir, f"{args.problem}_{ts}_ablation_summary.csv")
+    summary_path = os.path.join(problem_output_dir, f"{problem_name}_{ts}_ablation_summary.csv")
     write_ablation_summary(summary_path, summary_rows)
     print(f"\n[info] ablation summary written to {summary_path}")
     ok_count = sum(1 for r in summary_rows if r["status"] == "ok")
     print(f"[info] {ok_count}/{len(summary_rows)} combination(s) completed successfully "
           f"-- see individual log files in {problem_output_dir}/ for details.")
+    return summary_rows
 
 
 if __name__ == "__main__":

@@ -190,37 +190,50 @@ def build_interactive_html(nodes_by_index, out_path, title="Ground graph"):
     # every marker-trace point (edges are hoverinfo="skip" above, so
     # they never trigger this). data.points[0].text mirrors that
     # point's own hovertemplate text (the full clause label set above).
-    # marker.size is made an explicit per-point ARRAY (never a scalar)
-    # specifically so Plotly.restyle here can safely index/replace one
-    # point's own size without disturbing its siblings.
+    #
+    # IMPORTANT, confirmed directly (not assumed): an EARLIER version of
+    # this also called Plotly.restyle(gd, {'marker.size': ...}, ...) on
+    # hover, to visually enlarge the hovered point. That broke repeat
+    # hovering outright -- restyling a gl3d/WebGL trace (Scatter3d,
+    # which is what every node trace here is) forces a full scene
+    # rebuild, not the cheap incremental update a 2D/SVG trace gets, and
+    # doing that from inside a plotly_hover handler tears down the
+    # picking state: the FIRST hover works, every hover after that never
+    # fires again. Verified by removing the restyle call and confirming
+    # hover then switches reliably across many different points in a
+    # row, whereas keeping it reproduces the freeze every time. So: no
+    # marker-resizing here -- the "highlight" is plotly's OWN default
+    # hover label (already drawn, free, and doesn't touch trace data) --
+    # this handler only ever does plain DOM text updates, which stay
+    # reliable because they never call back into plotly at all.
+    # The readout BAR itself flashes on hover (a pure CSS class toggle,
+    # no plotly call involved) as the "highlight" signal, since the
+    # marker itself can't safely be resized -- see the note above.
     post_script = f"""
 (function() {{
     var gd = document.getElementById('{div_id}');
+    var bar = document.getElementById('clause-readout-bar');
     var readout = document.getElementById('clause-readout');
     gd.on('plotly_hover', function(data) {{
         var pt = data.points && data.points[0];
         if (!pt || typeof pt.text === 'undefined') return;
         readout.textContent = pt.text;
-        var trace = gd.data[pt.curveNumber];
-        if (!trace.marker || !Array.isArray(trace.marker.size)) return;
-        if (!trace._origSize) {{ trace._origSize = trace.marker.size.slice(); }}
-        var sizes = trace._origSize.slice();
-        sizes[pt.pointNumber] = trace._origSize[pt.pointNumber] * 2.5;
-        Plotly.restyle(gd, {{'marker.size': [sizes]}}, [pt.curveNumber]);
+        bar.classList.add('hit');
     }});
     gd.on('plotly_unhover', function(data) {{
         readout.textContent = '(hover a node to see its clause)';
-        var pt = data.points && data.points[0];
-        if (!pt) return;
-        var trace = gd.data[pt.curveNumber];
-        if (trace._origSize) {{
-            Plotly.restyle(gd, {{'marker.size': [trace._origSize]}}, [pt.curveNumber]);
-        }}
+        bar.classList.remove('hit');
     }});
 }})();
 """
 
-    plot_html = fig.to_html(full_html=False, include_plotlyjs="cdn",
+    # include_plotlyjs=True bundles the full plotly.js library INLINE
+    # (adds a few MB to the file) rather than "cdn" (smaller file, but
+    # requires network access to cdn.plot.ly every time it's opened --
+    # confirmed directly this fails outright on a restricted network/
+    # offline machine). Self-contained is the right default for a file
+    # meant to be opened later, possibly shared, possibly offline.
+    plot_html = fig.to_html(full_html=False, include_plotlyjs=True,
                              div_id=div_id, post_script=post_script)
 
     page = f"""<!DOCTYPE html>
@@ -238,13 +251,15 @@ def build_interactive_html(nodes_by_index, out_path, title="Ground graph"):
     padding: 10px 16px; font-family: "SF Mono", Menlo, Consolas, monospace;
     font-size: 13px; border-top: 2px solid #444; z-index: 1000;
     white-space: pre-wrap; word-break: break-word;
+    transition: background 0.1s, border-color 0.1s;
   }}
+  #clause-readout-bar.hit {{ background: #103a1e; border-top-color: #2ecc71; }}
   #clause-readout-bar b {{ color: #9ad; margin-right: 8px; }}
 </style>
 </head>
 <body>
-<div id="plot-wrap">{plot_html}</div>
 <div id="clause-readout-bar"><b>Clause:</b><span id="clause-readout">(hover a node to see its clause)</span></div>
+<div id="plot-wrap">{plot_html}</div>
 </body>
 </html>
 """

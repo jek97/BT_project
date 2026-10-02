@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+
+
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="MainTree">
+      <!-- problem5L: the single MoveTo leg from problem3L's own first
+           leg, with everything else (the Fallback/DistanceBelow guard,
+           TakeSample, the second leg) stripped out. PlanWithWaypoints
+           is kept because MoveTo has no other way to receive
+           control_points (see module/translators/bt_to_prolog.py's
+           own CONTROL-FLOW note: a literal control_points value is a
+           hard translation error). -->
+      <PlanWithWaypoints algorithm="straight" waypoints="22.0;-15.0|22.0;-3.3|32.0;-3.3" control_points="{cp1}"/>
+      <MoveTo control_points="{cp1}"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

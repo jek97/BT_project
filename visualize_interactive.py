@@ -12,20 +12,29 @@ WHAT THIS DRAWS:
     distinct functor actually present, via a cycled qualitative
     palette, with a legend that also lets you toggle a whole functor
     group on/off (plotly's own default legend-click behavior).
-  - Vertical position (z) is each node's own DERIVATION DEPTH (leaves
-    -- the AD facts -- at z=0, climbing toward whatever sits deepest
-    in the proof) -- see layered_layout_3d below. This is what makes
-    different clause KINDS (an early z(...) draw vs. a much-later
-    poss(haltMoveto(...))) visually separate by height, not just by
-    color.
-  - x/y within that layering come from a small force-directed
-    relaxation (also layered_layout_3d): every edge pulls the two
-    nodes it connects toward each other (wherever they sit, including
-    across layers), while nodes sharing a layer push each other apart.
-    The result reads as an actual graph -- connected nodes cluster,
-    edges are visible as real connections -- rather than every node
-    in a layer being dropped at an arbitrary evenly-spaced point on a
-    circle regardless of what it's wired to.
+  - The graph is built TOP-DOWN FROM THE ROOT: the root is this run's
+    own declared query/goal-formula node (graph_export.py's own
+    is_query flag, set from formula.queries()), and every other node's
+    position comes from a breadth-first walk DOWN from that root
+    through its children, children's children, and so on, until the
+    walk bottoms out at the leaves (the AD/probabilistic-fact draws).
+    See compute_levels_from_root below.
+  - Vertical position (z) is a node's own BFS distance from the root
+    (root at z=0, each step down into a child adds one, so the tree
+    grows upward in z toward the leaves). A node reachable from the
+    root via more than one path gets its SHORTEST such distance,
+    standard breadth-first behavior. Any node the walk never reaches
+    at all (label_all labeled it, but it isn't actually part of the
+    goal formula's own proof DAG) is pinned to z=-1, a single layer
+    below the root, so it's still visible but clearly set apart from
+    the real tree.
+  - x/y within each such layer come from a plain GRID (see
+    layered_layout_3d): nodes are simply laid out in rows/columns,
+    ordered by BFS-visit order so a parent's children tend to land
+    next to each other -- no force simulation, nothing that moves a
+    node off its own layer. Combined with the actual parent/child
+    edges drawn between layers, this is what makes the tree SHAPE
+    itself legible at a glance.
   - Hovering a node writes its full clause text into a fixed bar
     pinned to the bottom of the page -- via a small injected JS
     snippet (plotly.js's own plotly_hover/plotly_unhover events),
@@ -44,10 +53,8 @@ across saved frames; an interactive HTML page doesn't need that).
 import json
 import math
 import os
-import sys
-from collections import defaultdict
+from collections import defaultdict, deque
 
-import numpy as np
 import plotly.colors as pcolors
 import plotly.graph_objects as go
 
@@ -62,109 +69,101 @@ def load_ground_nodes(graphs_dir):
 
 
 # -----------------------------------------------------------------------
-# Layout -- see this module's own header for why layered-by-depth.
+# Layout -- see this module's own header for why root-first/BFS/grid.
 # -----------------------------------------------------------------------
-def compute_depths(nodes_by_index):
-    depth = {}
-    visiting = set()
-
-    def get_depth(idx):
-        if idx in depth:
-            return depth[idx]
-        if idx in visiting:
-            return 0
-        visiting.add(idx)
-        node = nodes_by_index.get(idx)
-        children = [abs(c) for c in (node.get("children") or []) if c != 0] \
-            if node else []
-        children = [c for c in children if c in nodes_by_index]
-        d = 1 + max((get_depth(c) for c in children), default=-1)
-        visiting.discard(idx)
-        depth[idx] = d
-        return d
-
-    sys.setrecursionlimit(max(sys.getrecursionlimit(), 10000))
-    for idx in nodes_by_index:
-        get_depth(idx)
-    return depth
+def find_root_indices(nodes_by_index):
+    """This graph's own declared query/goal-formula node(s) -- the
+    root(s) the BFS below walks down from. Found via each record's own
+    is_query flag (graph_export.py sets it from formula.queries())."""
+    roots = sorted(idx for idx, rec in nodes_by_index.items() if rec.get("is_query"))
+    if roots:
+        return roots
+    # No declared query on this graph (shouldn't normally happen -- the
+    # theory this export runs against always declares one -- but guarded
+    # so the walk still has somewhere to start rather than levelling
+    # nothing): fall back to every node nothing else points to as a
+    # child, i.e. every node with no parent.
+    all_children = set()
+    for rec in nodes_by_index.values():
+        for c in (rec.get("children") or []):
+            if c != 0:
+                all_children.add(abs(c))
+    return sorted(idx for idx in nodes_by_index if idx not in all_children)
 
 
-def layered_layout_3d(nodes_by_index, iterations=120, seed=42,
-                       attraction_k=0.5, repulsion_k=0.6,
-                       max_layer_for_repulsion=1500):
-    """z is pinned to each node's own derivation depth throughout (so
-    layers stay cleanly separated); x/y are relaxed with a small
-    force-directed pass so the picture reads as an actual graph --
-    edges pull the two nodes they connect together, wherever those two
-    nodes sit (including across layers), and nodes sharing a layer
-    push each other apart so same-depth clauses don't collapse onto
-    one point. Starting from a per-layer ring (rather than, say, all
-    nodes at the origin) just gives the relaxation something to pull/
-    push from and breaks ties between same-layer nodes."""
-    depths = compute_depths(nodes_by_index)
-    indices = sorted(nodes_by_index.keys())
-    n = len(indices)
-    pos_of = {idx: i for i, idx in enumerate(indices)}
+def compute_levels_from_root(nodes_by_index):
+    """Breadth-first walk DOWN from the root(s) (see find_root_indices)
+    through each node's own children -- root(s) at level 0, each step
+    into a child adds one level, continuing until the walk bottoms out
+    at the leaves. A node reachable via more than one path gets its
+    SHORTEST (BFS) distance. Returns (levels, order): levels maps
+    index -> int (root=0, climbing toward the leaves; -1 for any node
+    the walk never reaches at all -- see this module's own header),
+    order maps index -> its own position in BFS-visit order (used by
+    layered_layout_3d to keep a parent's children next to each other
+    within a grid layer, instead of an arbitrary index sort)."""
+    roots = find_root_indices(nodes_by_index)
 
-    by_depth = defaultdict(list)
-    for idx, d in depths.items():
-        by_depth[d].append(idx)
-    max_depth = max(depths.values()) if depths else 0
-
-    edge_pairs = []
-    for idx, rec in nodes_by_index.items():
+    levels = {}
+    order = {}
+    counter = 0
+    queue = deque()
+    for r in roots:
+        if r in nodes_by_index and r not in levels:
+            levels[r] = 0
+            order[r] = counter
+            counter += 1
+            queue.append(r)
+    while queue:
+        idx = queue.popleft()
+        rec = nodes_by_index[idx]
         for c in (rec.get("children") or []):
             if c == 0:
                 continue
             cidx = abs(c)
-            if cidx in nodes_by_index:
-                edge_pairs.append((pos_of[idx], pos_of[cidx]))
-    edges = (np.array(edge_pairs, dtype=np.int64) if edge_pairs
-             else np.zeros((0, 2), dtype=np.int64))
+            if cidx in nodes_by_index and cidx not in levels:
+                levels[cidx] = levels[idx] + 1
+                order[cidx] = counter
+                counter += 1
+                queue.append(cidx)
 
-    rng = np.random.default_rng(seed)
-    xy = np.zeros((n, 2))
-    for d, idxs in by_depth.items():
-        idxs_sorted = sorted(idxs)
+    for idx in sorted(nodes_by_index):
+        if idx not in levels:
+            levels[idx] = -1
+            order[idx] = counter
+            counter += 1
+
+    return levels, order
+
+
+def layered_layout_3d(nodes_by_index, grid_spacing=1.4):
+    """x/y within each BFS level (see compute_levels_from_root) are a
+    plain grid -- roughly square rows/columns, centered on the z-axis,
+    nodes placed in BFS-visit order so a parent's children tend to
+    land next to each other. No force simulation: every node stays
+    exactly on its own level's z plane, which is what keeps the tree
+    SHAPE (root -> branches -> leaves) legible, with the real parent/
+    child edges drawn between levels doing the rest."""
+    levels, order = compute_levels_from_root(nodes_by_index)
+
+    by_level = defaultdict(list)
+    for idx, lvl in levels.items():
+        by_level[lvl].append(idx)
+
+    pos = {}
+    for lvl, idxs in by_level.items():
+        idxs_sorted = sorted(idxs, key=lambda i: order[i])
         count = len(idxs_sorted)
-        radius = 1.0 + 0.4 * math.sqrt(count)
+        cols = max(1, math.ceil(math.sqrt(count)))
+        rows = math.ceil(count / cols)
         for i, idx in enumerate(idxs_sorted):
-            theta = 2 * math.pi * i / count if count > 1 else 0.0
-            jitter = rng.uniform(-0.05, 0.05, size=2)
-            xy[pos_of[idx]] = np.array(
-                [radius * math.cos(theta), radius * math.sin(theta)]) + jitter
+            row, col = divmod(i, cols)
+            x = (col - (cols - 1) / 2.0) * grid_spacing
+            y = (row - (rows - 1) / 2.0) * grid_spacing
+            pos[idx] = (x, y, float(lvl))
 
-    for it in range(iterations):
-        temp = 1.0 - it / iterations
-        disp = np.zeros((n, 2))
-
-        if len(edges) > 0:
-            a, b = edges[:, 0], edges[:, 1]
-            delta = xy[b] - xy[a]
-            np.add.at(disp, a, attraction_k * delta)
-            np.add.at(disp, b, -attraction_k * delta)
-
-        for d, idxs in by_depth.items():
-            m = len(idxs)
-            if m < 2 or m > max_layer_for_repulsion:
-                # A single node can't repel anything, and a pathologically
-                # large layer is left at its (already spread-out) ring
-                # position rather than paying an O(m^2) cost for it.
-                continue
-            rows = np.array([pos_of[i] for i in idxs])
-            sub = xy[rows]
-            diff = sub[:, None, :] - sub[None, :, :]
-            dist2 = np.sum(diff * diff, axis=-1)
-            np.fill_diagonal(dist2, np.inf)
-            dist2 = np.maximum(dist2, 1e-3)
-            push = np.sum((repulsion_k / dist2)[..., None] * diff, axis=1)
-            disp[rows] += push
-
-        xy += np.clip(disp * temp, -0.5, 0.5) * 0.3
-
-    pos = {idx: (float(xy[pos_of[idx], 0]), float(xy[pos_of[idx], 1]), float(depths[idx]))
-           for idx in indices}
-    return pos, max_depth
+    max_level = max(levels.values()) if levels else 0
+    return pos, max_level
 
 
 # -----------------------------------------------------------------------
@@ -222,7 +221,7 @@ def build_interactive_html(nodes_by_index, out_path, title="Ground graph"):
                 edge_z += [z0, z1, None]
     fig.add_trace(go.Scatter3d(
         x=edge_x, y=edge_y, z=edge_z, mode="lines",
-        line=dict(color="rgba(110,110,110,0.35)", width=1),
+        line=dict(color="rgba(70,70,70,0.75)", width=3),
         hoverinfo="skip", showlegend=False, name="edges"))
 
     # One trace per functor group -- gives a free, click-to-toggle
@@ -246,7 +245,7 @@ def build_interactive_html(nodes_by_index, out_path, title="Ground graph"):
         title=title,
         scene=dict(
             xaxis=dict(visible=False), yaxis=dict(visible=False),
-            zaxis=dict(title="derivation depth (0 = leaves/AD facts)"),
+            zaxis=dict(title="BFS distance from the goal/query node (0 = root)"),
             bgcolor="white"),
         paper_bgcolor="white",
         legend=dict(itemsizing="constant"),
@@ -339,17 +338,32 @@ def build_interactive_html(nodes_by_index, out_path, title="Ground graph"):
 # Level-by-level plain-text listing
 # -----------------------------------------------------------------------
 def write_levels_file(nodes_by_index, out_path):
-    depths = compute_depths(nodes_by_index)
-    by_depth = defaultdict(list)
-    for idx, d in depths.items():
-        by_depth[d].append(idx)
-    max_depth = max(depths.values()) if depths else 0
+    """Same levels build_interactive_html's grid layout uses (BFS
+    distance from the goal/query root, see compute_levels_from_root) --
+    level 0 is the root itself, climbing toward the leaves; any node
+    the walk never reached (not part of the goal formula's own proof
+    DAG) is listed last, under its own "unreached" heading rather than
+    a numbered level."""
+    levels, _order = compute_levels_from_root(nodes_by_index)
+    by_level = defaultdict(list)
+    for idx, lvl in levels.items():
+        by_level[lvl].append(idx)
+    max_level = max((lvl for lvl in levels.values() if lvl >= 0), default=-1)
 
     lines = []
-    for d in range(0, max_depth + 1):
-        idxs = sorted(by_depth.get(d, []))
-        lines.append(f"=== Level {d} ({len(idxs)} node(s)) ===")
+    for lvl in range(0, max_level + 1):
+        idxs = sorted(by_level.get(lvl, []))
+        heading = "Root (goal/query node)" if lvl == 0 else f"Level {lvl}"
+        lines.append(f"=== {heading} ({len(idxs)} node(s)) ===")
         for idx in idxs:
+            rec = nodes_by_index[idx]
+            lines.append(f"  [{idx}] {_node_label(idx, rec)}")
+        lines.append("-" * 70)
+
+    unreached = sorted(by_level.get(-1, []))
+    if unreached:
+        lines.append(f"=== Unreached from goal query ({len(unreached)} node(s)) ===")
+        for idx in unreached:
             rec = nodes_by_index[idx]
             lines.append(f"  [{idx}] {_node_label(idx, rec)}")
         lines.append("-" * 70)

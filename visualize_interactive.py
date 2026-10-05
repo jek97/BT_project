@@ -12,26 +12,29 @@ WHAT THIS DRAWS:
     distinct functor actually present, via a cycled qualitative
     palette, with a legend that also lets you toggle a whole functor
     group on/off (plotly's own default legend-click behavior).
-  - The graph is built TOP-DOWN FROM THE ROOT(S): a root is a declared
-    query node (graph_export.py's own is_query flag) that NOTHING ELSE
-    in the graph points at -- see find_root_indices below for why that
-    second condition matters. A problem can, and this project's own
+  - The graph is built TOP-DOWN FROM THE ROOTS: EVERY declared query
+    node (graph_export.py's own is_query flag) is its own root at
+    level 0 -- standard multi-source BFS, where a source's own distance
+    to itself is always 0 regardless of whether some OTHER source also
+    has a path into it. A problem can, and this project's own
     queries_generated.pl routinely does, declare several queries whose
     derivations happen to expand to IDENTICAL ground content (ProbLog
-    stores that once, as one shared node, not as separate copies linked
-    by an edge); when that shared node is ALSO reachable as a genuine
-    child of another query's own proof, it is NOT a second root -- it's
-    leveled at its real BFS distance like any other node, so the tree
-    doesn't show a false edge "from" one top-level query "into" another
-    as if one were nested inside the other's proof. Every other node's
-    position then comes from a breadth-first walk DOWN from the true
-    root(s) through their children, children's children, and so on,
-    until the walk bottoms out at the leaves (the AD/probabilistic-fact
-    draws). See compute_levels_from_root below. A node shared by more
-    than one declared query still shows every query name that resolves
-    to it -- see load_ground_nodes' own query_names note -- in the
-    hover text and the levels file, not just whichever single name
-    ProbLog's own internal tie-break left on the node's own .name.
+    stores that once, as one shared node, not as separate copies); when
+    a LARGER query (one with real structure of its own above the shared
+    node) also reaches that same node, the real edge between them still
+    draws -- edges always come from each node's own children list,
+    independent of level -- it just doesn't pull the shared node's own
+    level away from 0, since that node is, in its own right, exactly as
+    much a root as any other declared query (see find_root_indices'
+    own note for why an earlier version of this got that wrong). Every
+    OTHER node's position comes from a breadth-first walk DOWN from
+    whichever root(s) reach it through their children, children's
+    children, and so on, until the walk bottoms out at the leaves (the
+    AD/probabilistic-fact draws). See compute_levels_from_root below. A
+    node shared by more than one declared query shows every query name
+    that resolves to it -- see load_ground_nodes' own query_names note
+    -- in the hover text and the levels file, not just whichever single
+    name ProbLog's own internal tie-break left on the node's own .name.
   - Vertical position (z) is a node's own BFS distance from the root
     (root at z=0, each step down into a child adds one, so the tree
     grows upward in z toward the leaves). A node reachable from the
@@ -108,50 +111,39 @@ def load_ground_nodes(graphs_dir):
 def find_root_indices(nodes_by_index):
     """This graph's own declared query/goal-formula node(s) -- the
     root(s) the BFS below walks down from. Found via each record's own
-    is_query flag (graph_export.py sets it from formula.queries()) --
-    but NOT every query node is a root: if query A's own node is also a
-    CHILD of query B's own node (both point at it, see load_ground_
-    nodes' own query_names note -- this happens whenever two
-    independently declared queries' derivations happen to expand to
-    identical content, which ProbLog stores once, not twice), A is not
-    a top-level root -- it's a real, direct descendant of B, and
-    levelling it at 0 anyway (as an earlier version of this did) drew a
-    false edge "from" B "into" A as if A were nested one level inside
-    B's own proof, when the only genuine relationship is: both
-    independently resolve to that one shared node. So a query only
-    counts as a root here if NOTHING in the whole graph points at it;
-    every other query still gets colored as is_query (build_interactive_
-    html can still mark it) but is leveled by its own real BFS distance
-    like any other node, and load_ground_nodes' own query_names list is
-    what lets a shared node display ALL the query names that resolve to
-    it, not just whichever one ProbLog's own internal tie-break left on
-    .name."""
-    query_nodes = sorted(idx for idx, rec in nodes_by_index.items() if rec.get("is_query"))
-    if not query_nodes:
-        # No declared query on this graph (shouldn't normally happen --
-        # the theory this export runs against always declares one --
-        # but guarded so the walk still has somewhere to start rather
-        # than levelling nothing): fall back to every node nothing else
-        # points to as a child, i.e. every node with no parent.
-        all_children = set()
-        for rec in nodes_by_index.values():
-            for c in (rec.get("children") or []):
-                if c != 0:
-                    all_children.add(abs(c))
-        return sorted(idx for idx in nodes_by_index if idx not in all_children)
+    is_query flag (graph_export.py sets it from formula.queries()).
 
-    has_incoming_edge = set()
+    EVERY declared query is a root (level 0), even one that's ALSO
+    reachable as another query's own child -- this is deliberate, not
+    an oversight: standard multi-source BFS defines a source's own
+    distance to itself as 0 regardless of whether some OTHER source
+    also has a path into it (an earlier version of this function
+    excluded a query from rootship whenever anything else in the graph
+    pointed at it, on the theory that made it "really" a descendant
+    rather than a root -- that was a different, more opinionated
+    metric that quietly privileged whichever query happened to have
+    extra structure of its own above the shared node, not a more
+    correct distance; a query with NOTHING extra above the shared node
+    is, in its own right, exactly as entitled to call that node its
+    own root as any other query is). The real, extra edge a LARGER
+    query has into that same shared node (see load_ground_nodes' own
+    query_names note) still draws -- edges come from each node's own
+    children list regardless of level -- it just no longer forces the
+    shared node's OWN level away from 0."""
+    roots = sorted(idx for idx, rec in nodes_by_index.items() if rec.get("is_query"))
+    if roots:
+        return roots
+    # No declared query on this graph (shouldn't normally happen -- the
+    # theory this export runs against always declares one -- but guarded
+    # so the walk still has somewhere to start rather than levelling
+    # nothing): fall back to every node nothing else points to as a
+    # child, i.e. every node with no parent.
+    all_children = set()
     for rec in nodes_by_index.values():
         for c in (rec.get("children") or []):
             if c != 0:
-                has_incoming_edge.add(abs(c))
-
-    true_roots = [idx for idx in query_nodes if idx not in has_incoming_edge]
-    # Degenerate fallback (shouldn't happen in an acyclic proof DAG --
-    # every query would have to be someone else's descendant, with
-    # nothing left un-dominated): rather than level nothing, fall back
-    # to the original "every query is a root" behavior.
-    return true_roots if true_roots else query_nodes
+                all_children.add(abs(c))
+    return sorted(idx for idx in nodes_by_index if idx not in all_children)
 
 
 def compute_levels_from_root(nodes_by_index):

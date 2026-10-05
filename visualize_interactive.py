@@ -12,13 +12,26 @@ WHAT THIS DRAWS:
     distinct functor actually present, via a cycled qualitative
     palette, with a legend that also lets you toggle a whole functor
     group on/off (plotly's own default legend-click behavior).
-  - The graph is built TOP-DOWN FROM THE ROOT: the root is this run's
-    own declared query/goal-formula node (graph_export.py's own
-    is_query flag, set from formula.queries()), and every other node's
-    position comes from a breadth-first walk DOWN from that root
-    through its children, children's children, and so on, until the
-    walk bottoms out at the leaves (the AD/probabilistic-fact draws).
-    See compute_levels_from_root below.
+  - The graph is built TOP-DOWN FROM THE ROOT(S): a root is a declared
+    query node (graph_export.py's own is_query flag) that NOTHING ELSE
+    in the graph points at -- see find_root_indices below for why that
+    second condition matters. A problem can, and this project's own
+    queries_generated.pl routinely does, declare several queries whose
+    derivations happen to expand to IDENTICAL ground content (ProbLog
+    stores that once, as one shared node, not as separate copies linked
+    by an edge); when that shared node is ALSO reachable as a genuine
+    child of another query's own proof, it is NOT a second root -- it's
+    leveled at its real BFS distance like any other node, so the tree
+    doesn't show a false edge "from" one top-level query "into" another
+    as if one were nested inside the other's proof. Every other node's
+    position then comes from a breadth-first walk DOWN from the true
+    root(s) through their children, children's children, and so on,
+    until the walk bottoms out at the leaves (the AD/probabilistic-fact
+    draws). See compute_levels_from_root below. A node shared by more
+    than one declared query still shows every query name that resolves
+    to it -- see load_ground_nodes' own query_names note -- in the
+    hover text and the levels file, not just whichever single name
+    ProbLog's own internal tie-break left on the node's own .name.
   - Vertical position (z) is a node's own BFS distance from the root
     (root at z=0, each step down into a child adds one, so the tree
     grows upward in z toward the leaves). A node reachable from the
@@ -62,10 +75,31 @@ import plotly.graph_objects as go
 def load_ground_nodes(graphs_dir):
     """Reads graphs_dir/ground_nodes.json (written by module/theory/
     graph_export.py's own export_ground_graph) and returns
-    {index: node_record}, the shape every function below expects."""
+    {index: node_record}, the shape every function below expects.
+
+    Also attaches each record's own query_names: list -- EVERY declared
+    query name that resolves to this exact node (ground_nodes.json's own
+    "queries" dict is {query_name: node_index}, inverted here to
+    index->[names]), not just whichever single name formula.to_dot()/
+    label_all happened to leave on the node's own .name. More than one
+    query landing on the SAME node is the normal, expected outcome of
+    ProbLog's own content-addressed node sharing (two independently
+    declared queries whose own derivations happen to expand to
+    identical logical content get stored as the literal same node, not
+    two nodes joined by an edge) -- see this module's own header and
+    find_root_indices below, which uses this to avoid drawing one such
+    query as if it were "inside" another's proof tree."""
     with open(os.path.join(graphs_dir, "ground_nodes.json")) as f:
         data = json.load(f)
-    return {rec["index"]: rec for rec in data["nodes"]}
+    nodes_by_index = {rec["index"]: rec for rec in data["nodes"]}
+
+    query_names_by_node = defaultdict(list)
+    for query_name, idx in (data.get("queries") or {}).items():
+        query_names_by_node[idx].append(query_name)
+    for idx, rec in nodes_by_index.items():
+        rec["query_names"] = sorted(query_names_by_node.get(idx, []))
+
+    return nodes_by_index
 
 
 # -----------------------------------------------------------------------
@@ -74,21 +108,50 @@ def load_ground_nodes(graphs_dir):
 def find_root_indices(nodes_by_index):
     """This graph's own declared query/goal-formula node(s) -- the
     root(s) the BFS below walks down from. Found via each record's own
-    is_query flag (graph_export.py sets it from formula.queries())."""
-    roots = sorted(idx for idx, rec in nodes_by_index.items() if rec.get("is_query"))
-    if roots:
-        return roots
-    # No declared query on this graph (shouldn't normally happen -- the
-    # theory this export runs against always declares one -- but guarded
-    # so the walk still has somewhere to start rather than levelling
-    # nothing): fall back to every node nothing else points to as a
-    # child, i.e. every node with no parent.
-    all_children = set()
+    is_query flag (graph_export.py sets it from formula.queries()) --
+    but NOT every query node is a root: if query A's own node is also a
+    CHILD of query B's own node (both point at it, see load_ground_
+    nodes' own query_names note -- this happens whenever two
+    independently declared queries' derivations happen to expand to
+    identical content, which ProbLog stores once, not twice), A is not
+    a top-level root -- it's a real, direct descendant of B, and
+    levelling it at 0 anyway (as an earlier version of this did) drew a
+    false edge "from" B "into" A as if A were nested one level inside
+    B's own proof, when the only genuine relationship is: both
+    independently resolve to that one shared node. So a query only
+    counts as a root here if NOTHING in the whole graph points at it;
+    every other query still gets colored as is_query (build_interactive_
+    html can still mark it) but is leveled by its own real BFS distance
+    like any other node, and load_ground_nodes' own query_names list is
+    what lets a shared node display ALL the query names that resolve to
+    it, not just whichever one ProbLog's own internal tie-break left on
+    .name."""
+    query_nodes = sorted(idx for idx, rec in nodes_by_index.items() if rec.get("is_query"))
+    if not query_nodes:
+        # No declared query on this graph (shouldn't normally happen --
+        # the theory this export runs against always declares one --
+        # but guarded so the walk still has somewhere to start rather
+        # than levelling nothing): fall back to every node nothing else
+        # points to as a child, i.e. every node with no parent.
+        all_children = set()
+        for rec in nodes_by_index.values():
+            for c in (rec.get("children") or []):
+                if c != 0:
+                    all_children.add(abs(c))
+        return sorted(idx for idx in nodes_by_index if idx not in all_children)
+
+    has_incoming_edge = set()
     for rec in nodes_by_index.values():
         for c in (rec.get("children") or []):
             if c != 0:
-                all_children.add(abs(c))
-    return sorted(idx for idx in nodes_by_index if idx not in all_children)
+                has_incoming_edge.add(abs(c))
+
+    true_roots = [idx for idx in query_nodes if idx not in has_incoming_edge]
+    # Degenerate fallback (shouldn't happen in an acyclic proof DAG --
+    # every query would have to be someone else's descendant, with
+    # nothing left un-dominated): rather than level nothing, fall back
+    # to the original "every query is a root" behavior.
+    return true_roots if true_roots else query_nodes
 
 
 def compute_levels_from_root(nodes_by_index):
@@ -193,6 +256,31 @@ def _node_label(idx, rec):
     return rec.get("name") or f"{rec['type']}(node_{idx})"
 
 
+def _other_query_names(rec):
+    """Every OTHER declared query name (besides this node's own .name,
+    whatever ProbLog's own internal tie-break left on it) that ALSO
+    resolves to this exact node -- see load_ground_nodes' own
+    query_names note. Shared by _hover_text (HTML) and write_levels_file
+    (plain text) so both surfaces agree on which nodes are shared across
+    more than one query."""
+    return [q for q in (rec.get("query_names") or []) if q != rec.get("name")]
+
+
+def _hover_text(idx, rec):
+    """_node_label's text, PLUS -- when this node is shared by more than
+    one declared query -- every OTHER query name that also resolves to
+    this exact node. A node like this isn't "query A nested inside
+    query B's proof"; it's one piece of shared content that several
+    independently declared queries all happen to land on, so the hover
+    text says so explicitly rather than silently showing only whichever
+    single name ProbLog's own internal tie-break left on the node."""
+    base = _node_label(idx, rec)
+    others = _other_query_names(rec)
+    if others:
+        return base + "\n(shared node -- also the query: " + "; also: ".join(others) + ")"
+    return base
+
+
 # -----------------------------------------------------------------------
 # Interactive HTML
 # -----------------------------------------------------------------------
@@ -232,7 +320,7 @@ def build_interactive_html(nodes_by_index, out_path, title="Ground graph"):
         xs = [pos[i][0] for i in idxs]
         ys = [pos[i][1] for i in idxs]
         zs = [pos[i][2] for i in idxs]
-        texts = [_node_label(i, nodes_by_index[i]) for i in idxs]
+        texts = [_hover_text(i, nodes_by_index[i]) for i in idxs]
         sizes = [7.0] * len(idxs)
         fig.add_trace(go.Scatter3d(
             x=xs, y=ys, z=zs, mode="markers",
@@ -350,22 +438,25 @@ def write_levels_file(nodes_by_index, out_path):
         by_level[lvl].append(idx)
     max_level = max((lvl for lvl in levels.values() if lvl >= 0), default=-1)
 
+    def _line(idx, rec):
+        others = _other_query_names(rec)
+        suffix = f"  [shared with: {', '.join(others)}]" if others else ""
+        return f"  [{idx}] {_node_label(idx, rec)}{suffix}"
+
     lines = []
     for lvl in range(0, max_level + 1):
         idxs = sorted(by_level.get(lvl, []))
         heading = "Root (goal/query node)" if lvl == 0 else f"Level {lvl}"
         lines.append(f"=== {heading} ({len(idxs)} node(s)) ===")
         for idx in idxs:
-            rec = nodes_by_index[idx]
-            lines.append(f"  [{idx}] {_node_label(idx, rec)}")
+            lines.append(_line(idx, nodes_by_index[idx]))
         lines.append("-" * 70)
 
     unreached = sorted(by_level.get(-1, []))
     if unreached:
         lines.append(f"=== Unreached from goal query ({len(unreached)} node(s)) ===")
         for idx in unreached:
-            rec = nodes_by_index[idx]
-            lines.append(f"  [{idx}] {_node_label(idx, rec)}")
+            lines.append(_line(idx, nodes_by_index[idx]))
         lines.append("-" * 70)
 
     with open(out_path, "w") as f:

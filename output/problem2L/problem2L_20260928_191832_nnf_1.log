@@ -1,0 +1,24 @@
+====================================================================
+  ProbLog Continuous-Space Safety Verification - 2026-09-28 19:53:33
+====================================================================
+  Log file    : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem2L/problem2L_20260928_191832_nnf_1.log
+  Backend     : nnf  (propagate_weights=True)
+====================================================================
+  ProbLog Continuous-Space Safety Verification (ablation sweep) - 2026-09-28 19:18:32
+====================================================================
+  Problem     : problem2L (/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem2L)
+  Theory file : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/theory/basic_action_theory.pl
+  Obstacles   : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem2L/obstacles_generated.pl (regenerated from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem2L/map.yaml, inflated by 0.820m robot clearance)
+  Config      : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem2L/config_generated.pl (regenerated from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem2L/config.yaml)
+  Plan (BT)   : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem2L/plan_generated.pl (translated + validated from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem2L/behavior_tree.xml)
+  Goal formula: /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem2L/goal_formula.pl (validated against /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/contracts/vocabulary.yaml)
+  Queries     : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem2L/queries_generated.pl (auto-generated from this tree's own per-action Reason universe)
+  Bootstrap   : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/theory/problem_data.pl (points basic_action_theory.pl at /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem2L)
+
+  Started : 19:53:33  (phase timeout: 300s per stage)
+  [STAGE] Parse (plan.pl formed) ...
+  [STAGE] Parse (plan.pl formed): done in 0.000s
+  [STAGE] Ground (plan unrolled, regressed to s0) ...
+  [STAGE] Ground (plan unrolled, regressed to s0): TIMED OUT after 300.0s (phase timeout = 300s)
+
+  [ERROR] Aborting this combination -- a pipeline stage exceeded its own timeout (300s per stage; see [STAGE] line above for which).

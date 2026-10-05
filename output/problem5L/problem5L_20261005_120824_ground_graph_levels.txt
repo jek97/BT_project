@@ -1,0 +1,75 @@
+=== Root (goal/query node) (2 node(s)) ===
+  [53] any_reason_pattern_by_action(completed,a2)  [shared with: any_reason_pattern(completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)])), any_reason_pattern(completed), any_reason_pattern_by_action(completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)]),a1), outcome_signature([a2-completed, a1-completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)])]), plan_outcome(true)]
+  [63] verify_goal_formula
+----------------------------------------------------------------------
+=== Level 1 (28 node(s)) ===
+  [16] conj(node_16)
+  [19] conj(node_19)
+  [22] conj(node_22)
+  [24] conj(node_24)
+  [26] conj(node_26)
+  [28] conj(node_28)
+  [30] conj(node_30)
+  [32] conj(node_32)
+  [34] conj(node_34)
+  [35] conj(node_35)
+  [36] conj(node_36)
+  [37] conj(node_37)
+  [38] conj(node_38)
+  [39] conj(node_39)
+  [40] conj(node_40)
+  [41] conj(node_41)
+  [42] conj(node_42)
+  [43] conj(node_43)
+  [44] conj(node_44)
+  [45] conj(node_45)
+  [46] conj(node_46)
+  [47] conj(node_47)
+  [48] conj(node_48)
+  [49] conj(node_49)
+  [50] conj(node_50)
+  [51] conj(node_51)
+  [52] conj(node_52)
+  [58] at(32.0,-3.3,32.353771026456116,do(startMoveto([point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0),do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0)))
+----------------------------------------------------------------------
+=== Level 2 (13 node(s)) ===
+  [1] choice(2458,0,z(do(startMoveto([point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0),do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0)),-1.732),[point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0,do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0))
+  [2] choice(2458,1,z(do(startMoveto([point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0),do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0)),0.0),[point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0,do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0))
+  [4] choice(2458,2,z(do(startMoveto([point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0),do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0)),1.732),[point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0,do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0))
+  [6] choice(2476,1,zt(do(startMoveto([point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0),do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0)),0.0),[point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0,do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0))
+  [15] conj(node_15)
+  [18] conj(node_18)
+  [21] conj(node_21)
+  [23] conj(node_23)
+  [25] conj(node_25)
+  [27] conj(node_27)
+  [29] conj(node_29)
+  [31] conj(node_31)
+  [33] conj(node_33)
+----------------------------------------------------------------------
+=== Level 3 (5 node(s)) ===
+  [5] choice(2476,0,zt(do(startMoveto([point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0),do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0)),-1.732),[point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0,do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0))
+  [8] choice(2476,2,zt(do(startMoveto([point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0),do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0)),1.732),[point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0,do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0))
+  [14] conj(node_14)
+  [17] conj(node_17)
+  [20] conj(node_20)
+----------------------------------------------------------------------
+=== Level 4 (4 node(s)) ===
+  [9] choice(2494,0,zbatt(-1.732))
+  [10] choice(2494,1,zbatt(0.0))
+  [12] choice(2494,2,zbatt(1.732))
+  [13] battery(100,0,s0)
+----------------------------------------------------------------------
+=== Unreached from goal query (11 node(s)) ===
+  [3] choice(2458,e,null,[point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0,do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0))
+  [7] choice(2476,e,null,[point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0,do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0))
+  [11] choice(2494,e,null)
+  [54] at(30.522247847792965,-4.777752152207034,32.353771026456116,do(startMoveto([point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0),do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0)))
+  [55] at(32.0,-4.777752152207034,32.353771026456116,do(startMoveto([point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0),do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0)))
+  [56] at(33.47775215220703,-4.777752152207034,32.353771026456116,do(startMoveto([point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0),do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0)))
+  [57] at(30.522247847792965,-3.3,32.353771026456116,do(startMoveto([point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0),do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0)))
+  [59] at(33.47775215220703,-3.3,32.353771026456116,do(startMoveto([point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0),do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0)))
+  [60] at(30.522247847792965,-1.822247847792965,32.353771026456116,do(startMoveto([point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0),do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0)))
+  [61] at(32.0,-1.822247847792965,32.353771026456116,do(startMoveto([point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0),do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0)))
+  [62] at(33.47775215220703,-1.822247847792965,32.353771026456116,do(startMoveto([point(11.0,-15.0), point(14.666666666666666,-15.0), point(18.333333333333332,-15.0), point(22.0,-15.0), point(22.0,-11.1), point(22.0,-7.2), point(22.0,-3.3), point(25.333333333333332,-3.3), point(28.666666666666668,-3.3), point(32.0,-3.3)],[collision, battery],a2,0),do(planned(straight,completed(straight,[point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)],a1)),s0)))
+----------------------------------------------------------------------

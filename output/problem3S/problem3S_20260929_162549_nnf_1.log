@@ -1,0 +1,1199 @@
+====================================================================
+  ProbLog Continuous-Space Safety Verification - 2026-09-29 17:37:37
+====================================================================
+  Log file    : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem3S/problem3S_20260929_162549_nnf_1.log
+  Backend     : nnf  (propagate_weights=True)
+====================================================================
+  ProbLog Continuous-Space Safety Verification (ablation sweep) - 2026-09-29 16:25:49
+====================================================================
+  Problem     : problem3S (/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem3S)
+  Theory file : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/theory/basic_action_theory.pl
+  Obstacles   : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem3S/obstacles_generated.pl (regenerated from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem3S/map.yaml, inflated by 0.820m robot clearance)
+  Config      : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem3S/config_generated.pl (regenerated from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem3S/config.yaml)
+  Plan (BT)   : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem3S/plan_generated.pl (translated + validated from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem3S/behavior_tree.xml)
+  Goal formula: /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem3S/goal_formula.pl (validated against /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/contracts/vocabulary.yaml)
+  Queries     : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem3S/queries_generated.pl (auto-generated from this tree's own per-action Reason universe)
+  Bootstrap   : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/theory/problem_data.pl (points basic_action_theory.pl at /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem3S)
+
+  Started : 17:37:37  (phase timeout: 300s per stage)
+  [STAGE] Parse (plan.pl formed) ...
+  [STAGE] Parse (plan.pl formed): done in 0.000s
+  [STAGE] Ground (plan unrolled, regressed to s0) ...
+  [STAGE] Ground (plan unrolled, regressed to s0): done in 25.343s
+    -> 16407 ground node(s)
+  [STAGE] Compile (knowledge compilation, backend=nnf) ...
+  [STAGE] Compile (knowledge compilation, backend=nnf): done in 2.058s
+    -> 58483 compiled node(s)
+  [STAGE] Evaluate (weighted model count against the initial database) ...
+  [STAGE] Evaluate (weighted model count against the initial database): done in 3.240s
+  Finished: 17:38:07  (30.641s)
+
+--------------------------------------------------------------------
+  Goal formula
+--------------------------------------------------------------------
+  /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem3S/goal_formula.pl
+    goal_formula(S) :-
+        halted_with(sample_success(_,_,_,sample_tree_11,_), S),
+        visited(point(18.5,13.5), 1.0, S).
+
+--------------------------------------------------------------------
+  Action codes
+--------------------------------------------------------------------
+  a1   PlanWithWaypoints(straight, waypoints=[(18.5,-13.5),(18.5,0.0),(9.5,0.0)]) [MainTree]
+  a2   MoveTo(CP1) [MainTree]
+  a3   TakeSample(sample_tree_11) [MainTree]
+  a4   PlanWithWaypoints(straight, waypoints=[(0.5,0.0),(0.5,6.0),(9.5,6.0),(18.5,6.0),(18.5,13.5)]) [MainTree]
+  a5   MoveTo(CP2) [MainTree]
+
+--------------------------------------------------------------------
+  Condition codes
+--------------------------------------------------------------------
+  c1   DistanceBelow(goal=9.5;0.0,threshold=1.0) [MainTree]
+  c2   DistanceBelow(goal=9.5;0.0,threshold=1.0) [MainTree]
+  c3   DistanceBelow(goal=18.5;13.5,threshold=1.0) [MainTree]
+  c4   DistanceBelow(goal=18.5;13.5,threshold=1.0) [MainTree]
+
+--------------------------------------------------------------------
+  Query results
+--------------------------------------------------------------------
+  Query                            Probability
+  ------------------------------   -----------
+  verify_goal_formula                2.30%
+  plan_outcome(true)                 2.30%
+  plan_outcome(false)               97.70%
+  plan_outcome(world_too_large)      0.00%
+  plan_outcome(reactive_escaped)     0.00%
+
+--------------------------------------------------------------------
+  Safety query breakdown (per action)
+--------------------------------------------------------------------
+  battery_depleted                          17.28%
+    a2                                       0.00%
+    a5                                      17.28%
+  completed                                 70.12%
+    a2                                      66.67%
+    a5                                       3.46%
+  completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])  31.11%
+    a4                                      31.11%
+  completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)]) 100.00%
+    a1                                     100.00%
+  crashed                                   43.70%
+    a2                                      33.33%
+      crashed(obs2)                         16.67%
+      crashed(obs3)                         16.67%
+    a5                                      10.37%
+      crashed(obs3)                          5.19%
+      crashed(obs4)                          5.19%
+  no_path(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])   0.00%
+    a4                                       0.00%
+  no_path(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])   0.00%
+    a1                                       0.00%
+  sample_failure                            13.33%
+    a3                                      13.33%
+      sample_failure(9.5,0.0,sample_tree_11)  13.33%
+  sample_success                            31.11%
+    a3                                      31.11%
+      sample_success(9.5,0.0,2,sample_tree_11)  15.56%
+      sample_success(9.5,0.0,8,sample_tree_11)  15.56%
+
+--------------------------------------------------------------------
+  Condition check breakdown
+--------------------------------------------------------------------
+  c1  DistanceBelow(goal=9.5;0.0,threshold=1.0) [MainTree]
+    true                                       0.00%
+    false                                    100.00%
+  c2  DistanceBelow(goal=9.5;0.0,threshold=1.0) [MainTree]
+    true                                      44.44%
+    false                                     22.22%
+    (never reached)                           33.33%
+  c3  DistanceBelow(goal=18.5;13.5,threshold=1.0) [MainTree]
+    true                                       0.00%
+    false                                     31.11%
+    (never reached)                           68.89%
+  c4  DistanceBelow(goal=18.5;13.5,threshold=1.0) [MainTree]
+    true                                       2.30%
+    false                                      1.15%
+    (never reached)                           96.54%
+
+--------------------------------------------------------------------
+  Full outcome enumeration (every Reason/Condition combination)
+--------------------------------------------------------------------
+   22.22%
+    c2: false
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+   16.67%
+    a2: crashed(obs3)
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+   16.67%
+    a2: crashed(obs2)
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+   13.33%
+    a3: sample_failure(9.5,0.0,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    8.64%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    8.64%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    2.59%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    2.59%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    2.59%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    2.59%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    1.15%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    1.15%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.58%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.58%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,0.0,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,0.0,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(11.15562696230009,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(9.5,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,-1.655626962300091,2,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: true
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs3)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: battery_depleted
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs4)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    c4: false
+    a5: completed
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a5: crashed(obs2)
+    a4: completed(straight,[point(0.5,0.0), point(0.5,6.0), point(9.5,6.0), point(18.5,6.0), point(18.5,13.5)])
+    c3: false
+    a3: sample_success(7.844373037699909,-1.655626962300091,8,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a3: sample_failure(11.15562696230009,1.655626962300091,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a3: sample_failure(9.5,1.655626962300091,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a3: sample_failure(7.844373037699909,1.655626962300091,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a3: sample_failure(11.15562696230009,0.0,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a3: sample_failure(7.844373037699909,0.0,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a3: sample_failure(11.15562696230009,-1.655626962300091,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a3: sample_failure(9.5,-1.655626962300091,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+    0.00%
+    a3: sample_failure(7.844373037699909,-1.655626962300091,sample_tree_11)
+    c2: true
+    a2: completed
+    a1: completed(straight,[point(18.5,-13.5), point(18.5,0.0), point(9.5,0.0)])
+    c1: false
+
+====================================================================
+  Log : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem3S/problem3S_20260929_162549_nnf_1.log
+====================================================================

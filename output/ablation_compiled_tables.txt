@@ -1,0 +1,72 @@
+=== Compiled nodes -- backend=bdd, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+
+=== Compiled nodes -- backend=bdd, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+
+=== Compiled nodes -- backend=fbdd, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+
+=== Compiled nodes -- backend=fbdd, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+
+=== Compiled nodes -- backend=fsdd, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L          16998     16999         -     18137     18847
+M              -     15703         -     19002     19497
+S              -         -         -     16407     16704
+
+=== Compiled nodes -- backend=fsdd, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L          16998     16999         -     18137     18847
+M              -     15703         -     19002     19497
+S              -         -         -     16407     16704
+
+=== Compiled nodes -- backend=nnf, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L          58981     58982         -     61137     61849
+M              -     57686         -     62002     62496
+S         105158    237232         -     58483     58779
+
+=== Compiled nodes -- backend=nnf, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L          58981     58982         -     61137     61849
+M              -     57686         -     62002     62496
+S         105158    237232         -     58483     58779
+
+=== Compiled nodes -- backend=sdd, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L          16998     16999         -     16841     17547
+M              -     15703         -     17706     18194
+S              -         -         -         -         -
+
+=== Compiled nodes -- backend=sdd, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L          16998     16999         -     16841     17547
+M              -     15703         -     17706     18194
+S              -         -         -         -         -
+
+=== Compiled nodes -- backend=sddx, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+
+=== Compiled nodes -- backend=sddx, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+

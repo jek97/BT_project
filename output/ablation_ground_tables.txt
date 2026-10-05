@@ -1,0 +1,72 @@
+=== Ground nodes -- backend=bdd, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+
+=== Ground nodes -- backend=bdd, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+
+=== Ground nodes -- backend=fbdd, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+
+=== Ground nodes -- backend=fbdd, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+
+=== Ground nodes -- backend=fsdd, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L          16998     16999         -     18137     18847
+M              -     15703         -     19002     19497
+S              -         -         -     16407     16704
+
+=== Ground nodes -- backend=fsdd, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L          16998     16999         -     18137     18847
+M              -     15703         -     19002     19497
+S              -         -         -     16407     16704
+
+=== Ground nodes -- backend=nnf, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L          16998     16999         -     18137     18847
+M              -     15703         -     19002     19497
+S          15037     41181         -     16407     16704
+
+=== Ground nodes -- backend=nnf, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L          16998     16999         -     18137     18847
+M              -     15703         -     19002     19497
+S          15037     41181         -     16407     16704
+
+=== Ground nodes -- backend=sdd, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L          16998     16999         -     18137     18847
+M              -     15703         -     19002     19497
+S              -         -         -         -         -
+
+=== Ground nodes -- backend=sdd, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L          16998     16999         -     18137     18847
+M              -     15703         -     19002     19497
+S              -         -         -         -         -
+
+=== Ground nodes -- backend=sddx, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+
+=== Ground nodes -- backend=sddx, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+

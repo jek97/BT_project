@@ -1,0 +1,27 @@
+====================================================================
+  ProbLog Continuous-Space Safety Verification - 2026-09-28 17:33:32
+====================================================================
+  Log file    : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem1M/problem1M_20260928_171406_bdd_1.log
+  Backend     : bdd  (propagate_weights=True)
+====================================================================
+  ProbLog Continuous-Space Safety Verification (ablation sweep) - 2026-09-28 17:14:06
+====================================================================
+  Problem     : problem1M (/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1M)
+  Theory file : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/theory/basic_action_theory.pl
+  Obstacles   : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1M/obstacles_generated.pl (regenerated from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1M/map.yaml, inflated by 0.820m robot clearance)
+  Config      : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1M/config_generated.pl (regenerated from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1M/config.yaml)
+  Plan (BT)   : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1M/plan_generated.pl (translated + validated from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1M/behavior_tree.xml)
+  Goal formula: /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1M/goal_formula.pl (validated against /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/contracts/vocabulary.yaml)
+  Queries     : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1M/queries_generated.pl (auto-generated from this tree's own per-action Reason universe)
+  Bootstrap   : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/theory/problem_data.pl (points basic_action_theory.pl at /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1M)
+
+  Started : 17:33:32  (phase timeout: 300s per stage)
+  [STAGE] Parse (plan.pl formed) ...
+  [STAGE] Parse (plan.pl formed): done in 0.000s
+  [STAGE] Ground (plan unrolled, regressed to s0) ...
+  [STAGE] Ground (plan unrolled, regressed to s0): done in 30.550s
+    -> 15703 ground node(s)
+  [STAGE] Compile (knowledge compilation, backend=bdd) ...
+  [STAGE] Compile (knowledge compilation, backend=bdd): TIMED OUT after 300.0s (phase timeout = 300s)
+
+  [ERROR] Aborting this combination -- a pipeline stage exceeded its own timeout (300s per stage; see [STAGE] line above for which).

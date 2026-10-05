@@ -1,0 +1,13 @@
+problem,knowledge,propagate_weights,status,ground_nodes,compiled_nodes,parse_s,ground_s,compile_s,evaluate_s,total_s,log_file,note
+problem4L,sdd,0,ok,18847,17547,0.000363,46.930469,0.774209,0.218188,47.923228,/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem4L/problem4L_20260929_174417_sdd_0.log,
+problem4L,sdd,1,ok,18847,17547,0.000406,46.989909,1.026204,0.212888,48.229407,/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem4L/problem4L_20260929_174417_sdd_1.log,
+problem4L,sddx,0,timeout,,,,,,,,/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem4L/problem4L_20260929_174417_sddx_0.log,a pipeline stage exceeded its own timeout (300s per stage; see [STAGE] line above for which)
+problem4L,sddx,1,timeout,,,,,,,,/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem4L/problem4L_20260929_174417_sddx_1.log,a pipeline stage exceeded its own timeout (300s per stage; see [STAGE] line above for which)
+problem4L,bdd,0,timeout,,,,,,,,/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem4L/problem4L_20260929_174417_bdd_0.log,a pipeline stage exceeded its own timeout (300s per stage; see [STAGE] line above for which)
+problem4L,bdd,1,timeout,,,,,,,,/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem4L/problem4L_20260929_174417_bdd_1.log,a pipeline stage exceeded its own timeout (300s per stage; see [STAGE] line above for which)
+problem4L,nnf,0,ok,18847,61849,0.000473,47.288316,2.208321,2.551884,52.048994,/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem4L/problem4L_20260929_174417_nnf_0.log,
+problem4L,nnf,1,ok,18847,61849,0.000429,46.599948,2.179567,2.590687,51.370630,/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem4L/problem4L_20260929_174417_nnf_1.log,
+problem4L,fsdd,0,ok,18847,18847,0.000425,46.608507,0.071493,94.327052,141.007477,/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem4L/problem4L_20260929_174417_fsdd_0.log,
+problem4L,fsdd,1,ok,18847,18847,0.000445,46.598626,0.068825,92.089685,138.757581,/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem4L/problem4L_20260929_174417_fsdd_1.log,
+problem4L,fbdd,0,error,,,,,,,,/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem4L/problem4L_20260929_174417_fbdd_0.log,'_ForwardBDD' object has no attribute 'init_varcount'
+problem4L,fbdd,1,error,,,,,,,,/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem4L/problem4L_20260929_174417_fbdd_1.log,'_ForwardBDD' object has no attribute 'init_varcount'

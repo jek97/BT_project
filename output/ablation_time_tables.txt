@@ -1,0 +1,72 @@
+=== Time to solution (s) -- backend=bdd, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+
+=== Time to solution (s) -- backend=bdd, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+
+=== Time to solution (s) -- backend=fbdd, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+
+=== Time to solution (s) -- backend=fbdd, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+
+=== Time to solution (s) -- backend=fsdd, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L         106.00    113.14         -    131.91    141.01
+M              -     72.38         -    176.65    177.81
+S              -         -         -     89.10     85.81
+
+=== Time to solution (s) -- backend=fsdd, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L         107.73    114.85         -    130.23    138.76
+M              -     74.11         -    179.12    185.95
+S              -         -         -     89.29     87.83
+
+=== Time to solution (s) -- backend=nnf, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L          47.26     48.07         -     37.03     52.05
+M              -     33.79         -     41.26     55.70
+S          73.39    250.62         -     30.80     41.47
+
+=== Time to solution (s) -- backend=nnf, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L          47.28     48.06         -     36.78     51.37
+M              -     33.98         -     40.82     55.56
+S          72.28    248.38         -     30.64     41.48
+
+=== Time to solution (s) -- backend=sdd, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L          44.40     45.50         -     34.19     47.92
+M              -     32.35         -     37.33     51.77
+S              -         -         -         -         -
+
+=== Time to solution (s) -- backend=sdd, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L          44.84     45.95         -     34.57     48.23
+M              -     32.23         -     38.04     52.75
+S              -         -         -         -         -
+
+=== Time to solution (s) -- backend=sddx, propagate_weights=off ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+
+=== Time to solution (s) -- backend=sddx, propagate_weights=on ===
+        problem0  problem1  problem2  problem3  problem4
+L              -         -         -         -         -
+M              -         -         -         -         -
+S              -         -         -         -         -
+

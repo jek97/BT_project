@@ -1,0 +1,26 @@
+====================================================================
+  ProbLog Continuous-Space Safety Verification - 2026-10-05 12:08:24
+====================================================================
+  Problem     : problem5L (/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem5L)
+  Theory file : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/theory/basic_action_theory.pl
+  Obstacles   : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem5L/obstacles_generated.pl (regenerated from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem5L/map.yaml, inflated by 0.820m robot clearance)
+  Config      : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem5L/config_generated.pl (regenerated from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem5L/config.yaml)
+  Plan (BT)   : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem5L/plan_generated.pl (translated + validated from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem5L/behavior_tree.xml)
+  Goal formula: /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem5L/goal_formula.pl (validated against /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/contracts/vocabulary.yaml)
+  Queries     : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem5L/queries_generated.pl (auto-generated from this tree's own per-action Reason universe)
+  Bootstrap   : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/theory/problem_data.pl (points basic_action_theory.pl at /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem5L)
+
+  Started : 12:08:25  (grounding only -- --visual doesn't compile/evaluate)
+  [STAGE] Parse (plan.pl formed) ...
+  [STAGE] Parse (plan.pl formed): done in 0.000s
+  [STAGE] Ground (plan unrolled, regressed to s0) ...
+  [STAGE] Ground (plan unrolled, regressed to s0): done in 0.843s
+    -> 63 ground node(s)
+  Raw export  : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem5L/problem5L_20261005_120824_graphs/ (ground.dot, ground_nodes.json)
+  Interactive : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem5L/problem5L_20261005_120824_ground_graph.html
+  Levels file : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem5L/problem5L_20261005_120824_ground_graph_levels.txt
+  Finished: 12:08:26
+
+====================================================================
+  Log : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem5L/problem5L_20261005_120824_visual.log
+====================================================================

@@ -1,0 +1,30 @@
+====================================================================
+  ProbLog Continuous-Space Safety Verification - 2026-09-28 16:57:23
+====================================================================
+  Log file    : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/output/problem1L/problem1L_20260928_161339_fbdd_1.log
+  Backend     : fbdd  (propagate_weights=True)
+====================================================================
+  ProbLog Continuous-Space Safety Verification (ablation sweep) - 2026-09-28 16:13:39
+====================================================================
+  Problem     : problem1L (/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1L)
+  Theory file : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/theory/basic_action_theory.pl
+  Obstacles   : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1L/obstacles_generated.pl (regenerated from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1L/map.yaml, inflated by 0.820m robot clearance)
+  Config      : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1L/config_generated.pl (regenerated from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1L/config.yaml)
+  Plan (BT)   : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1L/plan_generated.pl (translated + validated from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1L/behavior_tree.xml)
+  Goal formula: /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1L/goal_formula.pl (validated against /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/contracts/vocabulary.yaml)
+  Queries     : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1L/queries_generated.pl (auto-generated from this tree's own per-action Reason universe)
+  Bootstrap   : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/theory/problem_data.pl (points basic_action_theory.pl at /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem1L)
+
+  Started : 16:57:23  (phase timeout: 300s per stage)
+  [STAGE] Parse (plan.pl formed) ...
+  [STAGE] Parse (plan.pl formed): done in 0.000s
+  [STAGE] Ground (plan unrolled, regressed to s0) ...
+  [STAGE] Ground (plan unrolled, regressed to s0): done in 43.694s
+    -> 16999 ground node(s)
+  [STAGE] Compile (knowledge compilation, backend=fbdd) ...
+  [STAGE] Compile (knowledge compilation, backend=fbdd): done in 0.288s
+    -> 16999 compiled node(s)
+  [STAGE] Evaluate (weighted model count against the initial database) ...
+  [STAGE] Evaluate (weighted model count against the initial database): FAILED after 0.004s -- '_ForwardBDD' object has no attribute 'init_varcount'
+
+  [ERROR] Unexpected error running the model: '_ForwardBDD' object has no attribute 'init_varcount'

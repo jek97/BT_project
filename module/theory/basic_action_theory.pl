@@ -4033,18 +4033,47 @@ sample_walk_frac(I, S, WalkFrac) :-
 % WHOLE history (not just the most recent halt/plan), so a future
 % multi-leg plan where an earlier leg/planning call had a different
 % fate than the final one is still handled correctly.
-halted_with(Reason, do(haltMoveto(_,Reason,_), _)).
-halted_with(Reason, do(planned(_Algorithm,Reason), _)).
-halted_with(Reason, do(take_sample(_SampleId,_ActionCode,Reason,_Status), _)).
-halted_with(Reason, do(halt_install_tool(_,Reason,_), _)).
-halted_with(Reason, do(halt_uninstall_tool(_,Reason,_), _)).
-halted_with(Reason, do(halt_deploy_tool(_,Reason,_), _)).
-halted_with(Reason, do(halt_retract_tool(_,Reason,_), _)).
-halted_with(Reason, do(tool_position_result(Reason), _)).
-halted_with(Reason, do(tools_of_kind_result(Reason), _)).
-halted_with(Reason, do(nearest_tool_result(Reason), _)).
-halted_with(Reason, do(hitched_id_result(Reason), _)).
-halted_with(Reason, do(_A, S)) :- halted_with(Reason, S).
+%
+% Implemented in two steps, for grounding speed (times branch,
+% timing_profile.py): situation_reasons/2 collects S's reasons into a
+% list ONCE per situation -- its call key (S, unbound list) is the same
+% for every query, so ProbLog's table answers every later caller -- and
+% halted_with/2 only scans that short list. The previous version walked
+% S from the end back to s0 again for every distinct Reason pattern
+% asked, trying all 12 clauses at each step; same answers either way.
+halt_reason(haltMoveto(_,Reason,_), Reason).
+halt_reason(planned(_Algorithm,Reason), Reason).
+halt_reason(take_sample(_SampleId,_ActionCode,Reason,_Status), Reason).
+halt_reason(halt_install_tool(_,Reason,_), Reason).
+halt_reason(halt_uninstall_tool(_,Reason,_), Reason).
+halt_reason(halt_deploy_tool(_,Reason,_), Reason).
+halt_reason(halt_retract_tool(_,Reason,_), Reason).
+halt_reason(tool_position_result(Reason), Reason).
+halt_reason(tools_of_kind_result(Reason), Reason).
+halt_reason(nearest_tool_result(Reason), Reason).
+halt_reason(hitched_id_result(Reason), Reason).
+
+% situation_reasons(+S, -Reasons): every halt_reason in S's history,
+% most recent first. Each prefix of S is tabled too, so situations that
+% share a history share the work.
+situation_reasons(s0, []).
+situation_reasons(do(A, S), [Reason|Rs]) :-
+    halt_reason(A, Reason), situation_reasons(S, Rs).
+situation_reasons(do(A, S), Rs) :-
+    \+ halt_reason(A, _), situation_reasons(S, Rs).
+
+reason_in(X, [X|_]).
+reason_in(X, [_|T]) :- reason_in(X, T).
+
+halted_with(Reason, S) :- situation_reasons(S, Rs), reason_in(Reason, Rs).
+
+% final_reasons(-Reasons): the reason list of each final situation.
+% Many final situations (one per noise branch) end with the SAME list,
+% and ProbLog's table merges them into ONE answer whose ground node is
+% the OR of those situations. The reason-pattern queries therefore loop
+% over distinct outcomes instead of over every final situation, and
+% never pass the (large) situation term S into a call.
+final_reasons(Rs) :- final_situation(S), situation_reasons(S, Rs).
 
 % visited(+Loc, +Tol, +S): TRUE iff the robot ACTUALLY ARRIVED at
 % Loc=point(GX,GY) -- the endpoint of SOME already-completed leg
@@ -4311,7 +4340,14 @@ match_wild([W|Ws], [W|As]) :-
 % 's own trigger-name -> Reason-functor mapping (e.g. battery_below ->
 % battery_under).
 halted_with_pattern(GroundPattern, ActionCode, S) :-
-    halted_with(Reason, S),
+    situation_reasons(S, Rs), reasons_pattern(GroundPattern, ActionCode, Rs).
+
+% reasons_pattern(+GroundPattern, ?ActionCode, +Reasons): the same match
+% as halted_with_pattern/3, over a situation's reason LIST rather than
+% the situation itself -- see final_reasons/1 for why the queries below
+% go through the list.
+reasons_pattern(GroundPattern, ActionCode, Rs) :-
+    reason_in(Reason, Rs),
     Reason =.. [Functor|Args],
     append(Args0, [ActionCode], Args),
     GroundPattern =.. [Functor|WildArgs],
@@ -4325,7 +4361,7 @@ halted_with_pattern(GroundPattern, ActionCode, S) :-
 % own tree can actually produce, not just the two someone thought to
 % hand-write).
 any_reason_pattern(GroundPattern) :-
-    final_situation(S), halted_with_pattern(GroundPattern, _ActionCode, S).
+    final_reasons(Rs), reasons_pattern(GroundPattern, _ActionCode, Rs).
 
 % any_reason_pattern_by_action(+GroundPattern, +ActionCode): the SAME
 % probability, split by WHICH MoveTo occurrence produced it -- e.g.
@@ -4333,7 +4369,7 @@ any_reason_pattern(GroundPattern) :-
 % exactly "20% on the goto-goal leg, 10% on the goto-home leg" for a
 % combined any_reason_pattern(crashed(wild)) of 30%.
 any_reason_pattern_by_action(GroundPattern, ActionCode) :-
-    final_situation(S), halted_with_pattern(GroundPattern, ActionCode, S).
+    final_reasons(Rs), reasons_pattern(GroundPattern, ActionCode, Rs).
 
 % halted_with_pattern_detail(+Pattern, +ActionCode, +S): the DELIBERATE
 % OPPOSITE of halted_with_pattern/3's own ground-only discipline --
@@ -4352,7 +4388,10 @@ any_reason_pattern_by_action(GroundPattern, ActionCode) :-
 % single aggregated total -- see main.py's print_reason_breakdown for
 % how the two are nested together in the report.
 halted_with_pattern_detail(Pattern, ActionCode, S) :-
-    halted_with(Reason, S),
+    situation_reasons(S, Rs), reasons_pattern_detail(Pattern, ActionCode, Rs).
+
+reasons_pattern_detail(Pattern, ActionCode, Rs) :-
+    reason_in(Reason, Rs),
     Reason =.. [Functor|Args],
     append(Args0, [ActionCode], Args),
     Pattern =.. [Functor|Args0].
@@ -4370,7 +4409,7 @@ halted_with_pattern_detail(Pattern, ActionCode, S) :-
 % completed, ...) has no meaningful detail level beyond its own
 % aggregate and gets no companion query at all.
 any_reason_pattern_detail_by_action(Pattern, ActionCode) :-
-    final_situation(S), halted_with_pattern_detail(Pattern, ActionCode, S).
+    final_reasons(Rs), reasons_pattern_detail(Pattern, ActionCode, Rs).
 
 % any_condition_status(+Code, +Status): P(the cond() leaf identified by
 % Code was actually checked, AND its own Status came out this way, in

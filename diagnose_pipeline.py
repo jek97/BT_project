@@ -21,7 +21,7 @@ bt_to_prolog.py doesn't support yet -- so `main.py --problem problem3`
 fails at the translation step, before ever reaching ProbLog at all.
 This script skips that translation step entirely and consults
 <problem>/plan_generated.pl exactly as it already sits on disk,
-regenerating only obstacles_generated.pl/config_generated.pl
+regenerating only config_generated.pl
 (map.yaml/config.yaml aren't affected by the Inverter gap) and
 re-validating goal_formula.pl (also unaffected, and cheap).
 
@@ -107,16 +107,6 @@ def main():
 
     if TRANSLATORS_DIR not in sys.path:
         sys.path.insert(0, TRANSLATORS_DIR)
-    try:
-        from occgrid_to_problog import generate as generate_obstacles
-        generate_obstacles(
-            yaml_path=os.path.join(problem_dir, "map.yaml"),
-            output_path=os.path.join(problem_dir, "obstacles_generated.pl"))
-        tee(f"  [STAGE] Obstacles regenerated from map.yaml: done")
-    except Exception as e:
-        tee(f"  [ERROR] Could not regenerate obstacles_generated.pl: {e}")
-        sys.exit(1)
-
     try:
         from config_to_prolog import generate as generate_config
         generate_config(

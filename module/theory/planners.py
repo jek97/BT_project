@@ -39,11 +39,11 @@ same underlying A*/spline computation and neither should reimplement it:
      There is deliberately no Goal parameter here -- see
      _follow_boarder_control_points's own header.
 
-     ONE OBSTACLE REPRESENTATION FOR EVERY PLANNER: obstacle_polygon/2
-     in obstacles_generated.pl is already inflated by safety_margin
-     (robot_radius+safety_buffer -- see occgrid_to_problog.py's own
-     module docstring) -- the SAME polygon set collision_geometry.py
-     itself reads. plan_astar and plan_voronoi both route through it
+     ONE OBSTACLE REPRESENTATION FOR EVERY PLANNER: the obstacle
+     polygons (module/theory/obstacle_map.py, built in memory from
+     map.yaml) are already inflated by safety_margin
+     (robot_radius+safety_buffer) -- the SAME polygon set
+     collision_geometry.py itself uses. plan_astar and plan_voronoi both route through it
      directly, with NO additional inflation of their own: SAFETY_MARGIN_M
      below (computed the same way, from THIS SAME problem's own
      config.yaml) is what plan_astar's raster grid gets dilated by ONCE
@@ -109,7 +109,6 @@ module is now their only caller.
 import heapq
 import math
 import os
-import re
 import sys
 
 import numpy as np
@@ -120,7 +119,7 @@ from scipy.spatial import Voronoi
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
 
-# Which problem's own data (map.yaml, obstacles_generated.pl) to load --
+# Which problem's own data (map.yaml, config.yaml) to load --
 # set by main.py via BT_PROBLEM_DIR before this module is imported;
 # defaults to problems/problem0/ so this module still works standalone
 # (e.g. `problog basic_action_theory.pl` run directly, or this file
@@ -134,12 +133,14 @@ _PROBLEM_DIR = os.environ.get("BT_PROBLEM_DIR", _DEFAULT_PROBLEM_DIR)
 # so PLANNING_INFLATE_M below (this file's own copy of the SAME amount,
 # used to inflate plan_astar's raster grid, and to correct
 # follow_boarder's own Offset argument) can never drift out of sync
-# with the inflation already baked into obstacle_polygon/2 by
-# occgrid_to_problog.py.
+# with the inflation already baked into the obstacle polygons by
+# obstacle_map.py.
 _TRANSLATORS_DIR = os.path.join(_PROJECT_ROOT, "module", "translators")
-if _TRANSLATORS_DIR not in sys.path:
-    sys.path.insert(0, _TRANSLATORS_DIR)
+for _p in (_TRANSLATORS_DIR, _THIS_DIR):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 from config_to_prolog import load_config  # noqa: E402
+import obstacle_map  # noqa: E402  (plain module, no ProbLog predicates)
 
 _config = load_config(config_path=os.path.join(_PROBLEM_DIR, "config.yaml"))
 ROBOT_RADIUS_M = float(_config["robot"]["radius"])
@@ -408,7 +409,6 @@ def bspline_to_bezier_chain(tck):
 
 
 MAP_YAML_PATH = os.path.join(_PROBLEM_DIR, "map.yaml")
-_OBSTACLES_PATH = os.path.join(_PROBLEM_DIR, "obstacles_generated.pl")
 
 # A*'s own raster-grid inflation amount -- SAFETY_MARGIN_M (robot_radius
 # +safety_buffer, this problem's own config.yaml), the SAME amount
@@ -442,72 +442,26 @@ except Exception as exc:  # noqa: BLE001 -- deliberately broad: ANY load
     _MAP_LOAD_ERROR = exc
 
 
-# -- load obstacle polygons ONCE at import time --------------------------
-# Same source file, same tiny regex parser as collision_geometry.py's own
-# OBSTACLE_POLYGONS -- DELIBERATELY duplicated rather than imported from
-# there: both files are independently `:- use_module(...)`'d by ProbLog
-# (problog.clausedb.load_external_module execs each one fresh via its own
-# SourceFileLoader, with problog_export.database pointed at whichever
-# ClauseDB is loading it at that moment), and having one black-box module
-# `import` the other would run its @problog_export_nondet-decorated
-# predicates a second time under an unverified context -- not a risk
-# worth taking for ~15 lines of stable parsing code. Every other black
-# box in this project already owns its own data loading independently
-# (this file's own map.yaml load above, collision_geometry.py's
-# obstacles_generated.pl load) -- this follows the same convention.
+# -- obstacle polygons, built ONCE per process --------------------------
+# From module/theory/obstacle_map.py: built in memory from this
+# problem's own map.yaml and cached there, so collision_geometry.py and
+# this file share the SAME copy. obstacle_map is imported as a plain
+# Python module (it registers no ProbLog predicates), so importing it
+# from two ProbLog black boxes is safe -- unlike importing one black box
+# from the other, which would re-run its @problog_export_nondet
+# decorators under ProbLog's loader.
 #
-# obstacle_polygon/2 (see occgrid_to_problog.py's own module docstring)
-# is the ONLY obstacle geometry this project generates -- already
-# inflated by safety_margin, and read here by BOTH follow_boarder
-# (unchanged, needs ID correspondence with collision detection's own
-# reports) AND plan_voronoi (samples its boundary directly, see
+# These polygons are the ONLY obstacle geometry this project builds --
+# already inflated by safety_margin, and read here by BOTH
+# follow_boarder (needs ID correspondence with collision detection's
+# own reports) AND plan_voronoi (samples its boundary directly, see
 # _voronoi_sites below) -- no separate "planning" family to keep in
 # sync.
-_POINT_RE = re.compile(r"point\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)")
-
-
-def _strip_prolog_comments(text):
-    return re.sub(r"%.*$", "", text, flags=re.MULTILINE)
-
-
-def _parse_obstacle_polygons(text):
-    """Returns [(id, [(x,y),...]), ...] (each obstacle's own OUTER
-    boundary only) -- see collision_geometry.py's own identical
-    function for the full rationale, and _parse_obstacle_holes below
-    for how a hole (if any) gets folded back in."""
-    polys = []
-    for m in re.finditer(r"obstacle_polygon\(([^,]+),\s*\[(.*?)\]\s*\)\s*\.", text, re.S):
-        obstacle_id = m.group(1).strip()
-        pts = [(float(x), float(y)) for x, y in _POINT_RE.findall(m.group(2))]
-        if len(pts) >= 3:
-            polys.append((obstacle_id, pts))
-    return polys
-
-
-def _parse_obstacle_holes(text):
-    """Returns {id: [hole_points, ...]} -- see collision_geometry.py's
-    own identical function for the full rationale."""
-    holes = {}
-    for m in re.finditer(r"obstacle_hole\(([^,]+),\s*\[(.*?)\]\s*\)\s*\.", text, re.S):
-        obstacle_id = m.group(1).strip()
-        pts = [(float(x), float(y)) for x, y in _POINT_RE.findall(m.group(2))]
-        if len(pts) >= 3:
-            holes.setdefault(obstacle_id, []).append(pts)
-    return holes
-
-
-try:
-    with open(_OBSTACLES_PATH) as f:
-        _obstacles_text = _strip_prolog_comments(f.read())
-    # _OBSTACLE_POLYGONS is [(id, rings), ...], rings = [outer_points,
-    # hole1_points, ...] -- rings[0] is ALWAYS the outer boundary, see
-    # collision_geometry.py's own OBSTACLE_POLYGONS note for the full
-    # rationale (identical representation, independent copy).
-    _holes_by_id = _parse_obstacle_holes(_obstacles_text)
-    _OBSTACLE_POLYGONS = [(obstacle_id, [outer_points] + _holes_by_id.get(obstacle_id, []))
-                           for obstacle_id, outer_points in _parse_obstacle_polygons(_obstacles_text)]
-except FileNotFoundError:
-    _OBSTACLE_POLYGONS = []
+#
+# _OBSTACLE_POLYGONS is [(id, rings), ...], rings = [outer_points,
+# hole1_points, ...] -- rings[0] is ALWAYS the outer boundary, see
+# obstacle_map.py's own docstring.
+_OBSTACLE_POLYGONS = obstacle_map.obstacle_polygons(_PROBLEM_DIR)
 
 
 # =====================================================================

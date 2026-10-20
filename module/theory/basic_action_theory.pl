@@ -1,9 +1,9 @@
 % ============================================================
 % ProbLog -- CONTINUOUS-TIME / CONTINUOUS-SPACE moveto()
 %
-%   - obstacles: POLYGONS (auto-generated from a nav_msgs/
-%     OccupancyGrid by occgrid_to_problog.py, see companion file
-%     obstacles_generated.pl)
+%   - obstacles: built from a nav_msgs/OccupancyGrid (map.yaml) in
+%     memory by the Python black boxes (module/theory/obstacle_map.py);
+%     no obstacle facts in the Prolog program itself
 %   - nominal trajectory: a single cubic-Bezier SPLINE, given as
 %     a control-point list, evaluated by CLOSED-FORM arithmetic
 %     (no discretized time-steps in the action theory itself)
@@ -59,8 +59,8 @@
 % ============================================================
 
 % ---------------------------------------------------------------
-% 0. PROBLEM-SPECIFIC DATA -- obstacles, tunable config, the BT policy,
-%    and the goal formula ALL come from problem_data.pl, a small
+% 0. PROBLEM-SPECIFIC DATA -- tunable config, the BT policy, and the
+%    goal formula ALL come from problem_data.pl, a small
 %    AUTO-GENERATED bootstrap file living next to this one
 %    (module/theory/problem_data.pl), rewritten by main.py on every
 %    run to point (via absolute paths) at whichever problem was
@@ -71,10 +71,15 @@
 %    paths into THIS file -- is what lets the same theory serve any
 %    problem folder without ever being hand-edited itself.
 %
+%    Obstacles are NOT part of the Prolog program: the theory never
+%    reads obstacle geometry itself. The Python black boxes it
+%    :- use_module()s below (collision_geometry.py, planners.py) build
+%    the obstacle map from the problem's own map.yaml, in memory, once
+%    (module/theory/obstacle_map.py), and every geometric question
+%    (collision, obstacle_in_bound, line of sight, follow_boarder, ...)
+%    is a call into them.
+%
 %    problem_data.pl provides:
-%      - obstacle_polygon/2   from obstacles_generated.pl, itself
-%                              generated from map.yaml by
-%                              module/translators/occgrid_to_problog.py.
 %      - start/1, robot_radius/1, safety_buffer/1, speed/1, sigma/1,
 %        sigma_tangential/1, sigma_battery/1, battery_start/1,
 %        idle_drain_rate/1, moving_drain_rate/1,
@@ -94,34 +99,9 @@
 %                              goal_formula.pl, validated against
 %                              module/contracts/vocabulary.yaml by
 %                              module/contracts/goal_formula_check.py.
-%    main.py regenerates/validates all four automatically before every
+%    main.py regenerates/validates all three automatically before every
 %    run -- you never need to run a generator by hand for a normal run.
 % ---------------------------------------------------------------
-% Fallback clause so obstacle_polygon/2 is always a KNOWN predicate to
-% ProbLog even if problem_data.pl's own obstacles_generated.pl defines
-% zero real obstacles (its body always fails, so it never contributes
-% an actual obstacle).
-obstacle_polygon(no_obstacles_placeholder, []) :- fail.
-
-% obstacle_hole/2: the ADDITIVE counterpart to obstacle_polygon/2 --
-% zero or more per obstacle Id, each one a HOLLOW interior boundary
-% WITHIN that same obstacle (e.g. a perimeter fence's own inner face,
-% surrounding the walkable ground inside it) -- see occgrid_to_
-% problog.py's own module docstring for how these get extracted
-% (cv2.RETR_CCOMP, a two-level contour hierarchy) and module/theory/
-% collision_geometry.py's own OBSTACLE_POLYGONS/_inside_polygon note
-% for how every consumer (collision_geometry.py AND planners.py)
-% combines an obstacle's own outer+hole rings back into ONE
-% containment/clearance test, so a hole's own free interior correctly
-% reads as free space rather than "inside the obstacle". An ordinary,
-% hole-less obstacle (a tree, a building) has ZERO obstacle_hole facts
-% and behaves exactly as it always has. Same "always a KNOWN predicate"
-% placeholder-clause fix as obstacle_polygon/2 above, for the SAME
-% reason (a problem whose own map has no holes at all -- the common
-% case -- would otherwise have ZERO obstacle_hole facts anywhere in
-% the loaded program).
-obstacle_hole(no_obstacle_holes_placeholder, []) :- fail.
-
 :- consult('./problem_data.pl').
 % Must exist relative to wherever this file itself lives (module/theory/),
 % not CWD -- same resolution rule every consult/use_module directive in
@@ -284,13 +264,13 @@ sum_list([H|T], Sum) :- sum_list(T, SumT), Sum is H + SumT.
 % trigger-list entry's argument.
 safety_margin(M) :- robot_radius(R), safety_buffer(B), M is R + B.
 
-% MAP-PREPROCESSING INFLATION: <problem>/obstacles_generated.pl's own
-% obstacle_polygon/2 facts are no longer the map's raw occupied cells --
-% module/translators/occgrid_to_problog.py's own generate() now
-% inflates the occupied mask by safety_margin/1's own value (main.py
-% passes robot_radius+safety_buffer straight through, computed from
-% THIS SAME problem's own config.yaml) BEFORE extracting polygons -- see
-% that file's own module docstring. So `collision` (a robot's own
+% MAP-PREPROCESSING INFLATION: the obstacles the Python black boxes use
+% are not the map's raw occupied cells -- module/theory/obstacle_map.py
+% inflates the occupied mask by safety_margin/1's own value
+% (robot_radius+safety_buffer, from THIS SAME problem's own
+% config.yaml) BEFORE extracting polygons, and collision_geometry.py's
+% raster distance map uses the same inflation -- see those files' own
+% module docstrings. So `collision` (a robot's own
 % CENTER point coming into physical contact with an obstacle, once its
 % own radius+buffer are accounted for) is now a bare containment/
 % contact test against the ALREADY-INFLATED polygon -- first_collision_
@@ -306,15 +286,6 @@ safety_margin(M) :- robot_radius(R), safety_buffer(B), M is R + B.
 % inflated polygons): see clearance_adjusted_threshold/2 immediately
 % below, used at every one of their call sites (trigger_crossing_time/11,
 % holds/2, and holds_leg/9).
-%
-% obstacles_generated.pl also carries a SECOND, SEPARATE family,
-% obstacle_polygon_planning/2 -- inflated by robot_radius ALONE, no
-% safety_buffer -- that collision_geometry.py never reads at all; it
-% is planners.py's own plan_voronoi that routes through it (and
-% plan_astar's raster grid, independently, at the same robot_radius-
-% only amount). See occgrid_to_problog.py's own module docstring, "TWO
-% INFLATION LEVELS, ONE FILE", and planners.py's own module docstring
-% for the full split.
 %
 % clearance_adjusted_threshold(+Threshold, -Adjusted): Adjusted is
 % Threshold minus safety_margin -- can go negative (a caller asking for

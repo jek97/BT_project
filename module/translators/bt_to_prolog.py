@@ -53,9 +53,8 @@ plan_generated.pl, a single plan/1 FACT (not a clause with a body --
 see below), which basic_action_theory.pl consults (via its
 problem_data.pl bootstrap -- see that file's Section 0) instead of
 hand-defining plan/1 itself. This mirrors the existing
-generated-artifact pattern (config_generated.pl, obstacles_generated.pl,
-both written by this file's own sibling translators into the same
-problem directory): the XML is the single source of truth for the
+generated-artifact pattern (config_generated.pl, written by this
+file's own sibling translator into the same problem directory): the XML is the single source of truth for the
 POLICY'S SHAPE from now on -- change the tree by editing the XML and
 re-running, not by hand-editing basic_action_theory.pl.
 main.py regenerates it automatically before every run, exactly like it

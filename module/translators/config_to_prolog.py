@@ -8,11 +8,10 @@ define inline (robot_radius/1, sigma/1, battery_start/1, the z/2 and
 zbatt/1 annotated disjunctions, etc.) -- see config.yaml's own header
 for the full rationale.
 
-This mirrors an ALREADY-ESTABLISHED project pattern: occgrid_to_problog.py
-generates obstacles_generated.pl from a map, and bt_to_prolog.py
-generates plan_generated.pl from a BT.cpp XML tree -- both siblings of
-this file in module/translators/, both writing into the SAME problem
-directory this file does. config_generated.pl is a third instance of
+This mirrors an ALREADY-ESTABLISHED project pattern: bt_to_prolog.py
+generates plan_generated.pl from a BT.cpp XML tree -- a sibling of
+this file in module/translators/, writing into the SAME problem
+directory this file does. config_generated.pl is a second instance of
 the same "source data -> generated Prolog facts, consulted separately"
 shape, just with config.yaml as the source instead of a map or a plan.
 

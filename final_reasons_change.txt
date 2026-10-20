@@ -1,0 +1,141 @@
+FINAL REASONS INSTEAD OF FINAL SITUATIONS -- what changed in grounding
+=====================================================================
+Branch: times. File: module/theory/basic_action_theory.pl (section 7,
+SAFETY QUERIES). Measured on problems/problem3L with timing_profile.py.
+
+
+1. How ProbLog handles the queries
+----------------------------------
+ProbLog does not ground "all queries at once". It:
+  1. grounds the queries ONE AFTER ANOTHER. Each query(...) gets its
+     own SLD proof search, but all of them write into ONE shared
+     ground graph and ONE shared table (cache of already-solved goals);
+  2. compiles that single graph once;
+  3. evaluates every query's probability from the compiled graph.
+
+The table means a sub-goal is solved only once: final_situation(S) is
+computed by the first query that needs it (14.8 s for problem3L) and
+every later query reads its answers from the table. But reading the
+table is not free: a query still runs its OWN body once for EVERY
+answer of the sub-goal it calls.
+
+
+2. The final situations
+-----------------------
+final_situation(S) :- plan(Node), do_node(Node, s0, S, Outcome), ...
+
+For problem3L this has 766 answers: one final situation per
+combination of noise outcomes (z, zt, zbatt, sample draws). Each one is
+a nested situation term 10-11 actions deep, ~550 characters, mostly
+the control-point lists stored in startMoveto(...):
+
+  do(checked(c4,...), do(haltMoveto(84.12, completed(a5), true),
+    do(startMoveto([point(31.0,-5.0), ...10 points...], ...),
+      do(planned(straight, completed(...)), ... s0)))))
+
+In the ground graph each final situation is one AND node: the
+conjunction of the probabilistic choices that lead to it.
+
+
+3. BEFORE: every reason query inspected every final situation
+-------------------------------------------------------------
+any_reason_pattern(P) :-
+    final_situation(S), halted_with_pattern(P, _ActionCode, S).
+
+For each of the 28 reason queries (any_reason_pattern/1,
+any_reason_pattern_by_action/2, any_reason_pattern_detail_by_action/2):
+  - loop over all 766 final situations;
+  - for each, call halted_with_pattern(P, _, S), which calls
+    halted_with(Reason, S), which walks S from the last action back to
+    s0 looking for a halting action (haltMoveto, planned, take_sample,
+    ...) whose Reason matches P;
+  - the query's ground node becomes an OR with one child per final
+    situation where it matched (e.g. 766 children for
+    any_reason_pattern(completed)).
+
+Cost: ~0.95 s per query, x 28 queries = ~27 s. The walk itself was
+cheap (mostly answered from the table). The cost was the ~16,000 calls
+that each received the large term S: for every call the engine copies
+S into the clause, checks whether it is ground, and hashes it for the
+table -- all proportional to the size of S.
+
+
+4. AFTER: summarise once, then query the summary
+------------------------------------------------
+  % every halting reason recorded in S, most recent first
+  situation_reasons(s0, []).
+  situation_reasons(do(A,S), [R|Rs]) :- halt_reason(A, R), situation_reasons(S, Rs).
+  situation_reasons(do(A,S), Rs)     :- \+ halt_reason(A, _), situation_reasons(S, Rs).
+
+  final_reasons(Rs) :- final_situation(S), situation_reasons(S, Rs).
+
+  any_reason_pattern(P) :- final_reasons(Rs), reasons_pattern(P, _, Rs).
+  (same for _by_action and _detail_by_action)
+
+  - final_reasons/1 is computed ONCE (0.23 s) and tabled: every final
+    situation is turned into its short list of reasons.
+  - Many final situations end with the SAME list. ProbLog's table keeps
+    one answer per distinct list, with a ground node that is the OR of
+    all the final situations producing it. problem3L: 766 final
+    situations -> 46 distinct reason lists.
+  - Each reason query then loops over 46 short lists instead of 766
+    situations, and never passes S into a call.
+
+halt_reason/2 lists the halting actions (one fact per action functor,
+indexed on the action), replacing the 12 clauses halted_with/2 used to
+try at every step. halted_with/2, halted_with_pattern/3 and
+halted_with_pattern_detail/3 still exist with the same meaning (now
+built on situation_reasons/2), so their other callers are unaffected.
+
+
+5. Effect on the ground graph
+-----------------------------
+                                   before          after
+  ground nodes                     18,137          18,158 (+21 OR)
+  edges                            46,890          46,288 (-602)
+  atoms / AND nodes                1,314 / 16,144  unchanged
+  derivation levels 2-11           --              unchanged
+
+  Unchanged: the plan unrolling, the noise atoms, the 766 final-
+  situation AND nodes and everything below them.
+  New: a layer of OR nodes, one per distinct reason list grouping the
+  final situations that share it (36 new; the other 10 lists come from
+  a single situation and reuse its AND node). They appear at level 1,
+  just under the query roots (1,092 -> 1,110 nodes at level 1).
+  Changed: the roots of the 29 reason queries now point at the
+  groups instead of at the final situations directly:
+
+    any_reason_pattern(completed)            OR of 766 -> OR of 46
+    any_reason_pattern(battery_depleted)     OR of 432 -> OR of 18
+    any_reason_pattern(sample_success(..))   OR of 756 -> OR of 36
+    any_reason_pattern_detail_by_action(sample_success(x,y,v,..),a3)
+                                             OR of 42  -> OR of 2
+
+Why the probabilities cannot change: "some final situation has reason
+X" and "some group of final situations whose reason list contains X"
+are the same Boolean formula -- the groups are just the final
+situations partitioned by their reason list. Verified: all 128 query
+probabilities are bit-identical to the baseline.
+
+
+6. Timing (problem3L, grounding only)
+-------------------------------------
+  before   32.9 s
+  after    18.7 s   (-43%)
+  reason queries: ~0.95 s each -> ~0.05 s each
+
+(After this change, ~71% of grounding is building the final situations
+themselves -- do_node/poss and the collision checks. The collision
+checks were then moved to a raster distance map in
+module/theory/collision_geometry.py, bringing grounding to 14.5 s.)
+
+
+7. Something to keep in mind
+----------------------------
+The number of distinct reason lists drives the cost of every reason
+query. In problem3L it is 46 rather than ~5 because sample_success/
+sample_failure carry continuous values (sample position x, y and
+sample value), so each sampled position yields its own list. Coarser
+reasons (e.g. dropping the coordinates, or collision(obsN) ->
+collision) reduce the groups further, at the price of the queries no
+longer distinguishing those values.

@@ -270,7 +270,7 @@ def write_problem_data_pl(problem_data_path, problem_dir, goal_formula_path,
                            run_label, tee=None):
     """Write module/theory/problem_data.pl's bootstrap consult chain,
     pointing (via absolute paths) at one problem directory's own
-    obstacles_generated.pl / config_generated.pl / plan_generated.pl /
+    config_generated.pl / plan_generated.pl /
     queries_generated.pl, plus goal_formula_path -- the SAME shape
     main.py always wrote inline, factored out here so main.py and
     diagnose_pipeline.py (which deliberately does NOT translate
@@ -286,7 +286,6 @@ def write_problem_data_pl(problem_data_path, problem_dir, goal_formula_path,
             "% problem was last selected -- see basic_action_theory.pl's\n"
             "% own Section 0 for how this file is used and regenerated.\n"
             f"% ({run_label})\n\n"
-            f":- consult('{os.path.join(problem_dir, 'obstacles_generated.pl')}').\n"
             f":- consult('{os.path.join(problem_dir, 'config_generated.pl')}').\n"
             f":- consult('{os.path.join(problem_dir, 'plan_generated.pl')}').\n"
             f":- consult('{goal_formula_path}').\n"

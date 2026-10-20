@@ -8,7 +8,7 @@ problem (problems/<name>/, default "problem0") and produces a full
 safety report, analogous in spirit to run_plan_weave_safety.py but
 re-indexed from "discrete grid step N" to "sampled instant I along the
 one continuous walk", and from "grid obstacle cells" to "obstacle
-polygons" (as produced by module/translators/occgrid_to_problog.py).
+polygons" (built in memory from map.yaml by module/theory/obstacle_map.py).
 
 Prints a COMPACT summary (the problem's own goal_formula.pl, plus TWO
 probability tables) rather than the earlier verbose per-sample report.
@@ -52,10 +52,11 @@ Usage:
         config.yaml, behavior_tree.xml, goal_formula.pl, and map.yaml)
 
 Before running inference, this script, for the SELECTED problem:
-  1. regenerates <problem>/obstacles_generated.pl from
-     <problem>/map.yaml (see module/translators/occgrid_to_problog.py's
-     own header) -- map.yaml is the single source of truth for the
-     obstacle layout.
+  1. builds the obstacle map from <problem>/map.yaml, in memory (see
+     module/theory/obstacle_map.py's own header) -- map.yaml is the
+     single source of truth for the obstacle layout; nothing is written
+     and the Prolog theory never reads it, only the Python black boxes
+     (collision_geometry.py, planners.py) do, sharing this same copy.
   2. regenerates <problem>/config_generated.pl from <problem>/config.yaml
      (see module/translators/config_to_prolog.py's own header) --
      config.yaml is the single source of truth for every tunable
@@ -119,6 +120,7 @@ single-run version already used.
 
 import argparse
 import csv
+import json
 import os
 import re
 import shutil
@@ -133,6 +135,7 @@ from problog.formula import LogicFormula
 from pipeline_stages import run_staged_inference, write_problem_data_pl, StageTimeout, run_stage
 from module.theory.graph_export import export_ground_graph
 import visualize_interactive
+import sld_tree
 
 # ProbLog knowledge-compilation backends this ablation sweeps over (via
 # get_evaluatable(name=...)) -- deliberately EXCLUDES "kbest": that's
@@ -658,6 +661,18 @@ def main():
                           "run_visual's own docstring. Mutually "
                           "exclusive with --ablation-study; does not "
                           "support --problem all (pick one problem).")
+    ap.add_argument("--sld-query", default="verify_goal_formula",
+                     help="With --visual: the query whose SLD tree is "
+                          "also written (<problem>_<ts>_sld_tree.html) -- "
+                          "ProbLog's own resolution of that one query as "
+                          "executed, one node per call/clause tried, "
+                          "nothing merged (see sld_tree.py). Any goal, e.g. "
+                          "'any_reason_pattern(completed)'. Default: "
+                          "verify_goal_formula. Pass '' to skip.")
+    ap.add_argument("--sld-max-nodes", type=int, default=1_000_000,
+                     help="With --visual: stop recording the SLD tree after "
+                          "this many nodes (the tree is marked truncated; "
+                          "default 1,000,000).")
     ap.add_argument("--phase-timeout", type=int, default=300,
                      help="Timeout in seconds applied to every stage of "
                           "the ProbLog resolution pipeline (parse/ground/"
@@ -746,7 +761,8 @@ def main():
         problem_names = [args.problem]
 
     if args.visual:
-        ok = run_visual(problem_names[0], phase_timeout_arg)
+        ok = run_visual(problem_names[0], phase_timeout_arg,
+                        sld_query=args.sld_query, sld_max_nodes=args.sld_max_nodes)
         if not ok:
             sys.exit(1)
         return
@@ -841,8 +857,8 @@ def run_shared_setup(problem_name, run_label_suffix):
 
     # Every Python black box basic_action_theory.pl :- use_module()s
     # (planners.py, collision_geometry.py) reads BT_PROBLEM_DIR at
-    # IMPORT time to find this problem's own map.yaml/config.yaml/
-    # obstacles_generated.pl -- must be set before ProbLog ever loads
+    # IMPORT time to find this problem's own map.yaml/config.yaml
+    # -- must be set before ProbLog ever loads
     # the theory (see run_problog_api below).
     os.environ["BT_PROBLEM_DIR"] = problem_dir
 
@@ -854,21 +870,18 @@ def run_shared_setup(problem_name, run_label_suffix):
 
     if TRANSLATORS_DIR not in sys.path:
         sys.path.insert(0, TRANSLATORS_DIR)
+    if THEORY_DIR not in sys.path:
+        sys.path.insert(0, THEORY_DIR)
     try:
-        from occgrid_to_problog import generate as generate_obstacles
-        from config_to_prolog import load_config
-        _robot_config = load_config(config_path=os.path.join(problem_dir, "config.yaml"))
-        clearance_m = (float(_robot_config["robot"]["radius"])
-                        + float(_robot_config["robot"]["safety_buffer"]))
-        generated_obstacles_path = generate_obstacles(
-            yaml_path=os.path.join(problem_dir, "map.yaml"),
-            output_path=os.path.join(problem_dir, "obstacles_generated.pl"),
-            clearance_m=clearance_m)
-        setup(f"  Obstacles   : {generated_obstacles_path} (regenerated from "
-              f"{os.path.join(problem_dir, 'map.yaml')}, inflated by "
-              f"{clearance_m:.3f}m robot clearance)")
+        # Built here once and cached in the obstacle_map module, which
+        # the black boxes import under the same name -- they reuse it.
+        import obstacle_map
+        polygons = obstacle_map.obstacle_polygons(problem_dir)
+        setup(f"  Obstacles   : {len(polygons)} obstacle region(s), in memory from "
+              f"{os.path.join(problem_dir, 'map.yaml')} (inflated by "
+              f"{obstacle_map.clearance_m(problem_dir):.3f}m robot clearance)")
     except Exception as e:
-        setup(f"\n  [ERROR] Could not regenerate obstacles_generated.pl: {e}")
+        setup(f"\n  [ERROR] Could not build the obstacle map from map.yaml: {e}")
         return None
 
     try:
@@ -1028,7 +1041,8 @@ def run_single(args, problem_name, phase_timeout_arg):
     return True
 
 
-def run_visual(problem_name, phase_timeout_arg):
+def run_visual(problem_name, phase_timeout_arg, sld_query="verify_goal_formula",
+               sld_max_nodes=1_000_000):
     """--visual mode: grounds problem_name's own theory (Parse+Ground
     ONLY -- Compile/Evaluate are skipped entirely, since a probability
     isn't needed for this, just the ground graph itself) and writes:
@@ -1043,6 +1057,13 @@ def run_visual(problem_name, phase_timeout_arg):
         ground_nodes.json: the raw export (module/theory/
         graph_export.py) both of the above are built from, kept
         alongside for anyone who wants the raw data directly.
+      - output/<problem>/<problem>_<ts>_sld_tree.html (+ _graphs/
+        sld_tree.json): the SLD tree of sld_query -- ProbLog's own
+        resolution of that one query, grounded alone, one node per
+        call / clause / fact / choice as executed, nothing merged (a
+        call answered from ProbLog's table is its own leaf, linked to
+        where it was derived) -- see sld_tree.py. Skipped if sld_query
+        is empty.
     Also writes its own <problem>_<ts>_visual.log (Parse/Ground timing,
     same [STAGE]-line convention as every other mode). Returns True on
     success, False on any failure (already printed/logged)."""
@@ -1108,6 +1129,29 @@ def run_visual(problem_name, phase_timeout_arg):
         except Exception as e:
             tee(f"\n  [ERROR] Could not build the visualization: {e}")
             return False
+
+        if sld_query:
+            try:
+                tee(f"  [STAGE] SLD tree of {sld_query} (grounded alone, traced) ...")
+                sld = sld_tree.trace_query(THEORY_PATH, sld_query, sld_max_nodes)
+                stats = sld_tree.tree_stats(sld)
+                sld_path = os.path.join(problem_output_dir, f"{problem_name}_{ts}_sld_tree.html")
+                sld_tree.write_sld_html(sld, sld_path,
+                                        f"{problem_name} -- SLD tree of {sld_query}")
+                with open(os.path.join(graphs_dir, "sld_tree.json"), "w") as f:
+                    json.dump(sld, f, separators=(",", ":"))
+                tee(f"  [STAGE] SLD tree: done in {sld['ground_seconds']:.3f}s -> "
+                    f"{stats['nodes']} node(s): " +
+                    ", ".join(f"{v} {k}" for k, v in stats["by_kind"].items() if v and k != "root") +
+                    f"; {stats['from_table']} from table, {stats['failed']} failed branch(es)"
+                    + (" [TRUNCATED]" if sld["truncated"] else ""))
+                tee(f"  SLD work    : {stats['useful_nodes']} useful step(s) "
+                    f"({stats['useful_seconds']:.2f}s), {stats['dead_nodes']} dead-end step(s) "
+                    f"({stats['dead_seconds']:.2f}s)")
+                tee(f"  SLD tree    : {sld_path}")
+            except Exception as e:
+                tee(f"\n  [ERROR] Could not build the SLD tree of {sld_query}: {e}")
+                return False
 
         tee(f"  Finished: {datetime.now():%H:%M:%S}")
         tee("")

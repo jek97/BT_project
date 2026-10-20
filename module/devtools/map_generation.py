@@ -14,8 +14,8 @@ on the /map topic. Cell values follow the map_server convention:
 
 To use the result for a real problem, run this from (or copy its output
 into) that problem's own directory, e.g. problems/<name>/map.yaml +
-map.pgm -- main.py's own pre-flight translator
-(module/translators/occgrid_to_problog.py) reads map.yaml from there.
+map.pgm -- the theory's Python black boxes build the obstacle map
+from there (module/theory/obstacle_map.py).
 """
 import os
 import numpy as np

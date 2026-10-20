@@ -31,18 +31,21 @@ problem, so no reason to pay Reiter's machinery's cost" argument already
 used to justify planWith/plan_call being a Python black box instead of
 Prolog clauses.
 
-CORRECTNESS: the algorithm below is a LINE-FOR-LINE port of
-basic_action_theory.pl's former Prolog implementation (same bracket-scan
-sample count, same bisection epsilon, same spline/noise formulas) --
-not a re-derivation. bracket_samples, crossing_eps, and position_sigma
+CORRECTNESS: the spline/noise formulas below are a LINE-FOR-LINE port
+of basic_action_theory.pl's former Prolog implementation -- not a
+re-derivation. The obstacle-distance tests (collision, obstacle_in_bound,
+obstacle_on_path) no longer use that implementation's polygon bracket
+scan + bisection: they read a raster distance map built once from the
+problem's own map image -- see the "RASTER OBSTACLE MAP" section for the
+semantics and the map-pixel granularity this gives Tcross. bracket_samples, crossing_eps, and position_sigma
 are read directly out of the problem's own config.yaml at import time
 (the SAME file module/translators/config_to_prolog.py turns into
 config_generated.pl for the Prolog side, see that module's own header)
 rather than hardcoded a second time here, so config.yaml stays the
 single source of truth for both the Prolog and Python halves of the
 theory with no risk of the two drifting apart. Which problem's
-config.yaml is read is controlled by BT_PROBLEM_DIR, same as
-_OBSTACLES_PATH below (see this module's own _PROBLEM_DIR note).
+config.yaml (and map.yaml) is read is controlled by BT_PROBLEM_DIR (see
+this module's own _PROBLEM_DIR note).
 
 Exposes SEVEN predicates to ProbLog, all INSTANTANEOUS and stateless,
 exactly like planners.py's plan_astar/plan_straight:
@@ -83,13 +86,12 @@ single ALREADY-COMPUTED point, so they have no noise draws of their
 own to take.
 
 first_threshold_crossing_time is the TRIGGER-side primitive: searches a
-whole future trajectory (bracket scan + bisection) for the earliest
-crossing. obstacle_within_threshold is the CONDITION-side primitive:
+whole future trajectory (half-pixel steps over the raster distance
+map) for the earliest crossing. obstacle_within_threshold is the CONDITION-side primitive:
 checks ONE point (the current situation) directly, no search at all --
 it's what backs basic_action_theory.pl's holds(obstacle_in_bound(...),S),
-the exact same underlying test (within_obstacle_threshold/
-_min_clearance_all) the trigger-side search calls repeatedly, called
-here just once. This is the "reuse the underlying machinery" the
+the exact same raster distance test the trigger-side search applies
+to every sample, applied here just once. This is the "reuse the underlying machinery" the
 obstacle_in_bound(Threshold) trigger/condition pair was built around --
 see basic_action_theory.pl's own TRIGGERS section note.
 
@@ -97,18 +99,16 @@ first_on_path_crossing_time / obstacle_on_path_within_threshold are the
 SAME trigger/condition pair again, for obstacle_on_path(Threshold):
 "is Threshold-close to an obstacle the trajectory ACTUALLY ENTERS
 somewhere along this walk" rather than any obstacle at all. Built by
-restricting the SAME two functions above to a FILTERED obstacle set
-(see _path_obstacle_polygons) -- no new geometry, just a different
-input list.
+restricting the SAME raster test to the obstacles the walk enters
+(see _path_components / _RasterMap.restricted) -- no new geometry,
+just a distance map over fewer obstacles.
 
 ObstacleId is the SAME atom as the crossed obstacle's obstacle_polygon/2
-Id (e.g. obs7) -- whichever polygon achieves the minimum clearance at
-the exact (bisected) crossing point, i.e. an argmin over obstacles, not
-just the min distance. This is what lets basic_action_theory.pl's
+Id (e.g. obs7) -- the obstacle owning the occupied pixel nearest to the
+crossing sample (each raster region is matched to its polygon Id once,
+at import). This is what lets basic_action_theory.pl's
 trigger_crossing_time/9 report crashed(ObstacleId)/
-obstacle_in_bound(Threshold,ObstacleId) instead of a bare atom -- see
-this module's own _min_clearance_all for where the argmin actually
-happens.
+obstacle_in_bound(Threshold,ObstacleId) instead of a bare atom.
 
 first_threshold_crossing_time FAILS (returns 0 ProbLog solutions) if
 the trajectory never comes within Threshold of an obstacle in this
@@ -117,24 +117,17 @@ isn't within Threshold right now -- "never/not happening" is
 represented by absence in both, not a sentinel value, same convention
 as every other exact-detection predicate in this theory.
 
-Obstacle polygons: loaded ONCE, at import time, directly from
-<problem>/obstacles_generated.pl (see _PROBLEM_DIR above) -- the EXACT
-SAME file basic_action_theory.pl's own problem_data.pl bootstrap
-consults (see Section 0's own comment, near the top of that file). By
-the time this module is imported, that consult has already either
-succeeded or already aborted the whole load with a clearer error, so
-there is no meaningful "obstacles file missing" case to handle
-gracefully here (unlike planners.py's map, which is genuinely
-optional). If you hand-add extra obstacle_polygon/2 facts somewhere
-else in the theory instead of through occgrid_to_problog.py's generated
-file, this black box will not see them -- keep obstacles_generated.pl
-the single source of truth, exactly as planners.py's own map
-loading already assumes for map.yaml.
+Obstacle polygons and the raster map are built ONCE, at import time,
+from the problem's own map.yaml (see _PROBLEM_DIR above), in memory:
+the polygons come from module/theory/obstacle_map.py (shared, cached,
+with planners.py), the raster distance map from the same image (see
+"RASTER OBSTACLE MAP" below). Nothing obstacle-related goes through
+ProbLog -- the Prolog theory never reads obstacle geometry itself.
 
 IMPORTANT -- these polygons are ALREADY INFLATED by the robot's own
-safety_margin (robot_radius+safety_buffer): occgrid_to_problog.py's own
-generate() dilates the occupied mask by that amount BEFORE extracting
-contours (see that module's own docstring), so obstacle_within_threshold/
+safety_margin (robot_radius+safety_buffer): obstacle_map.py dilates
+the occupied mask by that amount BEFORE extracting contours (see that
+module's own docstring), so obstacle_within_threshold/
 obstacle_on_path_within_threshold below measure distance to the
 INFLATED boundary, not the map's raw occupied cells. `collision`
 (basic_action_theory.pl's first_collision_time/6) exploits this
@@ -158,13 +151,15 @@ run.
 """
 import math
 import os
-import re
 import sys
+
+import numpy as np
+from scipy import ndimage
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
 
-# Which problem's own data (config.yaml, obstacles_generated.pl) to load
+# Which problem's own data (config.yaml, map.yaml) to load
 # -- set by main.py via BT_PROBLEM_DIR before this module is imported;
 # defaults to problems/problem0/ so this module still works standalone
 # with no environment variable set (same convention as planners.py's
@@ -172,57 +167,12 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
 _DEFAULT_PROBLEM_DIR = os.path.join(_PROJECT_ROOT, "problems", "problem0")
 _PROBLEM_DIR = os.environ.get("BT_PROBLEM_DIR", _DEFAULT_PROBLEM_DIR)
 
-_OBSTACLES_PATH = os.path.join(_PROBLEM_DIR, "obstacles_generated.pl")
-
 _TRANSLATORS_DIR = os.path.join(_PROJECT_ROOT, "module", "translators")
-if _TRANSLATORS_DIR not in sys.path:
-    sys.path.insert(0, _TRANSLATORS_DIR)
+for _p in (_TRANSLATORS_DIR, _THIS_DIR):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 from config_to_prolog import load_config  # noqa: E402
-
-POINT_RE = re.compile(r"point\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)")
-
-
-def _strip_prolog_comments(text):
-    """Remove '%'-to-end-of-line comments before regex-parsing obstacle
-    facts -- same defensive technique main.py
-    already uses for the same reason (a header comment showing example
-    syntax could otherwise match before the real fact)."""
-    return re.sub(r"%.*$", "", text, flags=re.MULTILINE)
-
-
-def _parse_obstacle_polygons(text):
-    """Returns [(id, [(x,y),...]), ...] -- id is kept (not just the
-    point list) so a crossing can be reported AGAINST a specific
-    obstacle, not just "some obstacle" -- see _min_clearance_all. Each
-    point list here is the obstacle's own OUTER boundary only -- see
-    _parse_obstacle_holes below and OBSTACLE_POLYGONS' own note for
-    how a hole (if any) gets folded back in."""
-    polys = []
-    for m in re.finditer(r"obstacle_polygon\(([^,]+),\s*\[(.*?)\]\s*\)\s*\.", text, re.S):
-        obstacle_id = m.group(1).strip()
-        pts = [(float(x), float(y)) for x, y in POINT_RE.findall(m.group(2))]
-        if len(pts) >= 3:
-            polys.append((obstacle_id, pts))
-    return polys
-
-
-def _parse_obstacle_holes(text):
-    """Returns {id: [hole_points, ...]} -- SAME regex shape as
-    _parse_obstacle_polygons above, just matching obstacle_hole/2
-    instead of obstacle_polygon/2 (see occgrid_to_problog.py's own
-    note on why this is a SEPARATE, additive fact rather than folded
-    into obstacle_polygon/2's own point list). Grouped by Id since one
-    obstacle could in principle have more than one hole, even though
-    every map this project has seen so far has at most one (a single
-    perimeter fence ring)."""
-    holes = {}
-    for m in re.finditer(r"obstacle_hole\(([^,]+),\s*\[(.*?)\]\s*\)\s*\.", text, re.S):
-        obstacle_id = m.group(1).strip()
-        pts = [(float(x), float(y)) for x, y in POINT_RE.findall(m.group(2))]
-        if len(pts) >= 3:
-            holes.setdefault(obstacle_id, []).append(pts)
-    return holes
-
+import obstacle_map  # noqa: E402  (plain module, no ProbLog predicates)
 
 _config = load_config(config_path=os.path.join(_PROBLEM_DIR, "config.yaml"))
 BRACKET_SAMPLES = int(_config["verification"]["bracket_samples"])
@@ -230,29 +180,13 @@ CROSSING_EPS = float(_config["verification"]["crossing_eps"])
 SIGMA = float(_config["position"]["lateral"]["sigma"])
 SIGMA_TANGENTIAL = float(_config["position"]["tangential"]["sigma"])
 
-try:
-    with open(_OBSTACLES_PATH) as f:
-        _obstacles_text = _strip_prolog_comments(f.read())
-    # OBSTACLE_POLYGONS is now [(id, rings), ...], rings = [outer_points,
-    # hole1_points, ...] -- rings[0] is ALWAYS the outer boundary (the
-    # ORDER every consumer below, and follow_boarder in planners.py,
-    # relies on), rings[1:] are that same obstacle's own holes (empty
-    # for the common, hole-less case). See _inside_polygon/_dist_to_
-    # polygon below for why combining an obstacle's own rings into ONE
-    # containment/clearance test (rather than testing each ring on its
-    # own) is what makes a hole's own free interior read as free space
-    # instead of "inside the obstacle".
-    _holes_by_id = _parse_obstacle_holes(_obstacles_text)
-    OBSTACLE_POLYGONS = [(obstacle_id, [outer_points] + _holes_by_id.get(obstacle_id, []))
-                          for obstacle_id, outer_points in _parse_obstacle_polygons(_obstacles_text)]
-except FileNotFoundError:
-    # Only reachable if this module is imported standalone (e.g. for
-    # testing) before any map has been generated -- basic_action_theory.pl
-    # itself would already have aborted loading earlier at its own
-    # :- consult(...) of this same file. "No obstacles" is the correct
-    # degrade here, matching obstacle_polygon/2's own Prolog fallback
-    # clause (see basic_action_theory.pl section 0).
-    OBSTACLE_POLYGONS = []
+# OBSTACLE_POLYGONS: [(id, rings), ...], rings = [outer_points,
+# hole1_points, ...] -- rings[0] is ALWAYS the outer boundary (the ORDER
+# every consumer below, and follow_boarder in planners.py, relies on),
+# rings[1:] are that same obstacle's own holes (empty for the common,
+# hole-less case). See _inside_polygon/_dist_to_polygon below for why an
+# obstacle's rings are combined into ONE containment/clearance test.
+OBSTACLE_POLYGONS = obstacle_map.obstacle_polygons(_PROBLEM_DIR)
 
 
 # =====================================================================
@@ -454,119 +388,206 @@ def _min_clearance_all(px, py, obstacle_polygons):
                for obstacle_id, rings in obstacle_polygons)
 
 
-def _within_obstacle_threshold(px, py, threshold, obstacle_polygons):
-    d, _ = _min_clearance_all(px, py, obstacle_polygons)
-    return d <= threshold
-
-
 # =====================================================================
-# BRACKET SCAN + BISECTION -- line-for-line port of
-# first_unsafe_sample(_from)/bisect_crossing/first_threshold_crossing_time.
+# RASTER OBSTACLE MAP -- backs every DISTANCE-based obstacle test
+# (collision, obstacle_in_bound, obstacle_on_path: trigger searches and
+# condition checks alike). Built ONCE, at import, from the problem's own
+# map.yaml/.pgm, with the SAME occupied-cell convention and the SAME
+# disk inflation radius obstacle_map.py uses for the polygons (reused
+# from that module, not re-implemented):
+#   - _RASTER.dist[r, c]: metres from pixel (r, c) to the nearest
+#     occupied (un-inflated) pixel -- one Euclidean distance transform.
+#     "Inside the inflated map" is exactly dist <= r_eff (r_eff =
+#     inflation radius in whole pixels * resolution, i.e. the dilation
+#     obstacle_map.inflate_mask applies), and "within Threshold of
+#     the inflated boundary" is dist <= r_eff + Threshold, so every
+#     threshold reuses the same array, no per-threshold re-inflation.
+#   - _RASTER.nearest_comp / inflated_comp: which obstacle that nearest
+#     occupied pixel belongs to / which obstacle's inflated region a
+#     pixel is in. Each connected inflated region is matched ONCE to its
+#     polygon Id (nearest polygon to one of its occupied
+#     pixels), so reported ObstacleIds are the same obsN as before;
+#     regions no polygon matches (specks obstacle_map drops by
+#     area) are dropped here too, so both representations agree on
+#     which obstacles exist.
+# A trajectory search samples the noisy walk at half-pixel spacing and
+# returns the time of the first sample inside the threshold: Tcross has
+# the map's own granularity (no bisection), and no obstacle thinner than
+# a pixel can be stepped over (the previous polygon search used
+# BRACKET_SAMPLES samples per leg).
 # =====================================================================
-def _first_unsafe_sample(control_points, t0, duration, z, zt, threshold, obstacle_polygons, n):
-    for i in range(0, n + 1):
-        frac = i / n
-        t = t0 + duration*frac
-        x, y = _walk_noisy_point(control_points, t0, duration, z, zt, t)
-        if _within_obstacle_threshold(x, y, threshold, obstacle_polygons):
-            return i
-    return None
+class _RasterMap:
+    def __init__(self, yaml_path, obstacle_polygons, clearance_m):
+        from obstacle_map import load_map, occupied_mask, pixel_to_map
+        img, res, origin, negate, occupied_thresh, _free = load_map(yaml_path)
+        raw = occupied_mask(img, negate, occupied_thresh) > 0
+        self.res = float(res)
+        self.ox, self.oy = float(origin[0]), float(origin[1])
+        self.h, self.w = raw.shape
+        r_px = max(1, int(round(clearance_m / res))) if clearance_m > 0 else 0
+        self.r_eff = r_px * self.res
+
+        d_px = ndimage.distance_transform_edt(~raw) if raw.any() else None
+        inflated = (d_px <= r_px) if d_px is not None else np.zeros_like(raw)
+        labels, n = ndimage.label(inflated, structure=np.ones((3, 3), dtype=bool))
+
+        # one occupied pixel per inflated region -> nearest polygon's Id
+        pos = np.flatnonzero(raw.ravel())
+        comp_of = labels.ravel()[pos]
+        uniq, first = np.unique(comp_of, return_index=True)
+        self.comp_name = {}
+        for k, p in zip(uniq, pos[first]):
+            row, col = divmod(int(p), self.w)
+            x, y = pixel_to_map(row, col, self.h, res, origin)
+            if obstacle_polygons:
+                d, oid = _min_clearance_all(x, y, obstacle_polygons)
+                if d <= 2.0 * self.res:
+                    self.comp_name[int(k)] = oid
+        self.labels = labels
+        self.raw_kept = raw & np.isin(labels, list(self.comp_name))
+        self.dist, self.nearest_comp = self._distance(self.raw_kept)
+        self.inflated_comp = np.where(self.dist <= self.r_eff, self.nearest_comp, 0)
+        self._restricted = {}
+
+    def _distance(self, occupied):
+        """(metres to nearest occupied pixel, that pixel's region label)."""
+        if not occupied.any():
+            return (np.full(occupied.shape, np.inf, dtype=np.float32),
+                    np.zeros(occupied.shape, dtype=np.int32))
+        d_px, (ir, ic) = ndimage.distance_transform_edt(~occupied, return_indices=True)
+        return (d_px * self.res).astype(np.float32), self.labels[ir, ic].astype(np.int32)
+
+    def restricted(self, comps):
+        """Distance arrays to the occupied pixels of `comps` only (the
+        obstacle_on_path case), computed once per distinct set."""
+        key = frozenset(comps)
+        if key not in self._restricted:
+            self._restricted[key] = self._distance(self.raw_kept & np.isin(self.labels, list(key)))
+        return self._restricted[key]
+
+    def lookup(self, xs, ys, dist=None, comp=None):
+        """Distance and nearest-region label at map points (vectorised).
+        Points outside the map are free (inf), like the polygon model."""
+        dist = self.dist if dist is None else dist
+        comp = self.nearest_comp if comp is None else comp
+        cols = np.rint((np.asarray(xs) - self.ox) / self.res).astype(np.int64)
+        rows = self.h - 1 - np.rint((np.asarray(ys) - self.oy) / self.res).astype(np.int64)
+        inside = (rows >= 0) & (rows < self.h) & (cols >= 0) & (cols < self.w)
+        r, c = np.where(inside, rows, 0), np.where(inside, cols, 0)
+        return (np.where(inside, dist[r, c], np.inf),
+                np.where(inside, comp[r, c], 0),
+                np.where(inside, self.inflated_comp[r, c], 0))
 
 
-def _bisect_crossing(control_points, t0, duration, z, zt, threshold, tlo, thi, eps, obstacle_polygons):
-    while thi - tlo > eps:
-        tmid = (tlo + thi) / 2.0
-        x, y = _walk_noisy_point(control_points, t0, duration, z, zt, tmid)
-        if _within_obstacle_threshold(x, y, threshold, obstacle_polygons):
-            thi = tmid
-        else:
-            tlo = tmid
-    return (tlo + thi) / 2.0
+def _walk_noisy_points(control_points, t0, duration, z, zt, fracs):
+    """Vectorised _walk_noisy_point over an array of walk fractions."""
+    cp = np.asarray(control_points, dtype=float)
+    n_segs = (len(cp) - 1) // 3
+    seg_len = 1.0 / n_segs
+    seg = np.minimum(n_segs - 1, np.floor(fracs / seg_len).astype(np.int64))
+    u = np.clip((fracs - seg*seg_len) / seg_len, 0.0, 1.0)[:, None]
+    p0, p1, p2, p3 = cp[3*seg], cp[3*seg+1], cp[3*seg+2], cp[3*seg+3]
+    mu = 1.0 - u
+    pts = mu**3*p0 + 3*mu*mu*u*p1 + 3*mu*u*u*p2 + u**3*p3
+    tan = 3*mu*mu*(p1-p0) + 6*mu*u*(p2-p1) + 3*u*u*(p3-p2)
+    norm = np.hypot(tan[:, 0], tan[:, 1])
+    ok = norm > 1.0e-9
+    safe = np.where(ok, norm, 1.0)
+    tx, ty = np.where(ok, tan[:, 0]/safe, 0.0), np.where(ok, tan[:, 1]/safe, 0.0)
+    sq = math.sqrt(duration) if duration > 0.0 else 0.0
+    ndev = z * SIGMA * sq * fracs
+    tdev = zt * SIGMA_TANGENTIAL * sq * fracs
+    return pts[:, 0] + ndev*(-ty) + tdev*tx, pts[:, 1] + ndev*tx + tdev*ty
 
 
-def _first_threshold_crossing_time(control_points, t0, duration, z, zt, threshold, obstacle_polygons):
-    """Returns (Tcross, ObstacleId) or None. ObstacleId is resolved by
-    ONE extra _min_clearance_all argmin call at the final crossing
-    point -- the bracket scan/bisection loop itself only needs the
-    boolean within/not-within-threshold test, so this stays a single
-    added lookup, not a change to the search itself."""
-    n = BRACKET_SAMPLES
-    i = _first_unsafe_sample(control_points, t0, duration, z, zt, threshold, obstacle_polygons, n)
-    if i is None:
+def _trajectory_samples(control_points, t0, duration, z, zt):
+    """(fracs, xs, ys): the noisy walk sampled so that consecutive
+    samples are at most half a pixel apart.
+
+    The sample count starts from an arc-length bound (control polygon
+    length + total noise deviation) and is refined ONCE if curvature
+    still leaves wider gaps, capped at 4x. The cap matters: where two
+    spline segments meet at a corner (straight-waypoint paths), the
+    lateral noise offset changes direction abruptly, so the noisy walk
+    itself jumps there by |normal deviation| -- no sample count closes
+    that gap, the same discontinuity _walk_noisy_point already has."""
+    if duration <= 0.0:
+        fracs = np.zeros(1)
+        return (fracs,) + _walk_noisy_points(control_points, t0, duration, z, zt, fracs)
+    step = 0.5 * _RASTER.res
+    cp = np.asarray(control_points, dtype=float)
+    bound = (np.hypot(*np.diff(cp, axis=0).T).sum()
+             + (abs(z)*SIGMA + abs(zt)*SIGMA_TANGENTIAL) * math.sqrt(duration))
+    m = max(1, int(math.ceil(bound / step)))
+    fracs = np.arange(m + 1) / m
+    xs, ys = _walk_noisy_points(control_points, t0, duration, z, zt, fracs)
+    gaps = np.hypot(np.diff(xs), np.diff(ys))
+    # ignore the isolated corner jumps when deciding whether to refine
+    smooth_gap = np.percentile(gaps, 99) if gaps.size else 0.0
+    if smooth_gap > step:
+        m = min(4 * m, int(math.ceil(m * smooth_gap / step)) + 1)
+        fracs = np.arange(m + 1) / m
+        xs, ys = _walk_noisy_points(control_points, t0, duration, z, zt, fracs)
+    return fracs, xs, ys
+
+
+def _first_raster_crossing(control_points, t0, duration, z, zt, threshold, dist=None, comp=None):
+    """(Tcross, ObstacleId) of the first half-pixel sample within
+    `threshold` of the inflated obstacles, or None."""
+    if _RASTER is None:
         return None
-    if i == 0:
-        tcross = t0
-    else:
-        tlo = t0 + duration*((i-1)/n)
-        thi = t0 + duration*(i/n)
-        tcross = _bisect_crossing(control_points, t0, duration, z, zt, threshold, tlo, thi,
-                                   CROSSING_EPS, obstacle_polygons)
-    x, y = _walk_noisy_point(control_points, t0, duration, z, zt, tcross)
-    _, obstacle_id = _min_clearance_all(x, y, obstacle_polygons)
-    return tcross, obstacle_id
-
-
-# =====================================================================
-# "ON PATH" -- obstacle_on_path(Threshold): unlike obstacle_in_bound
-# (proximity to ANY obstacle, whether or not the trajectory actually
-# goes near it), this only cares about obstacles the trajectory itself
-# actually enters (_inside_polygon, not just close to the boundary) at
-# SOME point across the walk's own full span -- then asks the SAME
-# "within Threshold right now" question, restricted to just that
-# obstacle set. Reuses _within_obstacle_threshold/_first_threshold_
-# crossing_time UNCHANGED: the only new piece is the bracket-scan that
-# finds WHICH obstacles are on the path at all; everything downstream
-# is the existing machinery called with a FILTERED obstacle_polygons
-# list instead of the full one.
-# =====================================================================
-def _trajectory_obstacle_ids(control_points, t0, duration, z, zt, obstacle_polygons):
-    """Which obstacle ids does this resolved trajectory's noisy position
-    actually go INSIDE (not just near) at any bracket-sampled instant
-    across [t0, t0+duration]? Same sample count as the rest of this
-    module's bracket scans (BRACKET_SAMPLES) -- same discretization,
-    same aliasing risk as every other bracket-scan check here, not a
-    new limitation. Returns a (possibly empty) set of ids."""
-    n = BRACKET_SAMPLES
-    hit_ids = set()
-    for i in range(n + 1):
-        frac = i / n
-        t = t0 + duration*frac
-        x, y = _walk_noisy_point(control_points, t0, duration, z, zt, t)
-        for obstacle_id, rings in obstacle_polygons:
-            if _inside_polygon(x, y, rings):
-                hit_ids.add(obstacle_id)
-    return hit_ids
-
-
-def _path_obstacle_polygons(control_points, t0, duration, z, zt, obstacle_polygons):
-    """obstacle_polygons FILTERED down to just the ones the trajectory
-    actually enters -- the single restriction point _first_threshold_
-    crossing_time/_within_obstacle_threshold are then called with,
-    unchanged, everywhere below."""
-    path_ids = _trajectory_obstacle_ids(control_points, t0, duration, z, zt, obstacle_polygons)
-    return [(oid, rings) for oid, rings in obstacle_polygons if oid in path_ids]
-
-
-def _first_on_path_crossing_time(control_points, t0, duration, z, zt, threshold, obstacle_polygons):
-    """Same shape/return as _first_threshold_crossing_time (Tcross,
-    ObstacleId) or None -- None immediately if the trajectory never
-    enters any obstacle at all (nothing to restrict to), otherwise
-    delegates straight to the existing search over the restricted set."""
-    restricted = _path_obstacle_polygons(control_points, t0, duration, z, zt, obstacle_polygons)
-    if not restricted:
+    fracs, xs, ys = _trajectory_samples(control_points, t0, duration, z, zt)
+    d, c, _ = _RASTER.lookup(xs, ys, dist, comp)
+    hit = np.flatnonzero(d <= _RASTER.r_eff + threshold)
+    if hit.size == 0:
         return None
-    return _first_threshold_crossing_time(control_points, t0, duration, z, zt, threshold, restricted)
+    i = int(hit[0])
+    return t0 + duration*float(fracs[i]), _RASTER.comp_name[int(c[i])]
 
 
-def _obstacle_on_path_within_threshold(control_points, t0, duration, z, zt, px, py, threshold, obstacle_polygons):
-    """The CONDITION-side counterpart: is (px,py) within threshold of
-    an obstacle the trajectory actually enters, RIGHT NOW -- one call,
-    no search, exactly mirroring _within_obstacle_threshold's own
-    relationship to _first_threshold_crossing_time."""
-    restricted = _path_obstacle_polygons(control_points, t0, duration, z, zt, obstacle_polygons)
-    if not restricted:
+def _path_components(control_points, t0, duration, z, zt):
+    """Obstacle regions whose INFLATED area the walk actually enters."""
+    _, xs, ys = _trajectory_samples(control_points, t0, duration, z, zt)
+    _, _, inside = _RASTER.lookup(xs, ys)
+    return set(int(k) for k in np.unique(inside) if k)
+
+
+def _first_on_path_crossing_time(control_points, t0, duration, z, zt, threshold):
+    if _RASTER is None:
+        return None
+    comps = _path_components(control_points, t0, duration, z, zt)
+    if not comps:
+        return None
+    dist, comp = _RASTER.restricted(comps)
+    return _first_raster_crossing(control_points, t0, duration, z, zt, threshold, dist, comp)
+
+
+def _obstacle_on_path_within_threshold(control_points, t0, duration, z, zt, px, py, threshold):
+    if _RASTER is None:
         return False
-    return _within_obstacle_threshold(px, py, threshold, restricted)
+    comps = _path_components(control_points, t0, duration, z, zt)
+    if not comps:
+        return False
+    dist, comp = _RASTER.restricted(comps)
+    d, _, _ = _RASTER.lookup([px], [py], dist, comp)
+    return bool(d[0] <= _RASTER.r_eff + threshold)
+
+
+def _within_obstacle_threshold(px, py, threshold):
+    if _RASTER is None:
+        return False
+    d, _, _ = _RASTER.lookup([px], [py])
+    return bool(d[0] <= _RASTER.r_eff + threshold)
+
+
+_MAP_YAML_PATH = os.path.join(_PROBLEM_DIR, "map.yaml")
+if os.path.isfile(_MAP_YAML_PATH):
+    _RASTER = _RasterMap(_MAP_YAML_PATH, OBSTACLE_POLYGONS,
+                         obstacle_map.clearance_m(_PROBLEM_DIR))
+else:
+    # A problem with no map.yaml has no obstacles (OBSTACLE_POLYGONS is
+    # [] too).
+    _RASTER = None
 
 
 # =====================================================================
@@ -747,16 +768,15 @@ def first_threshold_crossing_time_value(control_points, t0, duration, z, zt, thr
     None if the trajectory never comes within `threshold` of any
     obstacle in this resolved world. ObstacleId is the obstacle_polygon/2
     Id (e.g. "obs7") nearest at the exact crossing point."""
-    return _first_threshold_crossing_time(
-        control_points, float(t0), float(duration), float(z), float(zt), float(threshold),
-        OBSTACLE_POLYGONS)
+    return _first_raster_crossing(
+        control_points, float(t0), float(duration), float(z), float(zt), float(threshold))
 
 
 def obstacle_within_threshold_value(x, y, threshold):
     """A SINGLE-POINT check -- is (x,y) within `threshold` of any
     obstacle right now -- reusing _within_obstacle_threshold directly
-    (the SAME primitive _first_unsafe_sample/_bisect_crossing call
-    repeatedly above; this just calls it once). This is what backs the
+    (the SAME raster test the trajectory search applies to every
+    sample; this just applies it once). This is what backs the
     obstacle_in_bound(Threshold) CONDITION in basic_action_theory.pl
     (holds(obstacle_in_bound(...),S)), as opposed to the
     obstacle_in_bound(Threshold) TRIGGER, which searches a whole future
@@ -764,7 +784,7 @@ def obstacle_within_threshold_value(x, y, threshold):
     noise draws at all -- it's a single-point check against a position
     already computed (by at/4, which already folds in both z and zt),
     not a trajectory search."""
-    return _within_obstacle_threshold(float(x), float(y), float(threshold), OBSTACLE_POLYGONS)
+    return _within_obstacle_threshold(float(x), float(y), float(threshold))
 
 
 def first_on_path_crossing_time_value(control_points, t0, duration, z, zt, threshold):
@@ -774,8 +794,7 @@ def first_on_path_crossing_time_value(control_points, t0, duration, z, zt, thres
     to first_threshold_crossing_time_value, which considers every
     obstacle regardless of whether the path goes near it at all)."""
     return _first_on_path_crossing_time(
-        control_points, float(t0), float(duration), float(z), float(zt), float(threshold),
-        OBSTACLE_POLYGONS)
+        control_points, float(t0), float(duration), float(z), float(zt), float(threshold))
 
 
 def obstacle_on_path_within_threshold_value(control_points, t0, duration, z, zt, x, y, threshold):
@@ -786,7 +805,7 @@ def obstacle_on_path_within_threshold_value(control_points, t0, duration, z, zt,
     now."""
     return _obstacle_on_path_within_threshold(
         control_points, float(t0), float(duration), float(z), float(zt),
-        float(x), float(y), float(threshold), OBSTACLE_POLYGONS)
+        float(x), float(y), float(threshold))
 
 
 def first_line_of_sight_clear_time_value(control_points, t0, duration, z, zt, obstacle_id, gx, gy):

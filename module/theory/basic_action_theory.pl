@@ -3005,6 +3005,21 @@ planned_with(Algorithm, Reason, do(_A, S)) :- planned_with(Algorithm, Reason, S)
 checked_with(Code, C, Status, do(checked(Code,C,Status), _)).
 checked_with(Code, C, Status, do(_A, S)) :- checked_with(Code, C, Status, S).
 
+% -- ONE SEARCH PER CHILD, THEN DISPATCH ON ITS OUTCOME -------------
+%    Every composite below calls its child ONCE with the outcome left
+%    unbound (do_node(Child, S, S2, O)) and then picks its behaviour
+%    with a small helper whose FIRST argument is that outcome
+%    (seq_step/5, fallback_step/5, invert/2, reactive_after/8): by the
+%    time the helper runs, O is bound to true / false / reactive(C), so
+%    only the matching helper clause applies. Calling the child once per
+%    outcome instead (do_node(Child,S,S2,true), ...false), ...
+%    reactive(C))) gives the same answers, but ProbLog tables each of
+%    those calls separately, so the child -- e.g. a whole moveto_leg,
+%    trajectory and crossing-time search included -- was grounded three
+%    times from the same S. An outcome with no helper clause (e.g.
+%    world_too_large from a nested reactive composite) is dropped here,
+%    exactly as the per-outcome clauses dropped it before.
+
 % -- SEQUENCE composite: stop and FAIL at the first failing child; --
 %    succeed only if every child succeeds, in order. A REACTIVE child
 %    (see leg_status/9's own note on the three-valued Status) stops
@@ -3019,12 +3034,13 @@ checked_with(Code, C, Status, do(_A, S)) :- checked_with(Code, C, Status, S).
 %    is a genuinely DIFFERENT node type from, not a special case of.
 do_node(seq_node([]), S, S, true).
 do_node(seq_node([Child|Rest]), S, S1, Outcome) :-
-    do_node(Child, S, S2, true),
+    do_node(Child, S, S2, O),
+    seq_step(O, Rest, S2, S1, Outcome).
+
+seq_step(true, Rest, S2, S1, Outcome) :-
     do_node(seq_node(Rest), S2, S1, Outcome).
-do_node(seq_node([Child|_]), S, S1, false) :-
-    do_node(Child, S, S1, false).
-do_node(seq_node([Child|_]), S, S1, reactive(Code)) :-
-    do_node(Child, S, S1, reactive(Code)).
+seq_step(false, _Rest, S2, S2, false).
+seq_step(reactive(Code), _Rest, S2, S2, reactive(Code)).
 
 % -- FALLBACK (Selector) composite: stop and SUCCEED at the first ---
 %    succeeding child; fail only if every child fails, in order.
@@ -3040,13 +3056,14 @@ do_node(seq_node([Child|_]), S, S1, reactive(Code)) :-
 %    straight through unchanged instead (see the CONTROL-FLOW
 %    REDESCEND TARGETS note below).
 do_node(fallback_node([]), S, S, false).
-do_node(fallback_node([Child|_]), S, S1, true) :-
-    do_node(Child, S, S1, true).
 do_node(fallback_node([Child|Rest]), S, S1, Outcome) :-
-    do_node(Child, S, S2, false),
+    do_node(Child, S, S2, O),
+    fallback_step(O, Rest, S2, S1, Outcome).
+
+fallback_step(true, _Rest, S2, S2, true).
+fallback_step(false, Rest, S2, S1, Outcome) :-
     do_node(fallback_node(Rest), S2, S1, Outcome).
-do_node(fallback_node([Child|_]), S, S1, reactive(Code)) :-
-    do_node(Child, S, S1, reactive(Code)).
+fallback_step(reactive(Code), _Rest, S2, S2, reactive(Code)).
 
 % -- INVERTER decorator: BT.cpp's built-in single-child negation ------
 %    node (<Inverter>C</Inverter>). Flips true<->false; a REACTIVE
@@ -3060,12 +3077,13 @@ do_node(fallback_node([Child|_]), S, S1, reactive(Code)) :-
 %    bt_to_prolog.py for why the guard-derivation machinery already
 %    treats Inverter as fully transparent for that purpose too, not
 %    just for do_node's own control flow).
-do_node(inverter(Child), S, S1, false) :-
-    do_node(Child, S, S1, true).
-do_node(inverter(Child), S, S1, true) :-
-    do_node(Child, S, S1, false).
-do_node(inverter(Child), S, S1, reactive(Code)) :-
-    do_node(Child, S, S1, reactive(Code)).
+do_node(inverter(Child), S, S1, Outcome) :-
+    do_node(Child, S, S1, O),
+    invert(O, Outcome).
+
+invert(true, false).
+invert(false, true).
+invert(reactive(Code), reactive(Code)).
 
 % ---------------------------------------------------------------
 % CONTROL-FLOW REDESCEND TARGETS -- reactivesequence(Code) and
@@ -3131,48 +3149,44 @@ do_node(reactivesequence(Code), S, S1, Outcome) :-
     reactivesequence_budgeted(Code, Budget, S, S1, Outcome).
 
 reactivesequence_budgeted(Code, Budget, S, S1, Outcome) :-
-    Budget > 0,
     reactive_children(Code, Children),
-    do_node(seq_node(Children), S, S2, reactive(Code)),
-    Budget1 is Budget - 1,
-    reactivesequence_budgeted(Code, Budget1, S2, S1, Outcome).
-reactivesequence_budgeted(Code, 0, S, S, world_too_large) :-
-    reactive_children(Code, Children),
-    do_node(seq_node(Children), S, _, reactive(Code)).
-reactivesequence_budgeted(Code, Budget, S, S1, reactive(OtherCode)) :-
-    Budget > 0,
-    reactive_children(Code, Children),
-    do_node(seq_node(Children), S, S1, reactive(OtherCode)),
-    OtherCode \= Code.
-reactivesequence_budgeted(Code, Budget, S, S1, Outcome) :-
-    Budget > 0,
-    reactive_children(Code, Children),
-    do_node(seq_node(Children), S, S1, Outcome),
-    Outcome \= reactive(_).
+    do_node(seq_node(Children), S, S2, O),
+    reactive_after(O, Code, Budget, seq, S, S2, S1, Outcome).
 
 do_node(reactivefallback(Code), S, S1, Outcome) :-
     replan_budget(Budget),
     reactivefallback_budgeted(Code, Budget, S, S1, Outcome).
 
 reactivefallback_budgeted(Code, Budget, S, S1, Outcome) :-
-    Budget > 0,
     reactive_children(Code, Children),
-    do_node(fallback_node(Children), S, S2, reactive(Code)),
+    do_node(fallback_node(Children), S, S2, O),
+    reactive_after(O, Code, Budget, fallback, S, S2, S1, Outcome).
+
+% reactive_after(+O, +Code, +Budget, +Kind, +S, +S2, -S1, -Outcome):
+% what reactive composite Code (of Kind seq/fallback) does after one
+% pass over its children from S ended in S2 with outcome O.
+%   - reactive(Code), budget left: caught -- restart the children
+%     fresh from S2 with one less budget;
+%   - reactive(Code), budget 0: world_too_large, at the situation the
+%     pass started from;
+%   - reactive(Other) for another composite: passed up unchanged;
+%   - anything else (true/false): the composite's own outcome.
+reactive_after(reactive(Code), Code, Budget, Kind, _S, S2, S1, Outcome) :-
+    Budget > 0,
     Budget1 is Budget - 1,
-    reactivefallback_budgeted(Code, Budget1, S2, S1, Outcome).
-reactivefallback_budgeted(Code, 0, S, S, world_too_large) :-
-    reactive_children(Code, Children),
-    do_node(fallback_node(Children), S, _, reactive(Code)).
-reactivefallback_budgeted(Code, Budget, S, S1, reactive(OtherCode)) :-
+    reactive_restart(Kind, Code, Budget1, S2, S1, Outcome).
+reactive_after(reactive(Code), Code, 0, _Kind, S, _S2, S, world_too_large).
+reactive_after(reactive(OtherCode), Code, Budget, _Kind, _S, S2, S2, reactive(OtherCode)) :-
     Budget > 0,
-    reactive_children(Code, Children),
-    do_node(fallback_node(Children), S, S1, reactive(OtherCode)),
     OtherCode \= Code.
-reactivefallback_budgeted(Code, Budget, S, S1, Outcome) :-
+reactive_after(O, _Code, Budget, _Kind, _S, S2, S2, O) :-
     Budget > 0,
-    reactive_children(Code, Children),
-    do_node(fallback_node(Children), S, S1, Outcome),
-    Outcome \= reactive(_).
+    O \= reactive(_).
+
+reactive_restart(seq, Code, Budget, S, S1, Outcome) :-
+    reactivesequence_budgeted(Code, Budget, S, S1, Outcome).
+reactive_restart(fallback, Code, Budget, S, S1, Outcome) :-
+    reactivefallback_budgeted(Code, Budget, S, S1, Outcome).
 
 % ---------------------------------------------------------------
 % holds/2: minimal condition language for cond(C) leaves -- standard
@@ -3893,7 +3907,8 @@ plan_outcome(Outcome) :-
     Outcome \= reactive(_).
 plan_outcome(reactive_escaped) :-
     plan(Node),
-    do_node(Node, s0, _, reactive(_)).
+    do_node(Node, s0, _, Outcome),
+    Outcome = reactive(_).
 
 % replan_budget/1: the STARTING budget every reactivesequence/
 % reactivefallback occurrence reads (fresh, independently) on its own

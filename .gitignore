@@ -4,6 +4,8 @@ __pycache__/
 # main.py output: output/<problem>/<problem>_<YYYYMMDD>_<HHMMSS>.{log,png},
 # whole subfolder wiped and regenerated fresh every run
 output/
+# extra run folders (output_before_raster/, output_visual_old/, ...)
+output_*/
 
 # main.py's per-run bootstrap: absolute, machine-specific consult paths
 # pointing at whichever --problem was last run -- see

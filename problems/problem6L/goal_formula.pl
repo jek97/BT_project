@@ -18,4 +18,4 @@
 % or() connector to reach for; see this project's own note on why.
 goal_formula(S) :-
     visited(point(32.0,-3.3), 1.0, S),
-    visited(point(0.5,-36.0), 1.0, S).
+    visited(point(45.5,-36.0), 1.0, S).

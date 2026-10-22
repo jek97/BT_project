@@ -26,10 +26,13 @@ skipped/error/no_results the same way, since none of those have a real
 number to show either.
 
 If a problem directory has MULTIPLE *_ablation_summary.csv files (run
-more than once), the most recent one (by filename timestamp, which
-sorts lexicographically the same as chronologically given main.py's
-own YYYYMMDD_HHMMSS format) is used -- older ones are ignored, not
-merged.
+more than once, or a sweep interrupted and continued with main.py
+--resume-from), they are MERGED per (backend, propagate_weights)
+combination: each combination takes its row from the most recent file
+that has one (by filename timestamp, which sorts lexicographically the
+same as chronologically given main.py's own YYYYMMDD_HHMMSS format).
+The merged rows of every problem are also written to
+output/ablation_summary_merged.csv.
 
 Usage:
     python3 summarize_ablation.py [--output-dir DIR]
@@ -58,14 +61,12 @@ _METRICS = [
 ]
 
 
-def find_latest_summary(problem_dir):
-    """The most recent *_ablation_summary.csv in problem_dir, by
+def find_summaries(problem_dir):
+    """Every *_ablation_summary.csv in problem_dir, oldest first, by
     filename (main.py's own YYYYMMDD_HHMMSS timestamp sorts correctly
-    as a plain string), or None if there isn't one -- e.g. a problem
-    that's only ever been run in the plain single or --visual mode,
-    never --ablation-study."""
-    candidates = sorted(glob.glob(os.path.join(problem_dir, "*_ablation_summary.csv")))
-    return candidates[-1] if candidates else None
+    as a plain string) -- empty for a problem that's only ever been run
+    in the plain single or --visual mode, never --ablation-study."""
+    return sorted(glob.glob(os.path.join(problem_dir, "*_ablation_summary.csv")))
 
 
 def load_rows(output_dir):
@@ -85,16 +86,36 @@ def load_rows(output_dir):
             continue
         number, suffix = m.group(1), m.group(2) or ""
 
-        summary_path = find_latest_summary(problem_dir)
-        if summary_path is None:
+        summary_paths = find_summaries(problem_dir)
+        if not summary_paths:
             print(f"[warn] no *_ablation_summary.csv in {problem_dir} "
                   f"(run with --ablation-study to get one) -- skipping", file=sys.stderr)
             continue
 
-        with open(summary_path, newline="") as f:
-            rows = list(csv.DictReader(f))
-        data[(number, suffix)] = rows
+        # Oldest first, so a newer file's row replaces an older one for
+        # the same combination.
+        merged = {}
+        for summary_path in summary_paths:
+            with open(summary_path, newline="") as f:
+                for row in csv.DictReader(f):
+                    merged[(row["knowledge"], row["propagate_weights"])] = row
+        if len(summary_paths) > 1:
+            print(f"[info] {name}: merged {len(summary_paths)} summary CSVs "
+                  f"-> {len(merged)} combination(s)")
+        data[(number, suffix)] = list(merged.values())
     return data
+
+
+def write_merged_csv(output_dir, data):
+    """Every problem's merged rows in one CSV, same columns as main.py's
+    own summary CSVs."""
+    rows = [row for key in sorted(data, key=lambda k: (int(k[0]), k[1])) for row in data[key]]
+    path = os.path.join(output_dir, "ablation_summary_merged.csv")
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"wrote {path}")
 
 
 def discover_combinations(data):
@@ -200,6 +221,7 @@ def main():
     for metric_field, filename, title in _METRICS:
         write_report(args.output_dir, filename, title, metric_field,
                      data, combos, numbers, suffixes)
+    write_merged_csv(args.output_dir, data)
 
 
 if __name__ == "__main__":

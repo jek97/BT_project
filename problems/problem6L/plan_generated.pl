@@ -6,7 +6,7 @@
 % Action code legend (see main.py's own printed copy of this):
 %   a1: PlanWithWaypoints(straight, waypoints=[(22.0,-15.0),(22.0,-3.3),(32.0,-3.3)]) [MainTree]
 %   a2: MoveTo(CP1) [MainTree]
-%   a3: PlanWithWaypoints(straight, waypoints=[(32.0,-27.0),(45.5,-27.0),(45.5,-36.0),(23.0,-36.0),(0.5,-36.0)]) [MainTree]
+%   a3: PlanWithWaypoints(straight, waypoints=[(32.0,-27.0),(45.5,-27.0),(45.5,-36.0)]) [MainTree]
 %   a4: MoveTo(CP2) [MainTree]
 
-plan(seq_node([planWithWaypoints(straight,[point(22.0,-15.0),point(22.0,-3.3),point(32.0,-3.3)],CP1,a1),moveto_leg(CP1,[collision,battery],a2),planWithWaypoints(straight,[point(32.0,-27.0),point(45.5,-27.0),point(45.5,-36.0),point(23.0,-36.0),point(0.5,-36.0)],CP2,a3),moveto_leg(CP2,[collision,battery],a4)])).
+plan(seq_node([planWithWaypoints(straight,[point(22.0,-15.0),point(22.0,-3.3),point(32.0,-3.3)],CP1,a1),moveto_leg(CP1,[collision,battery],a2),planWithWaypoints(straight,[point(32.0,-27.0),point(45.5,-27.0),point(45.5,-36.0)],CP2,a3),moveto_leg(CP2,[collision,battery],a4)])).

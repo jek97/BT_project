@@ -147,6 +147,12 @@ import sld_tree
 # names.
 _ABLATION_BACKENDS = ["sdd", "sddx", "bdd", "nnf", "fsdd", "fbdd"]
 
+
+def _ablation_combo_names():
+    """The sweep's own combination order as <backend>_<0|1> names (the
+    same suffix its log files use) -- what --resume-from accepts."""
+    return [f"{b}_{pw}" for b in _ABLATION_BACKENDS for pw in (0, 1)]
+
 _SUMMARY_FIELDS = [
     "problem", "knowledge", "propagate_weights", "status",
     "ground_nodes", "compiled_nodes",
@@ -649,6 +655,16 @@ def main():
                           "-- see run_ablation_for_problem's own "
                           "docstring for exactly what this writes. "
                           "Mutually exclusive with --visual.")
+    ap.add_argument("--resume-from", default=None, metavar="PROBLEM[:BACKEND_PW]",
+                     help="Restart an interrupted run: skip every problem "
+                          "before PROBLEM (in --problem all's own "
+                          "alphabetical order) and, with --ablation-study, "
+                          "every combination of PROBLEM before BACKEND_PW "
+                          "(e.g. problem3L:bdd_1; order: sdd, sddx, bdd, "
+                          "nnf, fsdd, fbdd, each _0 then _1). Without "
+                          ":BACKEND_PW, PROBLEM restarts from sdd_0. The "
+                          "resumed run gets its own new timestamp, so its "
+                          "summary CSVs cover only what it ran itself.")
     ap.add_argument("--visual", action="store_true",
                      help="Instead of running inference, ground "
                           "--problem's own theory and write an "
@@ -760,6 +776,29 @@ def main():
     else:
         problem_names = [args.problem]
 
+    start_combo = None
+    if args.resume_from:
+        resume_problem, _, start_combo = args.resume_from.partition(":")
+        start_combo = start_combo or None
+        if resume_problem not in problem_names:
+            print(f"[ERROR] --resume-from: {resume_problem!r} is not among "
+                  f"the selected problem(s) -- {', '.join(problem_names)}")
+            sys.exit(1)
+        if start_combo is not None:
+            if not args.ablation_study:
+                print("[ERROR] --resume-from: a :BACKEND_PW part only makes "
+                      "sense with --ablation-study.")
+                sys.exit(1)
+            if start_combo not in _ablation_combo_names():
+                print(f"[ERROR] --resume-from: unknown combination "
+                      f"{start_combo!r} -- pick one of "
+                      f"{', '.join(_ablation_combo_names())}")
+                sys.exit(1)
+        problem_names = problem_names[problem_names.index(resume_problem):]
+        print(f"[info] --resume-from: starting at {resume_problem}"
+              f"{' / ' + start_combo if start_combo else ''} "
+              f"({len(problem_names)} problem(s) to run)")
+
     if args.visual:
         ok = run_visual(problem_names[0], phase_timeout_arg,
                         sld_query=args.sld_query, sld_max_nodes=args.sld_max_nodes)
@@ -777,16 +816,21 @@ def main():
         batch_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         all_rows = []
         any_failure = False
-        for problem_name in problem_names:
-            rows = run_ablation_for_problem(args, problem_name, phase_timeout_arg)
+        combined_path = os.path.join(OUTPUT_DIR, f"ablation_summary_all_{batch_ts}.csv")
+        for i, problem_name in enumerate(problem_names):
+            rows = run_ablation_for_problem(
+                args, problem_name, phase_timeout_arg,
+                start_combo=start_combo if i == 0 else None)
             if rows is None:
                 any_failure = True
                 continue
             all_rows.extend(rows)
+            # Rewritten after every problem so an interrupted --problem
+            # all still leaves the rows of every problem that finished.
+            if len(problem_names) > 1:
+                write_ablation_summary(combined_path, all_rows)
 
         if len(problem_names) > 1:
-            combined_path = os.path.join(OUTPUT_DIR, f"ablation_summary_all_{batch_ts}.csv")
-            write_ablation_summary(combined_path, all_rows)
             ok_count = sum(1 for r in all_rows if r["status"] == "ok")
             print(f"\n[info] combined cross-problem summary written to {combined_path}")
             print(f"[info] {ok_count}/{len(all_rows)} combination(s) across "
@@ -1161,7 +1205,7 @@ def run_visual(problem_name, phase_timeout_arg, sld_query="verify_goal_formula",
     return True
 
 
-def run_ablation_for_problem(args, problem_name, phase_timeout_arg):
+def run_ablation_for_problem(args, problem_name, phase_timeout_arg, start_combo=None):
     """Runs the full backend x propagate_weights ablation sweep (see
     main()'s own module docstring) for ONE problem, exactly as main()
     used to do inline for args.problem -- factored out so --problem all
@@ -1191,11 +1235,23 @@ def run_ablation_for_problem(args, problem_name, phase_timeout_arg):
 
     combinations = [(backend, pw) for backend in _ABLATION_BACKENDS
                      for pw in (False, True)]
+    if start_combo is not None:
+        # --resume-from PROBLEM:BACKEND_PW -- drop the combinations before it.
+        combinations = combinations[_ablation_combo_names().index(start_combo):]
     print(f"\n[info] running {len(combinations)} combinations "
           f"({len(_ABLATION_BACKENDS)} backends x 2 propagate_weights "
-          f"settings) against --problem {problem_name} ...")
+          f"settings{', resumed at ' + start_combo if start_combo else ''}) "
+          f"against --problem {problem_name} ...")
 
+    # Rewritten after every combination (not just at the end) so an
+    # interrupted sweep keeps the rows of every combination that finished.
+    summary_path = os.path.join(problem_output_dir, f"{problem_name}_{ts}_ablation_summary.csv")
     summary_rows = []
+
+    def record(row):
+        summary_rows.append(row)
+        write_ablation_summary(summary_path, summary_rows)
+
     for knowledge_name, propagate_weights in combinations:
         pw_suffix = "1" if propagate_weights else "0"
         log_path = os.path.join(
@@ -1228,7 +1284,7 @@ def run_ablation_for_problem(args, problem_name, phase_timeout_arg):
                 print(f"  [SKIPPED] {knowledge_name}_{pw_suffix}: {note}")
                 row["status"] = "skipped"
                 row["note"] = note
-                summary_rows.append(row)
+                record(row)
                 continue
 
             tee(f"\n  Started : {datetime.now():%H:%M:%S}  "
@@ -1245,21 +1301,21 @@ def run_ablation_for_problem(args, problem_name, phase_timeout_arg):
                 print(f"  [ERROR] {knowledge_name}_{pw_suffix}: {note}")
                 row["status"] = "timeout"
                 row["note"] = note
-                summary_rows.append(row)
+                record(row)
                 continue
             except ProbLogError as e:
                 tee(f"\n  [ERROR] ProbLog error: {e}")
                 print(f"  [ERROR] {knowledge_name}_{pw_suffix}: ProbLog error: {e}")
                 row["status"] = "error"
                 row["note"] = str(e)
-                summary_rows.append(row)
+                record(row)
                 continue
             except Exception as e:
                 tee(f"\n  [ERROR] Unexpected error running the model: {e}")
                 print(f"  [ERROR] {knowledge_name}_{pw_suffix}: {e}")
                 row["status"] = "error"
                 row["note"] = str(e)
-                summary_rows.append(row)
+                record(row)
                 continue
             tee(f"  Finished: {datetime.now():%H:%M:%S}  ({elapsed:.3f}s)")
 
@@ -1275,7 +1331,7 @@ def run_ablation_for_problem(args, problem_name, phase_timeout_arg):
                 tee("\n  [warn] No results returned from ProbLog -- check "
                     "the file has query(...) declarations.")
                 row["status"] = "no_results"
-                summary_rows.append(row)
+                record(row)
                 continue
 
             print_compact_summary(tee, results, goal_formula_path, action_labels, condition_labels)
@@ -1284,12 +1340,11 @@ def run_ablation_for_problem(args, problem_name, phase_timeout_arg):
             banner(tee, f"Log : {log_path}")
 
             row["status"] = "ok"
-            summary_rows.append(row)
+            record(row)
             print(f"  [OK] {knowledge_name}_{pw_suffix}: "
                   f"{sizes['ground_nodes']} ground / {sizes['compiled_nodes']} "
                   f"compiled node(s), {elapsed:.3f}s total")
 
-    summary_path = os.path.join(problem_output_dir, f"{problem_name}_{ts}_ablation_summary.csv")
     write_ablation_summary(summary_path, summary_rows)
     print(f"\n[info] ablation summary written to {summary_path}")
     ok_count = sum(1 for r in summary_rows if r["status"] == "ok")

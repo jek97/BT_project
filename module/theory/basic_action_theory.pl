@@ -240,9 +240,6 @@ quantize_up(Value, Grid, Quantized) :-
 % worlds.
 cell_index(Value, CellSize, Index) :- Index is round(Value / CellSize).
 
-sum_list([], 0.0).
-sum_list([H|T], Sum) :- sum_list(T, SumT), Sum is H + SumT.
-
 % ---------------------------------------------------------------
 % 2. ROBOT / SAFETY PARAMETERS
 % ---------------------------------------------------------------
@@ -342,18 +339,14 @@ spline_point(ControlPoints, U, X, Y) :-
 % not re-simulated per query; this is exactly the "approximate"
 % arc-length option discussed: U is treated as advancing linearly
 % with elapsed-time fraction, i.e. speed is only approximately
-% constant along strongly-curved segments)
+% constant along strongly-curved segments). The integration itself (50
+% chords of the nominal spline, summed) is spline_arc_length/2 in
+% collision_geometry.py -- one external call instead of a findall loop
+% of 100 spline_point calls plus a 50-deep recursive sum_list in the
+% grounder, bit-identical result (same samples, same summation order).
+% This wrapper stays so ProbLog keeps tabling it per ControlPoints.
 arc_length(ControlPoints, Length) :-
-    ArcSamples = 50,
-    ArcSamplesHi is ArcSamples - 1,
-    findall(D,
-        ( between(0, ArcSamplesHi, I),
-          U0 is I / ArcSamples, U1 is (I+1) / ArcSamples,
-          spline_point(ControlPoints, U0, X0,Y0),
-          spline_point(ControlPoints, U1, X1,Y1),
-          dist(X0,Y0,X1,Y1,D)
-        ), Ds),
-    sum_list(Ds, Length).
+    spline_arc_length(ControlPoints, Length).
 
 % speed/1 is now a config fact -- see the problem's own config.yaml's motion.speed.
 % tool_speed/2 is its EQUIPPED-TOOL-AWARE generalization -- tool_speed

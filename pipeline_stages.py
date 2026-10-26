@@ -63,6 +63,8 @@ invocation) -- that kills the whole OS process regardless of what it's
 blocked inside.
 """
 
+import contextlib
+import gc
 import os
 import signal
 import time
@@ -81,6 +83,34 @@ def _stage_alarm(signum, frame):
     raise StageTimeout()
 
 
+# main.py --no-gc sets this to False: Python's cyclic garbage collector
+# is then switched off for the duration of each timed stage (and of the
+# SLD trace), so its full (gen2) collections -- which scan every live
+# object and grow to seconds on problem2M -- don't land inside the
+# measured times. Reference counting still frees almost everything;
+# only reference cycles pile up until the stage ends, so memory can be
+# somewhat higher while a stage runs.
+GC_DURING_STAGES = True
+
+
+@contextlib.contextmanager
+def gc_paused():
+    """Disable the cyclic GC for the enclosed block when GC_DURING_STAGES
+    is False (no-op otherwise). Collects before (so the block starts
+    from a clean heap) and after (so its cycles are freed), both outside
+    the block, i.e. outside any timer placed inside it."""
+    if GC_DURING_STAGES or not gc.isenabled():
+        yield
+        return
+    gc.collect()
+    gc.disable()
+    try:
+        yield
+    finally:
+        gc.enable()
+        gc.collect()
+
+
 def run_stage(tee, label, func, timeout_seconds):
     """Run one pipeline stage: log a start line, call func() under a
     SIGALRM-based timeout, log a done/TIMED OUT/FAILED line with
@@ -92,8 +122,12 @@ def run_stage(tee, label, func, timeout_seconds):
     old_handler = signal.signal(signal.SIGALRM, _stage_alarm)
     signal.alarm(int(timeout_seconds))
     t0 = time.perf_counter()
+    t_end = None
     try:
-        result = func()
+        with gc_paused():   # its own collects stay outside [t0, t_end]
+            t0 = time.perf_counter()
+            result = func()
+            t_end = time.perf_counter()
     except StageTimeout:
         elapsed = time.perf_counter() - t0
         tee(f"  [STAGE] {label}: TIMED OUT after {elapsed:.1f}s "
@@ -104,7 +138,7 @@ def run_stage(tee, label, func, timeout_seconds):
         tee(f"  [STAGE] {label}: FAILED after {elapsed:.3f}s -- {e}")
         raise
     else:
-        elapsed = time.perf_counter() - t0
+        elapsed = t_end - t0
         tee(f"  [STAGE] {label}: done in {elapsed:.3f}s")
         return result, elapsed
     finally:

@@ -131,7 +131,9 @@ from problog import get_evaluatable, system_info
 from problog.errors import ProbLogError
 from problog.program import PrologFile
 from problog.formula import LogicFormula
+from problog.logic import Constant
 
+import pipeline_stages
 from pipeline_stages import run_staged_inference, write_problem_data_pl, StageTimeout, run_stage
 from module.theory.graph_export import export_ground_graph
 import visualize_interactive
@@ -736,7 +738,41 @@ def main():
                           "own internal default (1e-9) is tight enough to "
                           "take as long as exact compilation, defeating "
                           "the point of approximate mode.")
+    ap.add_argument("--float-precision", default=None, metavar="N|none",
+                     help="Decimal places ProbLog rounds every float term to "
+                          "(problog.logic.Constant.FLOAT_PRECISION, applied "
+                          "via round(value, N) whenever a float is stored in "
+                          "a term: parsed numbers, `is` results, external "
+                          "predicate outputs). ProbLog's default is 15; "
+                          "\"none\" disables rounding. It is DECIMAL PLACES, "
+                          "not significant digits, and it also rounds the "
+                          "probabilities written in the program (e.g. "
+                          "0.166667:: becomes 0.17:: with N=2) -- so a small "
+                          "N changes the model, not just the arithmetic.")
+    ap.add_argument("--no-gc", action="store_true",
+                     help="Switch off Python's cyclic garbage collector while "
+                          "each stage (parse/ground/compile/evaluate, and the "
+                          "--visual SLD trace) runs, so its pauses -- full "
+                          "collections take seconds on large problems and "
+                          "are charged to whatever node is open in the SLD "
+                          "tree -- don't inflate the timings. It runs a "
+                          "collection before and after each stage instead. "
+                          "Memory can be somewhat higher during a stage.")
     args = ap.parse_args()
+
+    if args.no_gc:
+        pipeline_stages.GC_DURING_STAGES = False
+
+    if args.float_precision is not None:
+        fp = args.float_precision.strip().lower()
+        if fp == "none":
+            Constant.FLOAT_PRECISION = None
+        elif fp.isdigit():
+            Constant.FLOAT_PRECISION = int(fp)
+        else:
+            print(f"[ERROR] --float-precision: expected a non-negative "
+                  f"integer or \"none\", got {args.float_precision!r}")
+            sys.exit(1)
 
     if args.visual and args.ablation_study:
         print("[ERROR] --visual and --ablation-study are mutually "
@@ -987,6 +1023,14 @@ def run_shared_setup(problem_name, run_label_suffix):
         setup(f"\n  [ERROR] Could not generate queries_generated.pl: {e}")
         return None
 
+    setup(f"  Float terms : rounded to {Constant.FLOAT_PRECISION} decimal(s) by "
+          f"ProbLog (--float-precision; ProbLog's default is 15)"
+          if Constant.FLOAT_PRECISION is not None else
+          "  Float terms : not rounded (--float-precision none)")
+    setup("  Python GC   : off during each stage, collected between stages (--no-gc)"
+          if not pipeline_stages.GC_DURING_STAGES else
+          "  Python GC   : on (default; pauses are included in stage times)")
+
     problem_data_path = os.path.join(THEORY_DIR, "problem_data.pl")
     write_problem_data_pl(problem_data_path, problem_dir, goal_formula_path,
                            run_label=f"main.py --problem {problem_name}, "
@@ -1177,7 +1221,8 @@ def run_visual(problem_name, phase_timeout_arg, sld_query="verify_goal_formula",
         if sld_query:
             try:
                 tee(f"  [STAGE] SLD tree of {sld_query} (grounded alone, traced) ...")
-                sld = sld_tree.trace_query(THEORY_PATH, sld_query, sld_max_nodes)
+                with pipeline_stages.gc_paused():
+                    sld = sld_tree.trace_query(THEORY_PATH, sld_query, sld_max_nodes)
                 stats = sld_tree.tree_stats(sld)
                 sld_path = os.path.join(problem_output_dir, f"{problem_name}_{ts}_sld_tree.html")
                 sld_tree.write_sld_html(sld, sld_path,

@@ -287,6 +287,48 @@ def _walk_noisy_point(control_points, t0, duration, z, zt, t):
             ny + normal_dev*perp_y + tangent_dev*tan_y)
 
 
+try:
+    from problog.logic import Constant as _PLConstant
+except ImportError:
+    _PLConstant = None
+
+
+def _pl_float(value):
+    """A float exactly as ProbLog would store it in a term: Constant()
+    rounds every float to FLOAT_PRECISION (15) decimals (problog/logic.py),
+    so every value the old Prolog arc_length/2 produced -- each spline
+    point coming back from walk_noisy_point, each `is` result -- was
+    rounded like this at that step. Read on every call, not at import,
+    so main.py's --float-precision (which sets it) is always honored."""
+    precision = 15 if _PLConstant is None else _PLConstant.FLOAT_PRECISION
+    return value if precision is None else round(value, precision)
+
+
+def _spline_arc_length(control_points, samples=50):
+    """Arc length of the NOMINAL spline (no noise) -- the same numeric
+    integration basic_action_theory.pl's arc_length/2 used to do in
+    Prolog, ported so the whole thing is one external call instead of
+    a 50-iteration findall + recursive sum_list in the grounder. A
+    cubic Bezier has no closed-form arc length in general (it's an
+    elliptic integral), so this keeps the SAME discretization: chords
+    between SAMPLES+1 equally spaced U values, each point from
+    _walk_noisy_point at zero deviation (exactly what spline_point/4
+    returned), each chord sqrt((x1-x0)**2 + (y1-y0)**2) (dist/5), summed
+    from the LAST chord to the first (sum_list/2's right fold:
+    d0 + (d1 + (... + (d49 + 0.0)))), rounding with _pl_float wherever
+    the Prolog version stored a term -- so the result is bit-identical
+    to the Prolog version, not just close."""
+    pts = []
+    for i in range(samples + 1):
+        x, y = _walk_noisy_point(control_points, 0.0, 1.0, 0.0, 0.0, _pl_float(i / samples))
+        pts.append((_pl_float(x), _pl_float(y)))
+    total = 0.0
+    for i in range(samples - 1, -1, -1):
+        (x0, y0), (x1, y1) = pts[i], pts[i + 1]
+        total = _pl_float(_pl_float(math.sqrt((x1 - x0)**2 + (y1 - y0)**2)) + total)
+    return total
+
+
 # =====================================================================
 # OBSTACLE-CLEARANCE GEOMETRY -- line-for-line port of
 # point_segment_dist/polygon_edges/dist_to_polygon/inside_polygon/
@@ -883,6 +925,16 @@ if _HAVE_PROBLOG:
         cp = [(float(p.args[0]), float(p.args[1])) for p in control_points]
         x, y = _walk_noisy_point(cp, float(t0), float(duration), float(z), float(zt), float(t))
         return [(x, y)]
+
+    # spline_arc_length(+ControlPoints,-Length): backs arc_length/2 in
+    # basic_action_theory.pl (which stays a one-line Prolog wrapper so
+    # ProbLog still tables it per distinct ControlPoints -- external
+    # predicates themselves are not tabled). Single "-" output, so the
+    # bare-value return convention (see first_line_of_sight_clear_time).
+    @problog_export_nondet("+list", "-float")
+    def spline_arc_length(control_points):
+        cp = [(float(p.args[0]), float(p.args[1])) for p in control_points]
+        return [_spline_arc_length(cp)]
 
     @problog_export_nondet("+list", "+term", "+term", "+term", "+term", "+term", "-float", "-str")
     def first_threshold_crossing_time(control_points, t0, duration, z, zt, threshold):

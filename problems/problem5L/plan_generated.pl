@@ -8,3 +8,24 @@
 %   a2: MoveTo(CP1) [MainTree]
 
 plan(seq_node([planWithWaypoints(straight,[point(22.0,-15.0),point(22.0,-3.3),point(32.0,-3.3)],CP1,a1),moveto_leg(CP1,[collision,battery],a2)])).
+
+% ---------------------------------------------------------------
+% COMPILED TREE (module/translators/bt_compile.py): one predicate
+% per control-flow node, entered through bt_root/3. This is what
+% basic_action_theory.pl runs; plan/1 and reactive_children/2
+% above are kept only as the readable source it was compiled from.
+% ---------------------------------------------------------------
+bt_root(S, S1, O) :-
+    bt_seq1(S, S1, O).
+
+bt_seq1(S, S1, O) :-
+    leaf_planWithWaypoints(straight, [point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)], CP1, a1, S, S2, O1),
+    bt_seq1_after1(O1, CP1, S2, S1, O).
+
+bt_seq1_after1(true, CP1, S, S1, O) :-
+    leaf_moveto_leg(CP1, [collision, battery], a2, S, S2, O1),
+    bt_seq1_after2(O1, S2, S1, O).
+bt_seq1_after1(false, _, S, S, false).
+
+bt_seq1_after2(true, S, S, true).
+bt_seq1_after2(false, S, S, false).

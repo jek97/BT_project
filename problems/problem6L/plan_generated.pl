@@ -10,3 +10,34 @@
 %   a4: MoveTo(CP2) [MainTree]
 
 plan(seq_node([planWithWaypoints(straight,[point(22.0,-15.0),point(22.0,-3.3),point(32.0,-3.3)],CP1,a1),moveto_leg(CP1,[collision,battery],a2),planWithWaypoints(straight,[point(32.0,-27.0),point(45.5,-27.0),point(45.5,-36.0)],CP2,a3),moveto_leg(CP2,[collision,battery],a4)])).
+
+% ---------------------------------------------------------------
+% COMPILED TREE (module/translators/bt_compile.py): one predicate
+% per control-flow node, entered through bt_root/3. This is what
+% basic_action_theory.pl runs; plan/1 and reactive_children/2
+% above are kept only as the readable source it was compiled from.
+% ---------------------------------------------------------------
+bt_root(S, S1, O) :-
+    bt_seq1(S, S1, O).
+
+bt_seq1(S, S1, O) :-
+    leaf_planWithWaypoints(straight, [point(22.0,-15.0), point(22.0,-3.3), point(32.0,-3.3)], CP1, a1, S, S2, O1),
+    bt_seq1_after1(O1, CP1, S2, S1, O).
+
+bt_seq1_after1(true, CP1, S, S1, O) :-
+    leaf_moveto_leg(CP1, [collision, battery], a2, S, S2, O1),
+    bt_seq1_after2(O1, S2, S1, O).
+bt_seq1_after1(false, _, S, S, false).
+
+bt_seq1_after2(true, S, S1, O) :-
+    leaf_planWithWaypoints(straight, [point(32.0,-27.0), point(45.5,-27.0), point(45.5,-36.0)], CP2, a3, S, S2, O1),
+    bt_seq1_after3(O1, CP2, S2, S1, O).
+bt_seq1_after2(false, S, S, false).
+
+bt_seq1_after3(true, CP2, S, S1, O) :-
+    leaf_moveto_leg(CP2, [collision, battery], a4, S, S2, O1),
+    bt_seq1_after4(O1, S2, S1, O).
+bt_seq1_after3(false, _, S, S, false).
+
+bt_seq1_after4(true, S, S, true).
+bt_seq1_after4(false, S, S, false).

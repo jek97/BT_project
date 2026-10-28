@@ -148,7 +148,8 @@ def run_stage(tee, label, func, timeout_seconds):
 
 def run_staged_inference(plan_file, tee, phase_timeout=300,
                           approximate=False, approximate_convergence=1e-2,
-                          knowledge_name=None, propagate_weights=False):
+                          knowledge_name=None, propagate_weights=False,
+                          on_stage=None):
     """
     Runs the ProbLog resolution pipeline against plan_file as FOUR
     separate, logged, individually-timed-out stages (parse / ground /
@@ -250,6 +251,12 @@ def run_staged_inference(plan_file, tee, phase_timeout=300,
         ground side), for exactly this kind of before/after backend
         comparison.
 
+    on_stage: optional callback on_stage(timings, sizes), called after
+    EACH stage completes with what is known so far (sizes gains
+    "ground_nodes" after Ground and "compiled_nodes" after Compile) --
+    lets a caller persist partial results (e.g. the ablation CSV) before
+    a later stage times out, errors, or takes the whole process down.
+
     Raises StageTimeout if any single stage exceeds ITS OWN budget --
     which stage is already named in the [STAGE] line logged just
     before the exception propagates, so a hang's location is known
@@ -262,11 +269,14 @@ def run_staged_inference(plan_file, tee, phase_timeout=300,
         timeouts = {k: phase_timeout for k in ("parse", "ground", "compile", "evaluate")}
 
     timings = {}
+    sizes = {}
+    notify = on_stage or (lambda timings, sizes: None)
     semiring = SemiringLogProbability()
 
     model, t = run_stage(tee, "Parse (plan.pl formed)",
                           lambda: PrologFile(plan_file), timeouts["parse"])
     timings["parse"] = t
+    notify(timings, sizes)
 
     lf, t = run_stage(tee, "Ground (plan unrolled, regressed to s0)",
                        lambda: LogicFormula.create_from(
@@ -275,6 +285,8 @@ def run_staged_inference(plan_file, tee, phase_timeout=300,
                        timeouts["ground"])
     timings["ground"] = t
     tee(f"    -> {len(lf)} ground node(s)")
+    sizes["ground_nodes"] = len(lf)
+    notify(timings, sizes)
 
     compile_label = ("Compile (k-best anytime lower bound, "
                       f"convergence={approximate_convergence})" if approximate
@@ -286,6 +298,8 @@ def run_staged_inference(plan_file, tee, phase_timeout=300,
                              timeouts["compile"])
     timings["compile"] = t
     tee(f"    -> {len(compiled)} compiled node(s)")
+    sizes["compiled_nodes"] = len(compiled)
+    notify(timings, sizes)
 
     evaluate_call = ((lambda: compiled.evaluate(lower_only=True,
                                                  convergence=approximate_convergence))
@@ -294,9 +308,9 @@ def run_staged_inference(plan_file, tee, phase_timeout=300,
         tee, "Evaluate (weighted model count against the initial database)",
         evaluate_call, timeouts["evaluate"])
     timings["evaluate"] = t
+    notify(timings, sizes)
 
     results = {str(term): float(prob) for term, prob in raw_result.items()}
-    sizes = {"ground_nodes": len(lf), "compiled_nodes": len(compiled)}
     return results, timings, sizes
 
 

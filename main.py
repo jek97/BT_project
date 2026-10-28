@@ -222,11 +222,12 @@ def _str2bool(value):
 # -----------------------------------------------------------------------
 def run_problog_api(plan_file, tee, phase_timeout=300, approximate=False,
                      approximate_convergence=1e-2, knowledge_name=None,
-                     propagate_weights=False):
+                     propagate_weights=False, on_stage=None):
     results, timings, sizes = run_staged_inference(
         plan_file, tee, phase_timeout=phase_timeout, approximate=approximate,
         approximate_convergence=approximate_convergence,
-        knowledge_name=knowledge_name, propagate_weights=propagate_weights)
+        knowledge_name=knowledge_name, propagate_weights=propagate_weights,
+        on_stage=on_stage)
     return results, sum(timings.values()), timings, sizes
 
 
@@ -630,12 +631,13 @@ def print_reason_breakdown(tee, results):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--problem", default="problem0",
+    ap.add_argument("--problem", default=None,
                      help="Name of the problem to run -- a subdirectory "
                           "of problems/ holding this problem's own "
                           "config.yaml, behavior_tree.xml, "
                           "goal_formula.pl, and map.yaml (default: "
-                          "problem0). Pass \"all\" to run SEQUENTIALLY "
+                          "problem0, or \"all\" when --resume-from is "
+                          "given). Pass \"all\" to run SEQUENTIALLY "
                           "over every subdirectory of problems/ whose "
                           "name starts with \"problem\" (problem0L, "
                           "problem3S, ... -- discovered fresh each run "
@@ -663,8 +665,11 @@ def main():
                           "alphabetical order) and, with --ablation-study, "
                           "every combination of PROBLEM before BACKEND_PW "
                           "(e.g. problem3L:bdd_1; order: sdd, sddx, bdd, "
-                          "nnf, fsdd, fbdd, each _0 then _1). Without "
-                          ":BACKEND_PW, PROBLEM restarts from sdd_0. The "
+                          "nnf, fsdd, fbdd, each _0 then _1; a bare "
+                          "backend like bdd means bdd_0). Without "
+                          ":BACKEND_PW, PROBLEM restarts from sdd_0. "
+                          "Implies --problem all unless --problem is "
+                          "given. The "
                           "resumed run gets its own new timestamp, so its "
                           "summary CSVs cover only what it ran itself.")
     ap.add_argument("--visual", action="store_true",
@@ -759,6 +764,8 @@ def main():
                           "collection before and after each stage instead. "
                           "Memory can be somewhat higher during a stage.")
     args = ap.parse_args()
+    if args.problem is None:
+        args.problem = "all" if args.resume_from else "problem0"
 
     if args.no_gc:
         pipeline_stages.GC_DURING_STAGES = False
@@ -816,6 +823,8 @@ def main():
     if args.resume_from:
         resume_problem, _, start_combo = args.resume_from.partition(":")
         start_combo = start_combo or None
+        if start_combo in _ABLATION_BACKENDS:
+            start_combo += "_0"
         if resume_problem not in problem_names:
             print(f"[ERROR] --resume-from: {resume_problem!r} is not among "
                   f"the selected problem(s) -- {', '.join(problem_names)}")
@@ -854,15 +863,22 @@ def main():
         any_failure = False
         combined_path = os.path.join(OUTPUT_DIR, f"ablation_summary_all_{batch_ts}.csv")
         for i, problem_name in enumerate(problem_names):
+            # Rewritten on every row update (not just per problem) so an
+            # interrupted --problem all keeps everything written so far,
+            # including the partial row of the combination in progress.
+            on_update = None
+            if len(problem_names) > 1:
+                on_update = (lambda rows: write_ablation_summary(
+                    combined_path, all_rows + rows))
             rows = run_ablation_for_problem(
                 args, problem_name, phase_timeout_arg,
-                start_combo=start_combo if i == 0 else None)
+                start_combo=start_combo if i == 0 else None,
+                on_update=on_update,
+                keep_output=(i == 0 and bool(args.resume_from)))
             if rows is None:
                 any_failure = True
                 continue
             all_rows.extend(rows)
-            # Rewritten after every problem so an interrupted --problem
-            # all still leaves the rows of every problem that finished.
             if len(problem_names) > 1:
                 write_ablation_summary(combined_path, all_rows)
 
@@ -887,7 +903,7 @@ def main():
             sys.exit(1)
 
 
-def run_shared_setup(problem_name, run_label_suffix):
+def run_shared_setup(problem_name, run_label_suffix, keep_output=False):
     """The one-time, mode-independent setup EVERY mode (single run,
     ablation sweep, --visual) needs before touching ProbLog at all:
     validate the problem directory/theory file exist, wipe+recreate
@@ -927,11 +943,14 @@ def run_shared_setup(problem_name, run_label_suffix):
     # Prolog facts are (those get committed; this doesn't -- see
     # .gitignore). Wiped/recreated ONCE per invocation (not once per
     # ablation combination), since every combination's own log/CSV
-    # output lands together in here.
+    # output lands together in here. keep_output (--resume-from's own
+    # problem) skips the wipe, so the interrupted run's summary CSV and
+    # logs stay next to the resumed run's for summarize_ablation.py to
+    # merge.
     problem_output_dir = os.path.join(OUTPUT_DIR, problem_name)
-    if os.path.isdir(problem_output_dir):
+    if os.path.isdir(problem_output_dir) and not keep_output:
         shutil.rmtree(problem_output_dir)
-    os.makedirs(problem_output_dir)
+    os.makedirs(problem_output_dir, exist_ok=True)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -1250,7 +1269,8 @@ def run_visual(problem_name, phase_timeout_arg, sld_query="verify_goal_formula",
     return True
 
 
-def run_ablation_for_problem(args, problem_name, phase_timeout_arg, start_combo=None):
+def run_ablation_for_problem(args, problem_name, phase_timeout_arg, start_combo=None,
+                             on_update=None, keep_output=False):
     """Runs the full backend x propagate_weights ablation sweep (see
     main()'s own module docstring) for ONE problem, exactly as main()
     used to do inline for args.problem -- factored out so --problem all
@@ -1261,8 +1281,17 @@ def run_ablation_for_problem(args, problem_name, phase_timeout_arg, start_combo=
     config/plan/goal/queries) failed for this problem -- the caller
     decides whether that's fatal (single-problem case) or just means
     skipping to the next problem (--problem all case), which is why
-    this returns None instead of calling sys.exit(1) itself."""
-    ctx = run_shared_setup(problem_name, "ablation sweep")
+    this returns None instead of calling sys.exit(1) itself.
+
+    The summary CSV is written INCREMENTALLY: each combination's row is
+    added with status "running" before inference starts and rewritten
+    after every stage (see run_staged_inference's on_stage), so a
+    problem that grounds but can't compile (timeout, error, or the
+    process being killed outright, e.g. out of memory) still records
+    its ground_nodes/ground_s -- compiled_nodes and total_s stay empty.
+    on_update(rows), if given, is called after every such write with
+    this problem's rows so far (used for --problem all's combined CSV)."""
+    ctx = run_shared_setup(problem_name, "ablation sweep", keep_output=keep_output)
     if ctx is None:
         return None
     problem_dir = ctx["problem_dir"]
@@ -1288,14 +1317,20 @@ def run_ablation_for_problem(args, problem_name, phase_timeout_arg, start_combo=
           f"settings{', resumed at ' + start_combo if start_combo else ''}) "
           f"against --problem {problem_name} ...")
 
-    # Rewritten after every combination (not just at the end) so an
-    # interrupted sweep keeps the rows of every combination that finished.
+    # Rewritten on every update of the current row (not just at the
+    # end) so an interrupted sweep keeps every row written so far.
     summary_path = os.path.join(problem_output_dir, f"{problem_name}_{ts}_ablation_summary.csv")
     summary_rows = []
 
-    def record(row):
-        summary_rows.append(row)
+    def flush():
         write_ablation_summary(summary_path, summary_rows)
+        if on_update is not None:
+            on_update(summary_rows)
+
+    def record(row):
+        if not any(r is row for r in summary_rows):
+            summary_rows.append(row)
+        flush()
 
     for knowledge_name, propagate_weights in combinations:
         pw_suffix = "1" if propagate_weights else "0"
@@ -1334,11 +1369,26 @@ def run_ablation_for_problem(args, problem_name, phase_timeout_arg, start_combo=
 
             tee(f"\n  Started : {datetime.now():%H:%M:%S}  "
                 f"(phase timeout: {_timeout_desc})")
+
+            # Partial row on disk before inference starts: if the process
+            # dies mid-stage, the CSV still shows this combination as
+            # "running" with whatever stages had already finished.
+            row["status"] = "running"
+            record(row)
+
+            def on_stage(stage_timings, stage_sizes, row=row):
+                for stage, t in stage_timings.items():
+                    row[f"{stage}_s"] = f"{t:.6f}"
+                for key, n in stage_sizes.items():
+                    row[key] = n
+                record(row)
+
             try:
                 results, elapsed, timings, sizes = run_problog_api(
                     THEORY_PATH, tee, phase_timeout_arg,
                     knowledge_name=knowledge_name,
-                    propagate_weights=propagate_weights)
+                    propagate_weights=propagate_weights,
+                    on_stage=on_stage)
             except StageTimeout:
                 note = (f"a pipeline stage exceeded its own timeout "
                         f"({_timeout_desc}; see [STAGE] line above for which)")
@@ -1364,12 +1414,6 @@ def run_ablation_for_problem(args, problem_name, phase_timeout_arg, start_combo=
                 continue
             tee(f"  Finished: {datetime.now():%H:%M:%S}  ({elapsed:.3f}s)")
 
-            row["ground_nodes"] = sizes["ground_nodes"]
-            row["compiled_nodes"] = sizes["compiled_nodes"]
-            row["parse_s"] = f"{timings['parse']:.6f}"
-            row["ground_s"] = f"{timings['ground']:.6f}"
-            row["compile_s"] = f"{timings['compile']:.6f}"
-            row["evaluate_s"] = f"{timings['evaluate']:.6f}"
             row["total_s"] = f"{elapsed:.6f}"
 
             if not results:

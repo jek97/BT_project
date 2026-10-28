@@ -60,6 +60,14 @@ re-running, not by hand-editing basic_action_theory.pl.
 main.py regenerates it automatically before every run, exactly like it
 already does for config_generated.pl.
 
+COMPILED, NOT INTERPRETED: plan/1 and reactive_children/2 are kept in
+that file as the readable form of the tree, but the theory no longer
+interprets them. generate_plan_pl() passes them through
+bt_compile.py, which appends one Prolog predicate per control-flow
+node, entered through bt_root/3 -- see that module's own note for why
+(no do_node/4 dispatch dead ends) and how blackboard variables are
+threaded between the generated predicates.
+
 WHY A FACT, NOT A CLAUSE WITH A BODY: the old hand-written plan/1 was
 `plan(seq_node([moveto_leg(CP,Triggers)])) :- control_points(CP),
 default_triggers(Triggers).` -- CP had to be bound by a BODY goal
@@ -236,6 +244,8 @@ import re
 import xml.etree.ElementTree as ET
 
 import yaml
+
+from bt_compile import compile_plan_text
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
@@ -2361,8 +2371,13 @@ def generate_plan_pl(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
         for code, child_terms in reactive_facts:
             lines.append(f"reactive_children({code}, [{','.join(child_terms)}]).")
         lines.append("")
+    # plan/1 and reactive_children/2 stay as the readable source; what
+    # the theory actually runs is the compiled form appended below (see
+    # bt_compile.py's own note).
+    text = "\n".join(lines)
+    text += "\n" + compile_plan_text(text)
     with open(output_path, "w") as f:
-        f.write("\n".join(lines))
+        f.write(text)
     return output_path, reason_patterns_by_action, action_labels, condition_labels
 
 

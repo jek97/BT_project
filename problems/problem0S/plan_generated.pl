@@ -18,3 +18,92 @@
 %   c4: DistanceBelow(goal=9.5;13.5,threshold=1.0) [MainTree]
 
 plan(seq_node([fallback_node([cond(distance_below(9.5,6.0,1.0),c1),seq_node([planWithWaypoints(straight,[point(18.5,-13.5),point(18.5,-6.0),point(18.5,0.0),point(18.5,6.0),point(9.5,6.0)],CP1,a1),moveto_leg(CP1,[collision,battery],a2),cond(distance_below(9.5,6.0,1.0),c2)])]),take_sample(sample_tree_11,a3),fallback_node([cond(distance_below(9.5,13.5,1.0),c3),seq_node([planWithWaypoints(straight,[point(0.5,6.0),point(0.5,13.5),point(9.5,13.5)],CP2,a4),moveto_leg(CP2,[collision,battery],a5),cond(distance_below(9.5,13.5,1.0),c4)])]),take_sample(sample_tree_53,a6)])).
+
+% ---------------------------------------------------------------
+% COMPILED TREE (module/translators/bt_compile.py): one predicate
+% per control-flow node, entered through bt_root/3. This is what
+% basic_action_theory.pl runs; plan/1 and reactive_children/2
+% above are kept only as the readable source it was compiled from.
+% ---------------------------------------------------------------
+bt_root(S, S1, O) :-
+    bt_seq1(S, S1, O).
+
+bt_fb1(S, S1, O) :-
+    leaf_cond(distance_below(9.5,6.0,1.0), c1, S, S2, O1),
+    bt_fb1_after1(O1, S2, S1, O).
+
+bt_seq2(S, S1, O) :-
+    leaf_planWithWaypoints(straight, [point(18.5,-13.5), point(18.5,-6.0), point(18.5,0.0), point(18.5,6.0), point(9.5,6.0)], CP1, a1, S, S2, O1),
+    bt_seq2_after1(O1, CP1, S2, S1, O).
+
+bt_seq2_after1(true, CP1, S, S1, O) :-
+    leaf_moveto_leg(CP1, [collision, battery], a2, S, S2, O1),
+    bt_seq2_after2(O1, S2, S1, O).
+bt_seq2_after1(false, _, S, S, false).
+
+bt_seq2_after2(true, S, S1, O) :-
+    leaf_cond(distance_below(9.5,6.0,1.0), c2, S, S2, O1),
+    bt_seq2_after3(O1, S2, S1, O).
+bt_seq2_after2(false, S, S, false).
+
+bt_seq2_after3(true, S, S, true).
+bt_seq2_after3(false, S, S, false).
+
+bt_fb1_after1(false, S, S1, O) :-
+    bt_seq2(S, S2, O1),
+    bt_fb1_after2(O1, S2, S1, O).
+bt_fb1_after1(true, S, S, true).
+
+bt_fb1_after2(false, S, S, false).
+bt_fb1_after2(true, S, S, true).
+
+bt_seq1(S, S1, O) :-
+    bt_fb1(S, S2, O1),
+    bt_seq1_after1(O1, S2, S1, O).
+
+bt_seq1_after1(true, S, S1, O) :-
+    leaf_take_sample(sample_tree_11, a3, S, S2, O1),
+    bt_seq1_after2(O1, S2, S1, O).
+bt_seq1_after1(false, S, S, false).
+
+bt_fb2(S, S1, O) :-
+    leaf_cond(distance_below(9.5,13.5,1.0), c3, S, S2, O1),
+    bt_fb2_after1(O1, S2, S1, O).
+
+bt_seq3(S, S1, O) :-
+    leaf_planWithWaypoints(straight, [point(0.5,6.0), point(0.5,13.5), point(9.5,13.5)], CP2, a4, S, S2, O1),
+    bt_seq3_after1(O1, CP2, S2, S1, O).
+
+bt_seq3_after1(true, CP2, S, S1, O) :-
+    leaf_moveto_leg(CP2, [collision, battery], a5, S, S2, O1),
+    bt_seq3_after2(O1, S2, S1, O).
+bt_seq3_after1(false, _, S, S, false).
+
+bt_seq3_after2(true, S, S1, O) :-
+    leaf_cond(distance_below(9.5,13.5,1.0), c4, S, S2, O1),
+    bt_seq3_after3(O1, S2, S1, O).
+bt_seq3_after2(false, S, S, false).
+
+bt_seq3_after3(true, S, S, true).
+bt_seq3_after3(false, S, S, false).
+
+bt_fb2_after1(false, S, S1, O) :-
+    bt_seq3(S, S2, O1),
+    bt_fb2_after2(O1, S2, S1, O).
+bt_fb2_after1(true, S, S, true).
+
+bt_fb2_after2(false, S, S, false).
+bt_fb2_after2(true, S, S, true).
+
+bt_seq1_after2(true, S, S1, O) :-
+    bt_fb2(S, S2, O1),
+    bt_seq1_after3(O1, S2, S1, O).
+bt_seq1_after2(false, S, S, false).
+
+bt_seq1_after3(true, S, S1, O) :-
+    leaf_take_sample(sample_tree_53, a6, S, S2, O1),
+    bt_seq1_after4(O1, S2, S1, O).
+bt_seq1_after3(false, S, S, false).
+
+bt_seq1_after4(true, S, S, true).
+bt_seq1_after4(false, S, S, false).

@@ -147,6 +147,21 @@ def main():
         tee(f"  [ERROR] Could not generate queries_generated.pl: {e}")
         sys.exit(1)
 
+    # The theory runs the COMPILED tree (bt_root/3, see module/translators/
+    # bt_compile.py); a hand-written plan_generated.pl with only plan/1
+    # (+ reactive_children/2) gets it appended once, here.
+    with open(plan_path) as f:
+        plan_text = f.read()
+    if "bt_root(" not in plan_text:
+        try:
+            from bt_compile import compile_plan_text
+            with open(plan_path, "a") as f:
+                f.write("\n" + compile_plan_text(plan_text))
+            tee(f"  [STAGE] plan/1 compiled to bt_root/3, appended to plan_generated.pl: done")
+        except Exception as e:
+            tee(f"  [ERROR] Could not compile plan_generated.pl's plan/1: {e}")
+            sys.exit(1)
+
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     problem_data_path = os.path.join(THEORY_DIR, "problem_data.pl")
     write_problem_data_pl(

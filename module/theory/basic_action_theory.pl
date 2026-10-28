@@ -2440,8 +2440,8 @@ do_action(A, S, do(A,S)) :- primitive_action(A), poss(A, S).
 % pass-through fluents (at/4, battery/3, moving/1, now/2, current_walk/6)
 % to skip over -- exactly the same, already-proven-cheap shape planned
 % (Algorithm,Reason) already added for PlanWith.
-do_node(cond(C,Code), S, do(checked(Code,C,true), S), true)  :- holds(C, S).
-do_node(cond(C,Code), S, do(checked(Code,C,false),S), false) :- \+ holds(C, S).
+leaf_cond(C, Code, S, do(checked(Code,C,true), S), true)  :- holds(C, S).
+leaf_cond(C, Code, S, do(checked(Code,C,false),S), false) :- \+ holds(C, S).
 
 % -- ACTION leaf: take_sample -------------------------------------------
 % take_sample(SampleId,ActionCode) -- INSTANTANEOUS (no Duration/
@@ -2504,7 +2504,7 @@ do_node(cond(C,Code), S, do(checked(Code,C,false),S), false) :- \+ holds(C, S).
 % sample landed, and holds(sample_value_over(...)) and its Below/Equal
 % siblings (Section 8, near distance_below/3) for querying WHAT VALUE a
 % specific, author-named sample (SampleId) came back with.
-do_node(take_sample(SampleId,ActionCode), S, S1, Status) :-
+leaf_take_sample(SampleId, ActionCode, S, S1, Status) :-
     do_action(take_sample(SampleId,ActionCode,_Reason,Status), S, S1).
 
 % -- ACTION leaf --------------------------------------------------------
@@ -2515,7 +2515,7 @@ do_node(take_sample(SampleId,ActionCode), S, S1, Status) :-
 % for a genuinely unprotected leg. Status flows straight through as
 % Outcome -- no translation predicate needed, since both already speak
 % true/false.
-do_node(moveto_leg(CP,Triggers,ActionCode), S, S1, Status) :-
+leaf_moveto_leg(CP, Triggers, ActionCode, S, S1, Status) :-
     do_action(startMoveto(CP,Triggers,ActionCode,_T0), S, S2),
     do_action(haltMoveto(_T,_Reason,Status), S2, S1).
 
@@ -2556,22 +2556,22 @@ do_node(moveto_leg(CP,Triggers,ActionCode), S, S1, Status) :-
 % do_action calls below) is always an Id, e.g. "cart1" from this
 % problem's own config.yaml tool.instances -- never a bare kind name --
 % see tool_instance/2's own note.
-do_node(install_tool_leg(Tool,Triggers,ActionCode), S, S1, Status) :-
+leaf_install_tool_leg(Tool, Triggers, ActionCode, S, S1, Status) :-
     do_action(start_install_tool(Tool,Triggers,ActionCode,_T0), S, S2),
     do_action(halt_install_tool(_T,_Reason,Status), S2, S1).
 
-do_node(uninstall_tool_leg(Tool,Triggers,ActionCode), S, S1, Status) :-
+leaf_uninstall_tool_leg(Tool, Triggers, ActionCode, S, S1, Status) :-
     do_action(start_uninstall_tool(Tool,Triggers,ActionCode,_T0), S, S2),
     do_action(halt_uninstall_tool(_T,_Reason,Status), S2, S1).
 
 % do_node(deploy_tool_leg(...))/do_node(retract_tool_leg(...)): the
 % deploy_tool/retract_tool analogues of do_node(install_tool_leg(...))/
 % do_node(uninstall_tool_leg(...)) just above -- IDENTICAL shape.
-do_node(deploy_tool_leg(Tool,Triggers,ActionCode), S, S1, Status) :-
+leaf_deploy_tool_leg(Tool, Triggers, ActionCode, S, S1, Status) :-
     do_action(start_deploy_tool(Tool,Triggers,ActionCode,_T0), S, S2),
     do_action(halt_deploy_tool(_T,_Reason,Status), S2, S1).
 
-do_node(retract_tool_leg(Tool,Triggers,ActionCode), S, S1, Status) :-
+leaf_retract_tool_leg(Tool, Triggers, ActionCode, S, S1, Status) :-
     do_action(start_retract_tool(Tool,Triggers,ActionCode,_T0), S, S2),
     do_action(halt_retract_tool(_T,_Reason,Status), S2, S1).
 
@@ -2772,7 +2772,7 @@ plan_waypoints_call(straight, SX,SY, Waypoints, [], no_path, false) :-
 %    across the entire merged route). See PlanWithWaypoints' own
 %    schema.yaml entry for this same tradeoff from the BT-author's
 %    side.
-do_node(planWithWaypoints(Algorithm, Waypoints, CP, ActionCode), S,
+leaf_planWithWaypoints(Algorithm, Waypoints, CP, ActionCode, S,
         do(planned(Algorithm,Reason), S), Status) :-
     now(T, S), at(SXExact,SYExact,T,S),
     disc_step_position(Grid),
@@ -2883,7 +2883,7 @@ do_node(planWithWaypoints(Algorithm, Waypoints, CP, ActionCode), S,
 % one -- exactly the kind of silent solution-doubling this project has
 % already hit once (see match_wild/2's own history note) and now
 % checks for on purpose.
-do_node(planWith(follow_boarder(ObstacleId,Offset), _Goal, CP, ActionCode), S,
+leaf_planWith_follow_boarder(follow_boarder(ObstacleId,Offset), _Goal, CP, ActionCode, S,
         do(planned(follow_boarder(ObstacleId,Offset),Reason), S), Status) :-
     now(T, S), at(SXExact,SYExact,T,S),
     disc_step_position(Grid),
@@ -2892,7 +2892,7 @@ do_node(planWith(follow_boarder(ObstacleId,Offset), _Goal, CP, ActionCode), S,
     Reason0 =.. [Functor],
     Reason1 =.. [Functor, follow_boarder(ObstacleId,Offset), none],
     tag_reason(Reason1, ActionCode, Reason).
-do_node(planWith(Algorithm, point(GX,GY), CP, ActionCode), S,
+leaf_planWith(Algorithm, point(GX,GY), CP, ActionCode, S,
         do(planned(Algorithm,Reason), S), Status) :-
     Algorithm \= follow_boarder(_,_),
     now(T, S), at(SXExact,SYExact,T,S),
@@ -2918,28 +2918,28 @@ do_node(planWith(Algorithm, point(GX,GY), CP, ActionCode), S,
 % ambiguous across them. TWO mutually exclusive clauses each (found vs
 % not), same "no if-then-else" convention every other multi-case
 % predicate in this file already uses.
-do_node(tool_position_query(Id,Pos,ActionCode), S, do(tool_position_result(Reason), S), true) :-
+leaf_tool_position_query(Id, Pos, ActionCode, S, do(tool_position_result(Reason), S), true) :-
     tool_position(Id, GX, GY, S),
     Pos = point(GX,GY),
     tag_reason(tool_position_found(Id), ActionCode, Reason).
-do_node(tool_position_query(Id,_Pos,ActionCode), S, do(tool_position_result(Reason), S), false) :-
+leaf_tool_position_query(Id, _Pos, ActionCode, S, do(tool_position_result(Reason), S), false) :-
     \+ tool_position(Id, _, _, S),
     tag_reason(tool_position_unavailable(Id), ActionCode, Reason).
 
-do_node(tools_of_kind_query(Kind,Tools,ActionCode), S, do(tools_of_kind_result(Reason), S), true) :-
+leaf_tools_of_kind_query(Kind, Tools, ActionCode, S, do(tools_of_kind_result(Reason), S), true) :-
     findall(tool(Id,point(GX,GY)), tools_of_kind(Kind,S,Id,GX,GY), Tools),
     Tools \= [],
     tag_reason(tools_of_kind_found(Kind), ActionCode, Reason).
-do_node(tools_of_kind_query(Kind,Tools,ActionCode), S, do(tools_of_kind_result(Reason), S), false) :-
+leaf_tools_of_kind_query(Kind, Tools, ActionCode, S, do(tools_of_kind_result(Reason), S), false) :-
     findall(tool(Id,point(GX,GY)), tools_of_kind(Kind,S,Id,GX,GY), Tools),
     Tools == [],
     tag_reason(tools_of_kind_empty(Kind), ActionCode, Reason).
 
-do_node(nearest_tool_of_kind_query(Kind,Id,Pos,ActionCode), S, do(nearest_tool_result(Reason), S), true) :-
+leaf_nearest_tool_of_kind_query(Kind, Id, Pos, ActionCode, S, do(nearest_tool_result(Reason), S), true) :-
     nearest_tool_of_kind(Kind, S, Id, GX, GY, _Dist),
     Pos = point(GX,GY),
     tag_reason(nearest_tool_found(Kind,Id), ActionCode, Reason).
-do_node(nearest_tool_of_kind_query(Kind,_Id,_Pos,ActionCode), S, do(nearest_tool_result(Reason), S), false) :-
+leaf_nearest_tool_of_kind_query(Kind, _Id, _Pos, ActionCode, S, do(nearest_tool_result(Reason), S), false) :-
     \+ nearest_tool_of_kind(Kind, S, _, _, _, _),
     tag_reason(no_tool_of_kind(Kind), ActionCode, Reason).
 
@@ -2960,11 +2960,11 @@ do_node(nearest_tool_of_kind_query(Kind,_Id,_Pos,ActionCode), S, do(nearest_tool
 % unlike tool_position_query's own \+ tool_position(...) false clause,
 % the false clause here can match hitch_id(free,S) directly, no
 % negation needed).
-do_node(hitched_id_query(Id,ActionCode), S, do(hitched_id_result(Reason), S), true) :-
+leaf_hitched_id_query(Id, ActionCode, S, do(hitched_id_result(Reason), S), true) :-
     hitch_id(Id, S),
     Id \= free,
     tag_reason(hitched_id_found(Id), ActionCode, Reason).
-do_node(hitched_id_query(_Id,ActionCode), S, do(hitched_id_result(Reason), S), false) :-
+leaf_hitched_id_query(_Id, ActionCode, S, do(hitched_id_result(Reason), S), false) :-
     hitch_id(free, S),
     tag_reason(hitched_id_unavailable, ActionCode, Reason).
 
@@ -2998,188 +2998,57 @@ planned_with(Algorithm, Reason, do(_A, S)) :- planned_with(Algorithm, Reason, S)
 checked_with(Code, C, Status, do(checked(Code,C,Status), _)).
 checked_with(Code, C, Status, do(_A, S)) :- checked_with(Code, C, Status, S).
 
-% -- ONE SEARCH PER CHILD, THEN DISPATCH ON ITS OUTCOME -------------
-%    Every composite below calls its child ONCE with the outcome left
-%    unbound (do_node(Child, S, S2, O)) and then picks its behaviour
-%    with a small helper whose FIRST argument is that outcome
-%    (seq_step/5, fallback_step/5, invert/2, reactive_after/8): by the
-%    time the helper runs, O is bound to true / false / reactive(C), so
-%    only the matching helper clause applies. Calling the child once per
-%    outcome instead (do_node(Child,S,S2,true), ...false), ...
-%    reactive(C))) gives the same answers, but ProbLog tables each of
-%    those calls separately, so the child -- e.g. a whole moveto_leg,
-%    trajectory and crossing-time search included -- was grounded three
-%    times from the same S. An outcome with no helper clause (e.g.
-%    world_too_large from a nested reactive composite) is dropped here,
-%    exactly as the per-outcome clauses dropped it before.
-
-% -- SEQUENCE composite: stop and FAIL at the first failing child; --
-%    succeed only if every child succeeds, in order. A REACTIVE child
-%    (see leg_status/9's own note on the three-valued Status) stops
-%    the sequence too, same as false -- but is NOT the same as false:
-%    it propagates straight through, UNCHANGED (Code and all -- this
-%    clause never inspects WHICH code it is, unlike reactivesequence/
-%    reactivefallback below), to whatever node contains THIS seq_node
-%    -- see the CONTROL-FLOW REDESCEND TARGETS note below for the full
-%    picture of why and where this eventually gets caught. A plain
-%    seq_node NEVER catches/redescends on its own, by design -- exactly
-%    matching real BT.cpp's own plain Sequence, which a ReactiveSequence
-%    is a genuinely DIFFERENT node type from, not a special case of.
-do_node(seq_node([]), S, S, true).
-do_node(seq_node([Child|Rest]), S, S1, Outcome) :-
-    do_node(Child, S, S2, O),
-    seq_step(O, Rest, S2, S1, Outcome).
-
-seq_step(true, Rest, S2, S1, Outcome) :-
-    do_node(seq_node(Rest), S2, S1, Outcome).
-seq_step(false, _Rest, S2, S2, false).
-seq_step(reactive(Code), _Rest, S2, S2, reactive(Code)).
-
-% -- FALLBACK (Selector) composite: stop and SUCCEED at the first ---
-%    succeeding child; fail only if every child fails, in order.
-%    NOTE: on a failing child, the NEXT child starts from THAT
-%    child's resulting situation, not from the original S -- a failed
-%    PHYSICAL action (e.g. a crashed moveto_leg) still consumed real
-%    time and moved the robot; unlike a classical BT's usual
-%    assumption that failed leaves are side-effect-free, a fallback
-%    over durative ACTIONS here means "try the next option from
-%    wherever the failed attempt left us," not "rewind and try the
-%    next option from the start." A REACTIVE child does NOT try the
-%    next sibling this way -- same as seq_node above, it propagates
-%    straight through unchanged instead (see the CONTROL-FLOW
-%    REDESCEND TARGETS note below).
-do_node(fallback_node([]), S, S, false).
-do_node(fallback_node([Child|Rest]), S, S1, Outcome) :-
-    do_node(Child, S, S2, O),
-    fallback_step(O, Rest, S2, S1, Outcome).
-
-fallback_step(true, _Rest, S2, S2, true).
-fallback_step(false, Rest, S2, S1, Outcome) :-
-    do_node(fallback_node(Rest), S2, S1, Outcome).
-fallback_step(reactive(Code), _Rest, S2, S2, reactive(Code)).
-
-% -- INVERTER decorator: BT.cpp's built-in single-child negation ------
-%    node (<Inverter>C</Inverter>). Flips true<->false; a REACTIVE
-%    child's reactive(Code) status passes straight through UNCHANGED,
-%    same "never inspects, never catches" passthrough seq_node/
-%    fallback_node's own reactive clauses already do -- an interrupt
-%    signal isn't a true/false outcome to negate, it's a request to be
-%    caught by a MATCHING reactivesequence(Code)/reactivefallback(Code)
-%    further up, wherever that is; an Inverter never IS one (it takes
-%    no Code of its own -- see _REACTIVE_CONTROL_FLOW's own note in
-%    bt_to_prolog.py for why the guard-derivation machinery already
-%    treats Inverter as fully transparent for that purpose too, not
-%    just for do_node's own control flow).
-do_node(inverter(Child), S, S1, Outcome) :-
-    do_node(Child, S, S1, O),
-    invert(O, Outcome).
-
-invert(true, false).
-invert(false, true).
-invert(reactive(Code), reactive(Code)).
-
-% ---------------------------------------------------------------
-% CONTROL-FLOW REDESCEND TARGETS -- reactivesequence(Code) and
-% reactivefallback(Code) are the ONLY two node types that ever catch a
-% reactive(_) status and act on it; plain seq_node/fallback_node above
-% NEVER do (they just pass it straight up, unconditionally, forever).
-% This is the direct Prolog analogue of BT.cpp's own real distinction
-% between Sequence/Fallback (checked once, never re-monitored) and
-% ReactiveSequence/ReactiveFallback (continuously re-ticked) -- see
-% this project's own conversation log for the fuller discussion this
-% design came out of.
+% -- CONTROL FLOW: COMPILED, NOT INTERPRETED --------------------------
+%    The behavior tree's control-flow nodes (Sequence, Fallback,
+%    Inverter, ReactiveSequence, ReactiveFallback) have no clauses in
+%    this file. module/translators/bt_compile.py compiles each problem's
+%    tree into plan_generated.pl as ONE PREDICATE PER NODE, entered
+%    through bt_root(S, S1, Outcome) (see final_situation/1 and
+%    plan_outcome/1 below); the leaf_* predicates above are what those
+%    generated clauses call for the leaves. A generic do_node/4
+%    interpreter made ProbLog try every node-type clause on every call
+%    (its clause index only uses arguments that are ground in the
+%    clause head), leaving ~30 dead "head failed" branches per visited
+%    node; the generated code dispatches on a ground outcome instead.
+%    The behavior, unchanged from the interpreter:
 %
-% Code is a plain atom (bt_to_prolog.py assigns one, e.g. rc1, rc2,
-% ..., to each ReactiveSequence/ReactiveFallback it translates,
-% uniquely across the whole tree) IDENTIFYING one specific reactive
-% composite. Every reactive-classified trigger name in the Triggers
-% list of every MoveTo leg underneath it (obstacle_in_bound(Threshold,
-% Code), battery_below(Threshold,Code), etc. -- see trigger_crossing_
-% time/11's own note) is tagged, at translation time, with THIS SAME
-% Code -- the code of its own NEAREST enclosing ReactiveSequence/
-% ReactiveFallback (an intervening plain seq_node/fallback_node
-% doesn't matter, since it never inspects Code at all -- reactive(Code)
-% passes straight through it unchanged either way). So when a leg
-% halts reactively, reactive(Code) bubbles up through zero or more
-% plain composites, completely inert, until it reaches the ONE
-% composite whose own Code matches -- which is, by construction,
-% always its own nearest enclosing reactive composite -- and THAT one
-% catches it.
-%
-% "Catching" means: instead of propagating further, re-run this same
-% composite's own children FRESH -- see reactive_children/2 (a
-% SEPARATE fact per reactive composite, one row per Code, generated by
-% bt_to_prolog.py) and why it has to be a separately-resolved fact,
-% not the SAME children term reused across restarts: exactly the
-% "planWith inside a fallback_node" gotcha documented above (a second
-% pass's own planWith would try to unify a genuinely different control-
-% point list against an ALREADY-BOUND CP left over from the first
-% pass, and fail outright) -- reactive_children/2 resolved as a FRESH
-% goal each time gives genuinely unbound variables on every pass,
-% exactly mirroring how plan(Node) itself already works for the
-% (now removed) whole-tree redescend evaluate_plan/4 used to do.
-%
-% Each reactive composite carries its OWN budget, read fresh from
-% replan_budget/1 on first entry (see reactivesequence_budgeted/5
-% below) and decremented on every restart -- exhausting it resolves to
-% world_too_large right there rather than continuing to restart or
-% propagating upward (mirrors evaluate_plan/4's own former clause 3,
-% just localized). This budget is what stands between a degenerate
-% zero-duration leg and an infinite restart loop -- see this project's
-% own conversation log for why a PER-composite budget is needed now
-% that redescend can happen below the root, not just at it.
-%
-% A reactive(_) that reaches THE ROOT of the whole tree without any
-% composite's own Code ever matching means bt_to_prolog.py tagged a
-% leg's own reactive trigger with a Code that no enclosing
-% ReactiveSequence/ReactiveFallback actually carries -- a TRANSLATOR
-% BUG (that generator also validates this at translation time, as a
-% hard failure, so this should never actually happen at runtime) --
-% see plan_outcome/1's own reactive_escaped clause further down for
-% how this is reported if it somehow does.
-do_node(reactivesequence(Code), S, S1, Outcome) :-
-    replan_budget(Budget),
-    reactivesequence_budgeted(Code, Budget, S, S1, Outcome).
-
-reactivesequence_budgeted(Code, Budget, S, S1, Outcome) :-
-    reactive_children(Code, Children),
-    do_node(seq_node(Children), S, S2, O),
-    reactive_after(O, Code, Budget, seq, S, S2, S1, Outcome).
-
-do_node(reactivefallback(Code), S, S1, Outcome) :-
-    replan_budget(Budget),
-    reactivefallback_budgeted(Code, Budget, S, S1, Outcome).
-
-reactivefallback_budgeted(Code, Budget, S, S1, Outcome) :-
-    reactive_children(Code, Children),
-    do_node(fallback_node(Children), S, S2, O),
-    reactive_after(O, Code, Budget, fallback, S, S2, S1, Outcome).
-
-% reactive_after(+O, +Code, +Budget, +Kind, +S, +S2, -S1, -Outcome):
-% what reactive composite Code (of Kind seq/fallback) does after one
-% pass over its children from S ended in S2 with outcome O.
-%   - reactive(Code), budget left: caught -- restart the children
-%     fresh from S2 with one less budget;
-%   - reactive(Code), budget 0: world_too_large, at the situation the
-%     pass started from;
-%   - reactive(Other) for another composite: passed up unchanged;
-%   - anything else (true/false): the composite's own outcome.
-reactive_after(reactive(Code), Code, Budget, Kind, _S, S2, S1, Outcome) :-
-    Budget > 0,
-    Budget1 is Budget - 1,
-    reactive_restart(Kind, Code, Budget1, S2, S1, Outcome).
-reactive_after(reactive(Code), Code, 0, _Kind, S, _S2, S, world_too_large).
-reactive_after(reactive(OtherCode), Code, Budget, _Kind, _S, S2, S2, reactive(OtherCode)) :-
-    Budget > 0,
-    OtherCode \= Code.
-reactive_after(O, _Code, Budget, _Kind, _S, S2, S2, O) :-
-    Budget > 0,
-    O \= reactive(_).
-
-reactive_restart(seq, Code, Budget, S, S1, Outcome) :-
-    reactivesequence_budgeted(Code, Budget, S, S1, Outcome).
-reactive_restart(fallback, Code, Budget, S, S1, Outcome) :-
-    reactivefallback_budgeted(Code, Budget, S, S1, Outcome).
+%    - Every composite runs its child ONCE with the outcome unbound and
+%      then dispatches on the outcome (true / false / reactive(Code))
+%      in a small "after" predicate -- grounding the child once per
+%      outcome would ground it three times from the same S. An outcome
+%      with no after clause (world_too_large from a nested reactive
+%      composite) fails the parent, i.e. is dropped.
+%    - SEQUENCE: stop and FAIL at the first failing child; succeed only
+%      if every child succeeds, in order. FALLBACK: stop and SUCCEED at
+%      the first succeeding child; fail only if every child fails. A
+%      failing child's resulting situation is where the next child
+%      starts (a failed durative action still consumed time and moved
+%      the robot: "try the next option from wherever the failed attempt
+%      left us", not "rewind").
+%    - INVERTER flips true<->false.
+%    - reactive(Code) -- a leg halted by a reactive trigger tagged with
+%      Code -- passes UNCHANGED through Sequence, Fallback and Inverter
+%      (they never inspect it, like BT.cpp's plain Sequence/Fallback)
+%      until it reaches the reactive composite whose own Code matches,
+%      which is by construction its nearest enclosing ReactiveSequence/
+%      ReactiveFallback (bt_to_prolog.py tags every reactive trigger
+%      with that code and rejects a tree where it doesn't hold).
+%    - CATCHING (bt_<Code>/3, bt_<Code>_pass/4, bt_<Code>_after/6): re-
+%      run the composite's children FRESH from the situation the pass
+%      ended in. Fresh matters: the children's blackboard variables
+%      (e.g. a planWith's CP) are local to the generated clauses, so a
+%      second pass binds them anew instead of failing to unify against
+%      the first pass's values (the "planWith inside a fallback" gotcha
+%      noted at leaf_planWith). Each reactive composite has its OWN
+%      budget, read from replan_budget/1 on first entry and decremented
+%      on every restart; exhausting it yields world_too_large at the
+%      situation the last pass started from, which is what stops a
+%      degenerate zero-duration leg from restarting forever. A
+%      reactive(Other) for another composite, and true/false, pass up
+%      unchanged (only while budget remains, as before).
+%    - A reactive(_) reaching the root means a trigger code no
+%      enclosing composite carries -- a translator bug, reported as
+%      plan_outcome(reactive_escaped).
 
 % ---------------------------------------------------------------
 % holds/2: minimal condition language for cond(C) leaves -- standard
@@ -3780,8 +3649,7 @@ sample_frac(I, Frac) :- num_samples(N), Frac is I / N.
 % something is structurally wrong with the translated plan, and is
 % never expected to be nonzero for a plan that translated cleanly.
 final_situation(S) :-
-    plan(Node),
-    do_node(Node, s0, S, Outcome),
+    bt_root(s0, S, Outcome),
     Outcome \= reactive(_).
 
 % -- FULL OUTCOME ENUMERATION -----------------------------------------
@@ -3895,12 +3763,10 @@ outcome_signature(Sig) :-
 % final_situation/1's own note just above -- should never actually be
 % nonzero).
 plan_outcome(Outcome) :-
-    plan(Node),
-    do_node(Node, s0, _, Outcome),
+    bt_root(s0, _, Outcome),
     Outcome \= reactive(_).
 plan_outcome(reactive_escaped) :-
-    plan(Node),
-    do_node(Node, s0, _, Outcome),
+    bt_root(s0, _, Outcome),
     Outcome = reactive(_).
 
 % replan_budget/1: the STARTING budget every reactivesequence/

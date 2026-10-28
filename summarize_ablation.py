@@ -31,6 +31,11 @@ more than once, or a sweep interrupted and continued with main.py
 combination: each combination takes its row from the most recent file
 that has one (by filename timestamp, which sorts lexicographically the
 same as chronologically given main.py's own YYYYMMDD_HHMMSS format).
+The combined output/ablation_summary_all_<ts>.csv files (main.py
+--problem all) are merged in too, by their own timestamp -- they still
+hold rows of a problem whose own directory was later wiped by a rerun.
+A row still marked "running" (its run was interrupted mid-combination)
+never replaces a row that actually finished.
 The merged rows of every problem are also written to
 output/ablation_summary_merged.csv.
 
@@ -69,12 +74,38 @@ def find_summaries(problem_dir):
     return sorted(glob.glob(os.path.join(problem_dir, "*_ablation_summary.csv")))
 
 
+_TS_RE = re.compile(r"_(\d{8}_\d{6})_ablation_summary\.csv$|^ablation_summary_all_(\d{8}_\d{6})\.csv$")
+
+
+def _file_ts(path):
+    m = _TS_RE.search(os.path.basename(path))
+    return (m.group(1) or m.group(2)) if m else ""
+
+
+def _merge_row(merged, row):
+    """Newer row replaces the older one for the same combination, unless
+    the newer one is an interrupted "running" row and the older one
+    isn't."""
+    key = (row["knowledge"], row["propagate_weights"])
+    old = merged.get(key)
+    if old is not None and row.get("status") == "running" and old.get("status") != "running":
+        return
+    merged[key] = row
+
+
 def load_rows(output_dir):
     """Returns {(problem_number, size_suffix): [row dict, ...]} --
     one entry per output/problem* directory that has its own ablation
     summary CSV, parsed via csv.DictReader (so every column is still a
     plain string, matching how it was written)."""
     data = {}
+    # Rows from the combined --problem all CSVs, per problem, as
+    # (timestamp, row) -- merged below together with each problem's own.
+    combined = defaultdict(list)
+    for path in glob.glob(os.path.join(output_dir, "ablation_summary_all_*.csv")):
+        with open(path, newline="") as f:
+            for row in csv.DictReader(f):
+                combined[row["problem"]].append((_file_ts(path), row))
     problem_dirs = sorted(glob.glob(os.path.join(output_dir, "problem*")))
     for problem_dir in problem_dirs:
         if not os.path.isdir(problem_dir):
@@ -87,20 +118,25 @@ def load_rows(output_dir):
         number, suffix = m.group(1), m.group(2) or ""
 
         summary_paths = find_summaries(problem_dir)
-        if not summary_paths:
-            print(f"[warn] no *_ablation_summary.csv in {problem_dir} "
+        sources = list(combined.get(name, []))
+        for summary_path in summary_paths:
+            with open(summary_path, newline="") as f:
+                sources.extend((_file_ts(summary_path), row) for row in csv.DictReader(f))
+        if not sources:
+            print(f"[warn] no ablation summary rows for {name} "
                   f"(run with --ablation-study to get one) -- skipping", file=sys.stderr)
             continue
 
         # Oldest first, so a newer file's row replaces an older one for
-        # the same combination.
+        # the same combination (stable sort keeps file order within a
+        # timestamp).
+        sources.sort(key=lambda item: item[0])
         merged = {}
-        for summary_path in summary_paths:
-            with open(summary_path, newline="") as f:
-                for row in csv.DictReader(f):
-                    merged[(row["knowledge"], row["propagate_weights"])] = row
-        if len(summary_paths) > 1:
-            print(f"[info] {name}: merged {len(summary_paths)} summary CSVs "
+        for _, row in sources:
+            _merge_row(merged, row)
+        n_files = len({ts for ts, _ in sources})
+        if n_files > 1:
+            print(f"[info] {name}: merged rows from {n_files} run(s) "
                   f"-> {len(merged)} combination(s)")
         data[(number, suffix)] = list(merged.values())
     return data
@@ -133,9 +169,12 @@ def discover_combinations(data):
 def cell_value(data, key, combo, metric_field):
     """The metric_field value for (problem_number, suffix)=key under
     this (knowledge, propagate_weights) combo, or "-" if that problem
-    has no row for this combo, or the row's own status isn't "ok"
-    (covers timeout, skipped, error, no_results alike -- none of them
-    have a real number to show). total_s is rounded to 2 decimals for
+    has no row for this combo or no value for it. Node counts are shown
+    whenever the row has them, whatever its status -- main.py writes
+    the CSV after every stage, so a combination that grounded but timed
+    out, errored or was killed during Compile still has ground_nodes
+    (and an empty compiled_nodes). total_s is shown only for status
+    "ok", since it is the time to a full solution. total_s is rounded to 2 decimals for
     table readability (the raw CSV keeps full precision -- this is
     just the summary view); node counts are plain integers either way."""
     rows = data.get(key)
@@ -144,7 +183,7 @@ def cell_value(data, key, combo, metric_field):
     knowledge, propagate_weights = combo
     for row in rows:
         if row["knowledge"] == knowledge and row["propagate_weights"] == propagate_weights:
-            if row.get("status") != "ok":
+            if metric_field == "total_s" and row.get("status") != "ok":
                 return "-"
             value = row.get(metric_field, "")
             if value in (None, ""):

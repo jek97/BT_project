@@ -180,10 +180,13 @@ to a single Condition leaf becomes an automatically-derived guard --
 a Sequence-shaped ancestor requires its left siblings to stay TRUE
 (interrupts on becoming false), a Fallback-shaped one requires them to
 stay FALSE (interrupts on becoming true; each <Inverter> flips this
-once), and the guard is tagged with THAT SPECIFIC ancestor's own code,
-not necessarily the nearest enclosing reactive composite (two nested
-reactive ancestors contributing guards to the same leaf get two
-DIFFERENT codes -- see _reduce_guard_condition's own note). Rather
+once), and the guard is tagged with the code of that Condition leaf
+itself (c1, c2, ...). A guard_resume(CondCode, ReactiveCode, Index)
+fact records which ancestor that leaf is a child of, and where: when
+the guard halts the action, execution continues FROM that condition
+(checked again, then the ordinary BT logic from there) instead of
+restarting the ancestor -- see basic_action_theory.pl's own CONTROL-
+FLOW REDESCEND TARGETS note. Rather
 than looking up a pre-built "opposite" trigger name per condition
 (which would need both crossing directions hand-implemented for every
 condition, and silently do the wrong thing for any gap), the required
@@ -623,6 +626,7 @@ class _VarPool:
         self.consumers = set()   # blackboard keys read by an INPUT port
         self._reactive_counter = 0
         self.reactive_facts = []       # [(code, [child_term, ...]), ...]
+        self.guard_resumes = []        # [(condition_code, reactive_code, child_index), ...]
         self.key_scopes = {}           # key -> set of codes (None = outside any)
         self._action_counter = 0
         self.reason_patterns_by_action = {}   # action_code -> [reason_pattern_text, ...]
@@ -1945,24 +1949,37 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
         # guard entries are tagged with THIS level's own_code, added on
         # top of (not replacing) whatever guard_stack already carried
         # in from enclosing levels, so a MoveTo nested under two
-        # reactive ancestors accumulates guards -- and codes -- from
-        # BOTH. A sibling that _reduce_guard_condition can't turn into
-        # a live guard (e.g. an ordinary Action like PlanWith --
-        # see its own note) returns None and is simply skipped, not an
-        # error: most Sequence/ReactiveSequence children are actions,
-        # not conditions, and that's completely normal.
+        # reactive ancestors accumulates guards from BOTH. A sibling
+        # that _reduce_guard_condition can't turn into a live guard
+        # (e.g. an ordinary Action like PlanWith -- see its own note)
+        # returns None and is simply skipped, not an error: most
+        # Sequence/ReactiveSequence children are actions, not
+        # conditions, and that's completely normal.
+        #
+        # Each guard is tagged with the CONDITION code of its own cond()
+        # leaf (the code that leaf got when sibling j was translated),
+        # and one guard_resume(CondCode, own_code, j) fact records where
+        # execution continues when that guard halts an action: at child
+        # j of THIS composite -- see basic_action_theory.pl's own
+        # CONTROL-FLOW REDESCEND TARGETS note.
         own_code = var_pool.next_reactive_code()
         required_polarity = (tag == "ReactiveSequence")
         child_terms = []
+        own_level_guards = []
         for i, child in enumerate(children):
-            own_level_guards = []
-            for sibling in children[:i]:
-                cond_term = _reduce_guard_condition(sibling, required_polarity, schema_ports, var_pool, own_code)
-                if cond_term is not None:
-                    own_level_guards.append((cond_term, own_code))
+            codes_before = var_pool._condition_counter
             child_terms.append(_translate_node(
                 child, schema_ports, var_pool, battery_enabled, own_code,
                 guard_stack + own_level_guards, own_branch_name))
+            cond_term = _reduce_guard_condition(child, required_polarity, schema_ports, var_pool, own_code)
+            if cond_term is not None:
+                # A guard reduces to one cond() leaf (optionally under
+                # Inverters), so translating it assigned exactly one
+                # condition code: the next one after codes_before.
+                cond_code = f"c{codes_before + 1}"
+                own_level_guards = own_level_guards + [(cond_term, cond_code)]
+                var_pool.guard_resumes.append((cond_code, own_code, i))
+        _check_no_blackboard_across_guards(var_pool, own_code, child_terms)
         var_pool.reactive_facts.append((own_code, child_terms))
         functor = _REACTIVE_CONTROL_FLOW[tag]
         return f"{functor}({own_code})"
@@ -1975,6 +1992,35 @@ def _translate_node(elem, schema_ports, var_pool, battery_enabled, reactive_code
             f"'id' in module/contracts/schema.yaml.")
 
     return _translate_leaf(tag, elem, None, schema_ports[tag], var_pool, battery_enabled, reactive_code, guard_stack, branch_name)
+
+
+def _check_no_blackboard_across_guards(var_pool, reactive_code, child_terms):
+    """Resuming reactive composite reactive_code at a guarding condition
+    (child j) runs a FRESH copy of children j.. -- every blackboard
+    value is erased, and children before j are not run again (see
+    basic_action_theory.pl's own CONTROL-FLOW REDESCEND TARGETS note).
+    A blackboard key used both before and after such a condition (e.g.
+    a PlanWith's control_points planned before it, read by a MoveTo
+    after it) would be unbound after the resume, so it is a hard
+    error."""
+    key_of = {var: key for key, var in var_pool._map.items()}
+    def keys_in(terms):
+        return {key_of[tok] for term in terms
+                for tok in re.findall(r"\b[A-Z][A-Za-z0-9_]*\b", term) if tok in key_of}
+    for cond_code, code, j in var_pool.guard_resumes:
+        if code != reactive_code:
+            continue
+        crossing = keys_in(child_terms[:j]) & keys_in(child_terms[j + 1:])
+        if crossing:
+            label = var_pool.condition_labels.get(cond_code, cond_code)
+            raise BTValidationError(
+                f"blackboard key(s) {sorted(crossing)} are used both before and "
+                f"after the guard condition {cond_code} ({label}) in the same "
+                f"ReactiveSequence/ReactiveFallback -- when that guard halts an "
+                f"action, execution resumes at {cond_code} with every blackboard "
+                f"value erased and without re-running what comes before it, so "
+                f"{sorted(crossing)} would be unbound. Move the node that produces "
+                f"them (e.g. the PlanWith) after {cond_code}.")
 
 
 def _single_child(bt_elem, label):
@@ -2220,9 +2266,11 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
     ReactiveFallback in the tree needs, PLUS the full per-action Reason
     universe for safety-query generation, PLUS a human-readable label
     per action code AND per condition code -- returns (node_text,
-    reactive_facts, reason_patterns_by_action, action_labels,
-    condition_labels), where reactive_facts is [(code, [child_term,...]),
-    ...], reason_patterns_by_action is {action_code: [reason_pattern_
+    reactive_facts, guard_resumes, reason_patterns_by_action,
+    action_labels, condition_labels), where reactive_facts is [(code,
+    [child_term,...]), ...], guard_resumes is [(condition_code,
+    reactive_code, child_index), ...] (one per condition guard, see
+    _translate_node's ReactiveSequence/ReactiveFallback branch), reason_patterns_by_action is {action_code: [reason_pattern_
     text, ...]} (see _VarPool's own note and module/contracts/goal_
     formula_check.py's generate_safety_queries, the actual consumer),
     action_labels is {action_code: label_text} and condition_labels is
@@ -2307,8 +2355,9 @@ def translate_tree(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
             f"live ENTIRELY inside the same reactive composite (or entirely "
             f"outside all of them): {details}.")
 
-    return (node_text, var_pool.reactive_facts, var_pool.reason_patterns_by_action,
-            var_pool.action_labels, var_pool.condition_labels)
+    return (node_text, var_pool.reactive_facts, var_pool.guard_resumes,
+            var_pool.reason_patterns_by_action, var_pool.action_labels,
+            var_pool.condition_labels)
 
 
 def generate_plan_pl(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
@@ -2321,7 +2370,7 @@ def generate_plan_pl(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
     .pl; action_labels/condition_labels ({code: label_text} each) are
     what main.py prints as its own action-/condition-code legends -- see
     translate_tree's own note for all four."""
-    node_text, reactive_facts, reason_patterns_by_action, action_labels, condition_labels = translate_tree(
+    node_text, reactive_facts, guard_resumes, reason_patterns_by_action, action_labels, condition_labels = translate_tree(
         xml_path, schema_path, battery_enabled=battery_enabled)
     lines = [
         "% AUTO-GENERATED by module/translators/bt_to_prolog.py from",
@@ -2360,6 +2409,18 @@ def generate_plan_pl(xml_path=DEFAULT_XML_PATH, schema_path=DEFAULT_SCHEMA_PATH,
         ]
         for code, child_terms in reactive_facts:
             lines.append(f"reactive_children({code}, [{','.join(child_terms)}]).")
+        lines.append("")
+    if guard_resumes:
+        lines += [
+            "% guard_resume(CondCode, ReactiveCode, ChildIndex): an action",
+            "% halted by guard_break(_, CondCode) continues from child",
+            "% ChildIndex (0-based) of composite ReactiveCode -- the guarding",
+            "% condition itself -- see basic_action_theory.pl's own",
+            "% CONTROL-FLOW REDESCEND TARGETS note.",
+            "",
+        ]
+        for cond_code, reactive_code, index in guard_resumes:
+            lines.append(f"guard_resume({cond_code}, {reactive_code}, {index}).")
         lines.append("")
     with open(output_path, "w") as f:
         f.write("\n".join(lines))

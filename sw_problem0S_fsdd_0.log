@@ -1,0 +1,18 @@
+====================================================================
+  ProbLog Continuous-Space Safety Verification - 2026-11-05 10:20:15
+====================================================================
+  Problem     : problem0S (/home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem0S)
+  Theory file : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/theory/basic_action_theory.pl
+  Obstacles   : 5 obstacle region(s), in memory from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem0S/map.yaml (inflated by 0.820m robot clearance)
+  Config      : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem0S/config_generated.pl (regenerated from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem0S/config.yaml)
+  Plan (BT)   : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem0S/plan_generated.pl (translated + validated from /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem0S/behavior_tree.xml)
+  Goal formula: /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem0S/goal_formula.pl (validated against /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/contracts/vocabulary.yaml)
+  Queries     : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem0S/queries_generated.pl (auto-generated from this tree's own per-action Reason universe)
+  Float terms : rounded to 15 decimal(s) by ProbLog (--float-precision; ProbLog's default is 15)
+  Python GC   : on (default; pauses are included in stage times)
+  Bootstrap   : /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/module/theory/problem_data.pl (points basic_action_theory.pl at /home/glugano/Desktop/research/BT/problog_test/01_test/BT_project/problems/problem0S)
+  [STAGE] Parse (plan.pl formed) ...
+  [STAGE] Parse (plan.pl formed): done in 0.000s
+  [STAGE] Ground (plan unrolled, regressed to s0) ...
+/home/glugano/.local/lib/python3.10/site-packages/problog/parser.py:539: UserWarning: The use of '==' might give unexpected results. Consider using '=' instead.
+  warn("The use of '==' might give unexpected results. Consider using '=' instead.")
